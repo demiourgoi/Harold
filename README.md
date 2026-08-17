@@ -6,4 +6,4 @@
 
 | Subproject | Release | Build status | License |
 | --- | --- | --- | --- |
-| [harold-mcp](harold-mcp/) | [![Release](https://img.shields.io/github/v/release/demiourgoi/harold)](https://img.shields.io/github/v/release/demiourgoi/harold) | [![Build status](https://img.shields.io/github/actions/workflow/status/demiourgoi/harold/main.yml?branch=main)](https://github.com/demiourgoi/harold/actions/workflows/main.yml?query=branch%3Amain) | [![License](https://img.shields.io/github/license/demiourgoi/harold)](https://img.shields.io/github/license/demiourgoi/harold) |
+| [harold-mcp](harold-mcp/) | [![Release](https://img.shields.io/github/v/release/demiourgoi/Harold)](https://github.com/demiourgoi/Harold/releases) | [![Build status](https://github.com/demiourgoi/Harold/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/demiourgoi/Harold/actions/workflows/main.yml) | [![License](https://img.shields.io/github/license/demiourgoi/Harold)](https://github.com/demiourgoi/Harold) |
