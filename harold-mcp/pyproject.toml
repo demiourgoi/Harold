@@ -21,7 +21,7 @@ classifiers = [
 [project.urls]
 Homepage = "https://demiourgoi.github.io"
 Repository = "https://github.com/demiourgoi/harold"
-Documentation = "https://demiourgoi.github.io""
+Documentation = "https://demiourgoi.github.io"
 
 [dependency-groups]
 dev = [
@@ -114,3 +114,6 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
+
+[tool.uv]
+include = ["uv.lock"]

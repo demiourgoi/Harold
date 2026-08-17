@@ -1,5 +1,5 @@
 .PHONY: install
-install: ## Install the virtual environment and install the pre-commit hooks
+install: ## Install the virtual environment
 	@echo "🚀 Creating virtual environment using uv"
 	@uv sync
 
@@ -7,8 +7,8 @@ install: ## Install the virtual environment and install the pre-commit hooks
 check: ## Run code quality tools.
 	@echo "🚀 Checking lock file consistency with 'pyproject.toml'"
 	@uv lock --locked
-	@uv run ruff-check --exit-non-zero-on-fix
-	@uv run ruff-format
+	@uv run ruff check --exit-non-zero-on-fix
+	@uv run ruff format
 	@echo "🚀 Static type checking: Running mypy"
 	@uv run mypy
 	@echo "🚀 Checking for obsolete dependencies: Running deptry"
