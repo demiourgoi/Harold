@@ -17,6 +17,12 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+    "fastmcp>=3.4.7",
+]
+
+[project.scripts]
+harold-mcp = "harold_mcp.main:run"
 
 [project.urls]
 Homepage = "https://demiourgoi.github.io"
@@ -114,6 +120,3 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
-
-[tool.uv]
-include = ["uv.lock"]
