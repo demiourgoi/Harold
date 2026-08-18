@@ -1,6 +1,6 @@
 from fastmcp import FastMCP
 
-mcp = FastMCP("Maude programming assistant")
+mcp = FastMCP("Maude programming tools")
 
 
 @mcp.tool
