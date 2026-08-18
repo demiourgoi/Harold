@@ -16,6 +16,9 @@ make install
 
 # code validations
 make check test
+
+# run all CI checks before pushing a code change
+make release
 ```
 
 This will also generate your `uv.lock` file

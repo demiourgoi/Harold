@@ -1,1 +1,1 @@
-::: harold_mcp.foo
+::: harold_mcp.server

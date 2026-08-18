@@ -51,6 +51,9 @@ docs-test: ## Test if documentation can be built without warnings or errors
 docs: ## Build and serve the documentation
 	@uv run mkdocs serve
 
+.PHONY: release
+release: install check test docs-test  ## run all CI tests
+
 .PHONY: help
 help:
 	@uv run python -c "import re; \
