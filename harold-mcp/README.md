@@ -48,7 +48,7 @@ For example, for Zed add the following to `~/.config/zed/settings.json`:
   ...
 ```
 
-and for opencode add the following to `~/.config/opencode/opencode.jsonc`:
+for opencode add the following to `~/.config/opencode/opencode.jsonc`:
 
 
 ```json
@@ -57,6 +57,20 @@ and for opencode add the following to `~/.config/opencode/opencode.jsonc`:
       "type": "local",
       "command": ["/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp"],
       "enabled": true
+    }
+  }
+```
+
+for Cline add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
+
+
+```json
+  "mcpServers" : {
+    "harold": {
+      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "args": [],
+      "disabled": false,
+      "autoApprove": []
     }
   }
 ```
