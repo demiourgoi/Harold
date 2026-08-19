@@ -48,7 +48,7 @@ For example, for Zed add the following to `~/.config/zed/settings.json`:
   ...
 ```
 
-for opencode add the following to `~/.config/opencode/opencode.jsonc`:
+for opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
 
 
 ```json
@@ -61,7 +61,7 @@ for opencode add the following to `~/.config/opencode/opencode.jsonc`:
   }
 ```
 
-for Cline add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
+for Cline (useful for manual testing and Maude programming) add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
 
 
 ```json
@@ -90,6 +90,7 @@ For production, harold-mcp will be distributed as a Python package and run with 
 - Maude
   - [Maude manual](https://maude.lcc.uma.es/maude-manual/)
   - [Bindings docs](https://fadoss.github.io/maude-bindings/)
+  - [vscode-maude](https://github.com/Sirquini/vscode-maude) for syntax highlighting. To install on VsCodium use [VSIX Downloader](https://cypherpunksamurai.github.io/vsix-downloader-webui/) to download the VSIX file from the [marketplace](https://marketplace.visualstudio.com/items?itemName=sirquini.maude), and install it with Extensions view → ... → "Install from VSIX...".
 - [FastMCP](https://gofastmcp.com)
 - [OpenCode Python SDK](https://github.com/anomalyco/opencode-sdk-python)
   - [API docs](https://github.com/anomalyco/opencode-sdk-python/blob/main/api.md)
