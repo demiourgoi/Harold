@@ -40,7 +40,6 @@
 - `mypy` — static type checking
 - `deptry` — dependency hygiene (unused/missing/misplaced dependencies)
 - `tox-uv` — test matrix across Python versions
-- `pre-commit` — listed as a dev dependency, but no `.pre-commit-config.yaml` exists yet (see `review_notes.md`)
 - `mkdocs`, `mkdocs-material`, `mkdocstrings[python]` — documentation
 
 ## Entry point

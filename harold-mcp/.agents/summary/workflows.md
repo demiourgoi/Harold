@@ -8,7 +8,7 @@
 2. Edit code under `src/harold_mcp` (tests under `tests/`).
 3. `make check` — lockfile consistency (`uv lock --locked`), ruff (lint fails if any auto-fix is applied), ruff format, mypy, deptry.
 4. `make test` — pytest with coverage (`--cov --cov-config=pyproject.toml`).
-5. `make release` — intended full CI pass (`install check test docs-test`). See `review_notes.md` for a known Makefile issue with this target.
+5. `make release` — full CI pass (`install check test docs-test`), then prints a success message.
 
 ## Running the server
 
@@ -42,7 +42,7 @@ flowchart TD
 
 ## Cross-environment testing
 
-- `tox` — runs the test suite on Python 3.10–3.14 (env matrix in `tox.ini`, with a `[gh-actions]` mapping for CI).
+- `tox` — runs the test suite on Python 3.10–3.14 (env matrix in `tox.ini`, with a `[gh-actions]` mapping for CI). The CI workflows themselves live at the Git repository root (`../.github/workflows/` relative to this package directory).
 
 ## Related documents
 

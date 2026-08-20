@@ -19,7 +19,6 @@
 | `mypy` | Strict static typing (configuration in `pyproject.toml`) |
 | `deptry` | Detect unused/missing/misplaced dependencies (`make check` runs `deptry src`) |
 | `tox-uv` | Multi-Python test matrix (see `tox.ini`) |
-| `pre-commit` | Listed, but no `.pre-commit-config.yaml` exists yet (see `review_notes.md`) |
 | `mkdocs` / `mkdocs-material` / `mkdocstrings[python]` | Documentation build (see `mkdocs.yml`) |
 
 ## Build

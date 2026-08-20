@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "An MCP server for AI-assisted Maude programming."
 authors = [{ name = "Juan Rodriguez", email = "juanrh@pm.me" }]
 readme = "README.md"
-keywords = ['python']
+keywords = ['maude', 'mcp', 'python']
 requires-python = ">=3.10,<4.0"
 classifiers = [
     "Intended Audience :: Developers",
