@@ -37,7 +37,8 @@
 
 ## Tests
 
-- `tests/test_foo.py` — placeholder (`assert True`). No real test suite exists yet.
+- `tests/unit/test_maude.py` — mocked unit tests for `harold_mcp.maude`: `init_maude` runs `maude.init()` only once, retries after failure, and `MaudeRuntime.get_module` initializes and delegates to `maude.getModule`.
+- `tests/integration/test_maude_runtime.py` — real-interpreter test: `get_module("NAT")` → `parseTerm("2 * 3")` → `reduce()` → `"Result = 6"`.
 
 ## Docs
 

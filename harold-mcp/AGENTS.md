@@ -38,7 +38,7 @@ See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.
 ```mermaid
 graph TB
     R[harold-mcp/] --> S[src/harold_mcp/<br>all application code]
-    R --> T[tests/<br>pytest; placeholder only]
+    R --> T[tests/<br>unit + integration]
     R --> D[docs/<br>MkDocs + mkdocstrings]
     S --> M[main.py<br>server.py<br>resources.py<br>logging.py]
     S --> A[assets/brand/<br>Harold_logo.png]
@@ -46,7 +46,7 @@ graph TB
 ```
 
 - New application code goes in `src/harold_mcp` (src layout, flat modules).
-- New tests go in `tests/` (currently only the placeholder `test_foo.py`).
+- New tests go in `tests/unit/` (mocked, hermetic) or `tests/integration/` (real Maude interpreter).
 
 ## Key entry points
 
@@ -68,7 +68,7 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 3. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
 4. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
 5. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
-6. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. New tests live in `tests/`.
+6. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. Unit tests live in `tests/unit/` (mocked); integration tests live in `tests/integration/` (real Maude interpreter).
 7. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
 8. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
 

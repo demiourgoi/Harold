@@ -17,7 +17,7 @@ Findings from the consistency and completeness review. Issues marked **Resolved*
 ## Remaining issues
 
 1. **`greet` tool ignores its parameter** — `greet(name: str)` never uses `name`; it always reduces `2 * 3` in `NAT`. Expected for a hello-world skeleton, but worth remembering when the first real tool is designed.
-2. **No real tests** — `tests/test_foo.py` is a placeholder (`assert True`). The coverage configuration (`branch = true`, source = `src`) is ready, but nothing meaningful is covered yet.
+2. **Tests cover only `harold_mcp.maude`** — unit tests mock the Maude bindings; the single integration test covers the parse/reduce flow. Tool logic in `server.py` and the remaining modules are untested.
 3. **Docs render only one module** — `docs/modules.md` contains only `::: harold_mcp.server`; `main.py`, `resources.py`, and `logging.py` are not rendered in the generated site.
 
 ## Completeness gaps

@@ -38,7 +38,8 @@ graph TB
     root --> docs
     src[src/] --> pkg[harold_mcp/<br>Python package]
     pkg --> assets[assets/brand/<br>Harold_logo.png]
-    tests[tests/] --> test[test_foo.py<br>placeholder]
+    tests[tests/] --> unit[unit/<br>mocked] --> test_maude[test_maude.py]
+    tests[tests/] --> integration[integration/<br>real Maude] --> test_runtime[test_maude_runtime.py]
     docs[docs/] --> index[index.md]
     docs --> modules[modules.md]
     root --> cfg[pyproject.toml, Makefile,<br>tox.ini, mkdocs.yml, uv.lock]
