@@ -53,7 +53,6 @@ docs: ## Build and serve the documentation
 
 .PHONY: release
 release: install check test docs-test  ## run all CI tests
-release:
 	@echo
 	@echo "🚀 All CI tests are passing!"
 

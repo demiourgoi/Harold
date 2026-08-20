@@ -34,7 +34,6 @@ Documentation = "https://demiourgoi.github.io"
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
-    "pre-commit>=4.5.1",
     "tox-uv>=1.33.4",
     "deptry>=0.25.1",
     "mypy>=1.19.1",
