@@ -1,5 +1,4 @@
-from fastmcp.utilities.logging import get_logger
-
+from harold_mcp.logging import get_logger
 from harold_mcp.server import mcp
 
 _LOG = get_logger(__name__)

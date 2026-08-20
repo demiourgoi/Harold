@@ -1,10 +1,11 @@
 import logging
-from typing import Protocol
 
 from fastmcp.utilities.logging import get_logger
 
+__all__ = ["Logging", "get_logger"]
 
-class Logging(Protocol):  # pylint: disable=too-few-public-methods
+
+class Logging:  # pylint: disable=too-few-public-methods
     """Adds a `log` property for the class logger to classes
     that extend this Protocol."""
 
