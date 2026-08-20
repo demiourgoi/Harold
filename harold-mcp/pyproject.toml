@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "fastmcp>=3.4.7",
     "maude>=1.6.0",
+    "mcp>=1.29.0",
 ]
 
 [project.scripts]

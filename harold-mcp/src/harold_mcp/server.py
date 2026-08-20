@@ -1,9 +1,11 @@
 import maude
 from fastmcp import FastMCP
 
+from harold_mcp.resources import HAROLD_ICON
+
 maude.init()
 
-mcp = FastMCP("Maude programming tools")
+mcp = FastMCP("Maude programming tools", icons=[HAROLD_ICON])
 
 
 @mcp.tool
