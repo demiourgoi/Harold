@@ -25,7 +25,7 @@ graph TB
 
 ## Key architectural decisions
 
-1. **Import-time initialization.** `server.py` calls `maude.init()` and constructs the `mcp = FastMCP(...)` instance at module import time, not inside a function. Importing `harold_mcp.server` therefore has side effects (see `interfaces.md`).
+1. **Lazy Maude initialization, fail-fast startup.** Maude is initialized lazily via the cached `maude.init()` in `harold_mcp.maude`; `server.run()` calls it before `mcp.run()` so the server fails fast at startup if Maude cannot initialize. Importing `harold_mcp.server` constructs the `mcp = FastMCP(...)` instance but has no other side effects (see `interfaces.md`).
 2. **Single shared server instance.** `main.run()` imports the `mcp` instance from `server.py` and calls `mcp.run()`; there is no server factory. Tools are registered with the `@mcp.tool` decorator directly on that shared instance.
 3. **No package submodules.** All logic currently lives at the top level of `harold_mcp`; assets are the only nested content.
 

@@ -7,13 +7,13 @@
 ### `harold_mcp.main`
 
 - **Responsibility**: CLI/stdio entry point for the MCP server.
-- `run() -> None` logs a startup message and calls `mcp.run()` on the shared server instance from `server.py`.
+- `run() -> None` delegates to `server.run()`, which initializes Maude and runs the MCP server.
 - Executable directly (`if __name__ == "__main__"`) and exposed as the `harold-mcp` console script.
 
 ### `harold_mcp.server`
 
 - **Responsibility**: owns the MCP server and its tools. This is where new MCP tools should be added.
-- Calls `maude.init()` at import time, so the Maude runtime is ready when tools execute.
+- `run()` — initializes Maude (cached `init()` from `harold_mcp.maude`) then calls `mcp.run()`; fails fast at startup if Maude cannot initialize.
 - Defines `mcp = FastMCP(name="Harold", icons=[HAROLD_ICON])` — the single shared server instance.
 - Registers the hello-world tool `greet(name: str) -> str` with `@mcp.tool`. `greet` loads Maude's built-in `NAT` module, parses the term `2 * 3`, reduces it, and returns the result as a string. (Note: the `name` parameter is currently accepted but unused.)
 - Cross-reference: `interfaces.md`.

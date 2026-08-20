@@ -27,7 +27,7 @@ If AGENTS.md doesn't answer your question, open [`.agents/summary/index.md`](.ag
 
 - **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Today it is a hello-world skeleton: a single `greet` tool.
 - **Stack**: Python ≥ 3.14, built with **FastMCP** (the MCP framework), the official **MCP SDK** (`mcp`), and the **Maude bindings** (`maude`). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
-- **Runtime side effect**: importing `harold_mcp.server` initializes the Maude runtime (`maude.init()`) and constructs the global `mcp = FastMCP(...)` server instance.
+- **Lazy Maude init**: importing `harold_mcp.server` does **not** initialize Maude. Init happens lazily via the cached `maude.init()` in `harold_mcp.maude`, and eagerly in `server.run()` before `mcp.run()` so the server fails fast at startup. Importing still constructs the global `mcp = FastMCP(...)` instance.
 
 See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.agents/summary/dependencies.md`](.agents/summary/dependencies.md).
 
@@ -53,7 +53,7 @@ graph TB
 <!-- tags: entry-points -->
 
 - Console script **`harold-mcp`** → `harold_mcp.main:run` (`src/harold_mcp/main.py`); starts the MCP server over stdio.
-- **`src/harold_mcp/server.py`** — the heart of the app: `mcp = FastMCP(name="Harold", ...)`, `maude.init()`, and tool registration via `@mcp.tool`. **Add new MCP tools here.** Current tool: `greet(name: str) -> str`, which reduces `2 * 3` in Maude's `NAT` module (`name` is accepted but unused — placeholder behavior).
+- **`src/harold_mcp/server.py`** — the heart of the app: `mcp = FastMCP(name="Harold", ...)`, `run()` (initializes Maude, then calls `mcp.run()`), and tool registration via `@mcp.tool`. **Add new MCP tools here.** Current tool: `greet(name: str) -> str`, which reduces `2 * 3` in Maude's `NAT` module (`name` is accepted but unused — placeholder behavior).
 - **`src/harold_mcp/resources.py`** — packaged brand icon (`HAROLD_ICON`) used by the server.
 - **`src/harold_mcp/logging.py`** — `get_logger` re-export and the `Logging` base class (`_log` property).
 
@@ -63,7 +63,7 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 
 <!-- tags: conventions, gotchas -->
 
-1. **Import side effects**: any import of `harold_mcp.server` runs `maude.init()` and builds the server instance. Expect this when testing; keep heavy logic out of import time.
+1. **No import-time Maude init**: importing `harold_mcp.server` builds the server instance but does **not** initialize Maude. Init happens lazily (`maude.init()` is `@cache`d in `harold_mcp.maude`) and eagerly in `server.run()` before `mcp.run()`, so the server fails fast at startup if Maude cannot initialize. Keep heavy logic out of import time.
 2. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate all functions and methods. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are effectively `Any` to mypy.
 3. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
 4. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.

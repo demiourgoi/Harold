@@ -31,19 +31,21 @@ sequenceDiagram
 ## Internal Python interfaces
 
 - `harold_mcp.server.mcp` — the shared `FastMCP` instance. Modules register tools on it via `@mcp.tool`.
+- `harold_mcp.server.run` — initializes Maude (fail-fast at startup), then runs the server (`mcp.run()`). Console script entry: `harold-mcp` → `main.run` → `server.run`.
+- `harold_mcp.maude.init` — cached Maude runtime initialization; safe to call repeatedly.
+- `harold_mcp.maude.MaudeRuntime` — (WIP) wrapper over the Maude bindings; `get_module(name)` ensures init, then returns the module.
 - `harold_mcp.resources.HAROLD_ICON` — `mcp.types.Icon` used for server branding.
 - `harold_mcp.logging.get_logger` — re-exported logging helper (module-level loggers like `_LOG = get_logger(__name__)`).
 - `harold_mcp.logging.Logging` — base class providing a per-class `_log` property.
 
-## Import-time side effects (important)
+## Import-time side effects
 
 Importing `harold_mcp.server`:
 
-1. Initializes the Maude runtime (`maude.init()`).
-2. Constructs the global `mcp` server instance.
-3. Registers the `greet` tool.
+1. Constructs the global `mcp` server instance.
+2. Registers the `greet` tool.
 
-Any code that imports `harold_mcp.server` triggers all three; keep Maude-related imports inside `server.py` or be aware of this cost.
+The Maude runtime is **not** initialized at import time. `harold_mcp.maude.init()` (cached) initializes it lazily on first use, and `server.run()` calls it before `mcp.run()` so the server fails fast at startup if Maude cannot initialize.
 
 ## Related documents
 

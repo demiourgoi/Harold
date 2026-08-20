@@ -34,7 +34,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 ## Example queries
 
 - "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server`, then `interfaces.md` for the `@mcp.tool` pattern.
-- "Why does importing `server` take time / initialize Maude?" → `interfaces.md` → Import-time side effects.
+- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (lazy init; fail-fast in `server.run()`).
 - "Can I use Python 3.12 syntax here?" → `codebase_info.md` → language floor is 3.14.
 
 ## Consolidated file
