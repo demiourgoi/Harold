@@ -32,7 +32,7 @@
 ## Notable constraints
 
 - The `maude` bindings provide no type stubs → mypy override `ignore_missing_imports` (see `data_models.md`).
-- Minimum Python is 3.10; lint/format target is `py310` (`pyproject.toml`).
+- Minimum Python is 3.14; lint/format target is `py314` (`pyproject.toml`).
 
 ## Related documents
 

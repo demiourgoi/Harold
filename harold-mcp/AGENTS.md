@@ -26,7 +26,7 @@ If AGENTS.md doesn't answer your question, open [`.agents/summary/index.md`](.ag
 <!-- tags: overview, stack -->
 
 - **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Today it is a hello-world skeleton: a single `greet` tool.
-- **Stack**: Python ≥ 3.10 (language floor: 3.10 — no 3.11+ syntax), built with **FastMCP** (the MCP framework), the official **MCP SDK** (`mcp`), and the **Maude bindings** (`maude`). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
+- **Stack**: Python ≥ 3.14, built with **FastMCP** (the MCP framework), the official **MCP SDK** (`mcp`), and the **Maude bindings** (`maude`). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
 - **Runtime side effect**: importing `harold_mcp.server` initializes the Maude runtime (`maude.init()`) and constructs the global `mcp = FastMCP(...)` server instance.
 
 See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.agents/summary/dependencies.md`](.agents/summary/dependencies.md).
@@ -66,7 +66,7 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 1. **Import side effects**: any import of `harold_mcp.server` runs `maude.init()` and builds the server instance. Expect this when testing; keep heavy logic out of import time.
 2. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate all functions and methods. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are effectively `Any` to mypy.
 3. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
-4. **Style floor**: Python 3.10 (`target-version = "py310"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
+4. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
 5. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
 6. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. New tests live in `tests/`.
 7. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
@@ -95,7 +95,7 @@ Setup and IDE-configuration details (Zed, opencode, Cline) live in `README.md`; 
 <!-- tags: config -->
 
 - **`pyproject.toml`** — single source of tool config: ruff, mypy, pytest, coverage, deptry inputs, console script, dependencies.
-- **`tox.ini`** — multi-Python test matrix (3.10–3.14) plus a `[gh-actions]` mapping. The GitHub Actions workflows themselves live at the repository root (`../.github/workflows/` relative to this package directory).
+- **`tox.ini`** — single-version test env (`py314`). The GitHub Actions workflows themselves live at the repository root (`../.github/workflows/` relative to this package directory).
 - **`mkdocs.yml`** — docs site config; nav lists `docs/index.md` and `docs/modules.md`.
 - **`uv.lock`** — committed lockfile; regenerate after dependency changes.
 - **`Makefile`** — the canonical dev command surface (see commands above).

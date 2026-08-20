@@ -42,7 +42,7 @@ flowchart TD
 
 ## Cross-environment testing
 
-- `tox` — runs the test suite on Python 3.10–3.14 (env matrix in `tox.ini`, with a `[gh-actions]` mapping for CI). The CI workflows themselves live at the Git repository root (`../.github/workflows/` relative to this package directory).
+- `tox` — runs the test suite on Python 3.14 (single env `py314` in `tox.ini`). The CI workflows themselves live at the Git repository root (`../.github/workflows/` relative to this package directory).
 
 ## Related documents
 

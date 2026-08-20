@@ -13,8 +13,8 @@
 ## Language and runtime
 
 - **Language**: Python
-- **Supported versions**: 3.10, 3.11, 3.12, 3.13, 3.14 (`requires-python = ">=3.10,<4.0"`)
-- **Language floor for new code**: Python 3.10 (ruff `target-version = "py310"`)
+- **Supported versions**: 3.14 (`requires-python = ">=3.14"`)
+- **Language floor for new code**: Python 3.14 (ruff `target-version = "py314"`)
 
 ## Package layout
 
