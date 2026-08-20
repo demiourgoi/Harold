@@ -92,6 +92,9 @@ For production, harold-mcp will be distributed as a Python package and run with 
   - [Bindings docs](https://fadoss.github.io/maude-bindings/)
   - [vscode-maude](https://github.com/Sirquini/vscode-maude) for syntax highlighting. To install on VsCodium use [VSIX Downloader](https://cypherpunksamurai.github.io/vsix-downloader-webui/) to download the VSIX file from the [marketplace](https://marketplace.visualstudio.com/items?itemName=sirquini.maude), and install it with Extensions view → ... → "Install from VSIX...".
 - [FastMCP](https://gofastmcp.com)
+  - Agent docs
+    - [Incremental](https://gofastmcp.com/llms.txt).
+    - [Full](https://gofastmcp.com/llms-full.txt): probably uses too much context.
 - [OpenCode Python SDK](https://github.com/anomalyco/opencode-sdk-python)
   - [API docs](https://github.com/anomalyco/opencode-sdk-python/blob/main/api.md)
 
