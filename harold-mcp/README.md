@@ -1,5 +1,7 @@
 # harold-mcp
 
+<img src="src/harold_mcp/assets/brand/Harold_logo.png" alt="Harold logo" width="100" />
+
 Harold MCP tools:
 
 - **Github repository**: <https://github.com/demiourgoi/harold/>
