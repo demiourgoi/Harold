@@ -1,5 +1,6 @@
 .local
 docs/source
+.agents/**/*.html
 
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
 
