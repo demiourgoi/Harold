@@ -128,3 +128,4 @@ The use case for Harold is to use it with AI-assisted programming tools such as 
   - Overview: [wikipedia page on Maude](https://en.wikipedia.org/wiki/Maude_system)
   - Reference. [Maude manual](https://maude.lcc.uma.es/maude-manual/)
   - [Maude bindings for Python](https://fadoss.github.io/maude-bindings/)
+  - In case a folder `maude-bindings` is available: that is the source code of the `maude` Python package. Those are SWIG bindings for the Maude language, that is exposed as a C++ library.

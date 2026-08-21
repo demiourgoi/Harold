@@ -23,7 +23,9 @@ make check test
 make release
 ```
 
-This will also generate your `uv.lock` file
+This will also generate your `uv.lock` file.
+
+In case you are using the Zed IDE, it is also recommneded to clone https://github.com/fadoss/maude-bindings and it to the Zed project together with the root folder of this file.
 
 ### Running the server
 
