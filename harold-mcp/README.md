@@ -38,7 +38,7 @@ description: Generates structured codebase documentation — architecture, compo
 ---
 ```
 
-  - `pdd`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/pdd.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
+  - `pdd`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/pdd.sop.md) to  ~/.agents/skills/pdd/SKILL.md, and add the following frontmatter
 
 ```md
 ---

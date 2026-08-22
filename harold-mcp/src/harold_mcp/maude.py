@@ -14,6 +14,10 @@ from typing import Any
 
 import maude
 
+from harold_mcp.logging import get_logger
+
+_LOG = get_logger(__name__)
+
 
 class MaudeError(RuntimeError):
     """Base error for failures in the Maude runtime wrapper."""
@@ -54,6 +58,7 @@ def init_maude() -> None:
     retried on the next call.
     """
     global _maude_initialized
+    _LOG.info("Initializing Maude interpreter...")
     if _maude_initialized:
         return
     with _INIT_LOCK:
@@ -62,6 +67,7 @@ def init_maude() -> None:
         if not maude.init(advise=False):
             raise MaudeInitError()
         _maude_initialized = True
+        _LOG.info("Success initializing Maude interpreter!")
 
 
 class MaudeRuntime:

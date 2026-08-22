@@ -23,7 +23,7 @@ Use Harold's tools whenever working with Maude code; consult each tool's descrip
 def run() -> None:
     _LOG.info("Initializing Harold...")
     init_maude()
-    _LOG.info("Success initializing Harold...")
+    _LOG.info("Success initializing Harold!")
     mcp.run()
 
 
