@@ -157,8 +157,9 @@ Alternatives considered (to be documented in the design appendix):
 - Should the tool return only diagnostics, or also a derived convenience summary (e.g. counts
   per severity) alongside the `diagnostics` list?
 - Include the `Advisory:` channel (currently suppressed) or keep it out?
-- Logging isolation so server logs don't pollute the capture window:
-  see [`logging.md`](logging.md).
+- stderr isolation: solved by the dedicated Maude worker process (decision Q1) — see
+  [`worker-process-architecture.md`](worker-process-architecture.md); the file-logging plan in
+  [`logging.md`](logging.md) is not needed for v1.
 - Related future directions from the rough idea: program slicing
   (<https://en.wikipedia.org/wiki/Program_slicing>) — out of scope for v1.
 

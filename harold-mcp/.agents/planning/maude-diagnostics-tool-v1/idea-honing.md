@@ -20,4 +20,15 @@ Context:
 - Recommendation: worker process for v1 (full isolation, crash containment; avoids
   throwaway fd-capture/logging work). Alternative: in-process for v1, defer worker to v2.
 
-**Answer**: (pending)
+**Answer**: Confirmed — the dedicated Maude **worker process** is the v1 architecture
+(decided 2026-08-22). See `research/worker-process-architecture.md`. The in-process fd-2
+capture + file-logging plan (`research/logging.md`) is superseded.
+
+## Q2. Remove the placeholder `greet` tool
+
+**Question**: The `greet` tool was a placeholder to validate the FastMCP setup. Now that a
+real tool (`maude_program_diagnostics`) is coming, do we remove `greet`?
+
+**Answer**: Confirmed — remove `greet` in v1 (decided 2026-08-22). `maude_program_diagnostics`
+becomes the first real tool; the v1 worker protocol then only needs a `load_diagnostics` op
+(no term-reduction op to migrate `greet`).

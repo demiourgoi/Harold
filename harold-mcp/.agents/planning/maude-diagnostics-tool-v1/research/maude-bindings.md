@@ -115,25 +115,24 @@ unreliable; do not use them.
 
 | Option | How | Assessment |
 | --- | --- | --- |
-| **A. fd-level stderr capture** | Around the locked `maude.load` call: `os.dup2` fd 2 to a pipe/`tempfile`, read back, restore. | **Recommended for v1.** Works because C++ writes to fd 2. Risks: process-global (can capture unrelated stderr from other threads); mitigated by holding `MaudeRuntime`'s lock during capture and keeping the window tiny. |
+| **A. fd-level stderr capture** | Around `maude.load`: `os.dup2` fd 2 to a `tempfile`, read back, restore. | **Chosen for v1** — but executed inside the dedicated Maude **worker process** (decision Q1; see [`worker-process-architecture.md`](worker-process-architecture.md)), so the fd-2 redirection is scoped to the worker and the MCP server's stderr is untouched. |
 | B. Patch/vendor the bindings | Add a warning callback in `maude_wrappers.cc` / SWIG interface | Cleanest long-term, but harold-mcp depends on the **pip-installed** `maude` package — out of scope for v1. |
-| C. Subprocess CLI | Run the `maude` binary (`load file.maude`) and parse output | Heavyweight (process spawn, prelude reload per call), duplicates interpreter state. Not needed. |
+| C. Subprocess CLI | Run the `maude` binary (`load file.maude`) per call and parse output | Superseded by the long-lived worker process (no per-call spawn, persistent interpreter state). |
 
-Option A design sketch (to be detailed in the design phase):
+Option A design sketch, as implemented in the worker process (to be detailed in the design phase):
 
 ```mermaid
 sequenceDiagram
-    participant T as diagnostics tool
-    participant R as MaudeRuntime (RLock)
-    participant F as os-level stderr pipe
+    participant P as MaudeRuntime proxy (main process)
+    participant W as Maude worker process
+    participant F as worker fd 2 (tempfile)
     participant M as maude.load (C++)
-    T->>R: load_program_with_diagnostics(path)
-    R->>R: acquire _lock
-    R->>F: dup2: fd2 → capture pipe
-    R->>M: maude.load(path)
-    M-->>F: Warning: "file", line 3: ...
-    R->>F: dup2: restore fd2
-    R-->>T: (ok, captured stderr text)
+    P->>W: load_diagnostics(path)
+    W->>F: dup2: redirect fd 2 to tempfile
+    W->>M: maude.load(path)
+    M-->>F: Warning lines written to fd 2
+    W->>F: restore fd 2
+    W-->>P: ok, diagnostics list
 ```
 
 Notes for the design phase:
@@ -164,8 +163,10 @@ Messages observed: `skipped unexpected token: <tok>`, `syntax error`,
 3. Program well-formedness must be inferred from (a) the `maude.load` bool and (b) captured
    warnings. Module availability is NOT used (programs may define no modules; see the
    `no_new_module.maude` fixture).
-4. Warning capture requires **os-level stderr redirection** inside the runtime lock (no
-   binding-level hook exists); parse lines into severity/line/message.
+4. Warning capture requires **os-level stderr redirection** (no binding-level hook exists),
+   performed inside the dedicated Maude **worker process** so it cannot interfere with the
+   MCP server's own stderr (see [`worker-process-architecture.md`](worker-process-architecture.md));
+   parse lines into severity/line/message.
 5. "Error" severity is synthesized for the hard-failure case; Maude itself only emits
    `Warning:` (and `Advisory:`, suppressed).
 

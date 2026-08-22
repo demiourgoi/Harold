@@ -7,9 +7,12 @@
 ## 1. Server and tool registration (`src/harold_mcp/server.py`)
 
 - Single shared `mcp = FastMCP(name="Harold", instructions=..., website_url=..., icons=[HAROLD_ICON])`.
-- Tools register with `@mcp.tool` on this instance. Current tool: `greet(name: str) -> str`
-  (hello-world; reduces `2 * 3` in `NAT`).
-- `run()` calls `init_maude()` before `mcp.run()` (fail-fast at startup).
+- Tools register with `@mcp.tool` on this instance. The placeholder `greet` tool (hello-world
+  reduction of `2 * 3` in `NAT`) is **removed** in v1 (decision Q2) — `maude_program_diagnostics`
+  becomes the first real tool.
+- `run()` starts the **Maude worker process** before `mcp.run()` (fail-fast at startup if Maude
+  cannot initialize in the worker; see
+  [`worker-process-architecture.md`](worker-process-architecture.md)).
 
 **Pattern for the new tool** (per knowledge base `components.md` and the rough idea):
 
@@ -31,28 +34,31 @@
 
 ## 2. Maude access layer (`src/harold_mcp/maude.py`)
 
-- `init_maude()` — once per process, double-checked locking, `advise=False`, retry on failure,
-  raises `MaudeInitError`.
-- `MaudeRuntime` — all interpreter access serialized on an `RLock`; **no module wrapper caching**
-  ("last load wins"; see `.agents/planning/sigsegv-under-load/issue.md` for the SIGSEGV rationale).
-  - `get_module(name) -> Any` — fresh wrapper or `MaudeModuleNotFoundError`.
-  - `load_program(path: str | Path) -> None` — resolves to absolute path, calls `maude.load`;
-    raises `MaudeLoadError` on `False`.
-  - `load_module(path, name) -> Any` — load + get.
-- `get_runtime()` — process-wide singleton (holds only the lock).
-- Error hierarchy: `MaudeError(RuntimeError)` → `MaudeInitError`, `MaudeLoadError(.program_path)`,
-  `MaudeModuleNotFoundError(.module_name)`.
+- Today: `init_maude()` (once per process, `advise=False`) + `MaudeRuntime` serializing
+  `get_module`/`load_program`/`load_module` on an `RLock` ("last load wins", no wrapper caching —
+  see `.agents/planning/sigsegv-under-load/issue.md`).
+- **v1 rework** (decision Q1): the interpreter moves into a dedicated worker process;
+  `MaudeRuntime` becomes a **proxy** that forwards ops over `multiprocessing` queues and
+  returns serializable results (SWIG wrappers cannot cross processes). The wrapper-returning
+  methods (`get_module`, `load_module`) disappear; v1 needs only
+  `load_diagnostics(path) -> DiagnosticsResult` plus worker lifecycle management
+  (see [`worker-process-architecture.md`](worker-process-architecture.md)).
+- `get_runtime()` — process-wide proxy singleton (worker handle + queues).
+- Error hierarchy adapted: `MaudeError(RuntimeError)` base; `MaudeInitError` (worker failed to
+  initialize Maude); `MaudeLoadError(.program_path)` (hard load failure); plus a
+  worker-crash/unavailable error. `MaudeModuleNotFoundError` becomes obsolete for v1 (no
+  module lookups across the process boundary).
 
 **Implications for the diagnostics tool**:
 
-- All new Maude interaction must go through `MaudeRuntime` (never call `maude.*` directly from
-  tool code) and must hold the runtime lock. An stderr-capture "load with diagnostics" operation
-  belongs in this layer (see [`maude-bindings.md`](maude-bindings.md)), e.g. a new
-  `MaudeRuntime` method, so the tool code stays a thin adapter that receives the runtime via
-  `Depends(get_runtime)` (see above).
-- `load_program` currently raises on hard failure; the diagnostics flow needs the tri-state
-  outcome (hard failure / loaded-with-warnings / clean) instead — likely a new method rather
-  than changing `load_program` semantics (design decision).
+- The main process must **never** import or call `maude.*` directly; the worker is the only
+  place that touches the interpreter. Tool code stays a thin adapter over the proxy, received
+  via `Depends(get_runtime)` (see above).
+- The worker performs the fd-2 warning capture around `maude.load` and returns the parsed
+  `Warning:` lines (see [`maude-bindings.md`](maude-bindings.md),
+  [`worker-process-architecture.md`](worker-process-architecture.md)).
+- Hard failure (`maude.load` returns `False`) vs. warnings vs. clean is the worker's
+  tri-state outcome; the proxy maps it onto the pydantic result model.
 
 ## 3. Typing, linting, and style constraints (from `pyproject.toml` + knowledge base)
 
@@ -68,16 +74,17 @@
 
 ## 4. Tests
 
-- `tests/unit/` — mocked, hermetic. Existing pattern (`test_maude.py`): `unittest.mock.patch`
-  on `harold_mcp.maude.maude.*` (e.g. `patch.object(maude_module.maude, "load", return_value=True)`),
-  autouse fixture resets module state. New unit tests for the diagnostics layer can mock the
-  runtime and feed synthetic captured-stderr text through the warning parser.
-- `tests/integration/` — real interpreter; fixtures in `tests/integration/fixtures/`:
+- `tests/unit/` — mocked, hermetic. Current `test_maude.py` (9 tests around
+  `get_module`/`load_program`/`load_module` and `init_maude`) is **replaced** by tests for the
+  worker proxy: startup, `load_diagnostics` delegation, warning parsing (synthetic stderr
+  text), crash detection/restart, shutdown. `test_diagnostics.py` (unit) mocks the proxy.
+- `tests/integration/` — real worker + real interpreter; fixtures in
+  `tests/integration/fixtures/`:
   - `hello.maude` / `hello2.maude` — clean programs (module `HELLO-WORLD`).
   - `broken-recoverable.maude` — warning (`missing is keyword.`) but still loads/works.
   - `broken-non-recoverable.maude` — 14 warnings, module NOT defined.
-  These fixtures were built exactly for this tool; integration tests should assert all three
-  outcomes.
+  - `no_new_module.maude` — no modules defined, only commands; must still report `success`.
+  Integration tests assert all four outcomes through the worker protocol.
 - `make test` runs pytest with coverage (`--cov`, branch coverage enabled).
 
 ## 5. Docs and knowledge base
@@ -94,20 +101,19 @@
 ```mermaid
 graph TD
     M[harold_mcp.server<br>mcp instance + registration] --> T[harold_mcp.tools.diagnostics<br>maude_program_diagnostics]
-    T --> R[harold_mcp.maude<br>MaudeRuntime + new load-with-diagnostics]
-    R --> B[maude bindings<br>load / getModule / init]
+    T --> R[harold_mcp.maude<br>MaudeRuntime proxy]
+    R -->|multiprocessing queues| W[Maude worker process<br>maude bindings: load / init]
     T --> P[pydantic models<br>output schema]
 ```
 
 - `tools/` is currently an empty placeholder package — the new module is its first occupant.
 - **No Maude init at import time**: importing `harold_mcp.server` builds the `mcp` instance but
-  does not initialize Maude. Initialization happens (a) eagerly in `server.run()` before
-  `mcp.run()` — intentional, to fail fast at startup — and (b) inside
-  `MaudeRuntime._maude_locked()` as an idempotent precondition (`init_maude()` returns
-  immediately once initialized; the check is deliberately cheap because the performance penalty
-  is negligible for this use case). Keep heavy logic out of import time.
-- **Logging and stderr-capture isolation**: the server's own logs must not land on fd 2 during
-  the warning-capture window; see [`logging.md`](logging.md).
+  does not initialize Maude. In v1, the Maude worker (which owns the interpreter and its
+  `maude.init(advise=False)`) is started in `server.run()` before `mcp.run()` — intentional,
+  to fail fast at startup. Keep heavy logic out of import time.
+- **stderr isolation**: capture happens inside the worker process, so the main process keeps
+  FastMCP's default stderr logging (spec-recommended for stdio servers); the file-logging plan
+  in [`logging.md`](logging.md) is **not needed** for v1.
 
 ## Sources
 

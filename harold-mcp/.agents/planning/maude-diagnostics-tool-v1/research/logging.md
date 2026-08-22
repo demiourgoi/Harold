@@ -1,11 +1,11 @@
 # Research: Logging isolation for stderr warning capture
 
-> **Status: CONDITIONAL.** This plan applies only if Maude stays **in-process** (option A).
-> The alternative — a dedicated Maude worker process (see
-> [`worker-process-architecture.md`](worker-process-architecture.md)) — isolates the fd-2
-> capture to a separate process, lets the main process keep its default stderr logging
-> (which the MCP spec recommends for stdio servers), and makes this file-logging plan
-> unnecessary. Decision recorded in [`../idea-honing.md`](../idea-honing.md) (Q1).
+> **Status: SUPERSEDED for v1.** The dedicated Maude worker process was chosen (decision Q1
+> in [`../idea-honing.md`](../idea-honing.md); see
+> [`worker-process-architecture.md`](worker-process-architecture.md)). The worker scopes the
+> fd-2 capture to its own process, so the MCP server keeps FastMCP's default stderr logging
+> (spec-recommended for stdio servers) and no file-logging rework is needed. This file is
+> kept for reference.
 
 <!-- Research topic 4 of the PDD project. Spun off from [`maude-bindings.md`](maude-bindings.md):
      the warning capture mechanism redirects fd 2 (stderr), so the server's own logging must
@@ -112,8 +112,8 @@ flowchart TD
     D --> E[stderr: 'Logging to <path>']
     E --> F[init_maude + mcp.run]
     F --> G{maude_program_diagnostics call}
-    G --> H[dup2 fd2 -> capture pipe]
-    H --> I[maude.load: Warning lines -> fd 2 -> pipe]
+    H[dup2: fd 2 to capture pipe]
+    I[maude.load: Warning lines to fd 2 pipe]
     I --> J[restore fd2; parse captured text]
     J --> K[all server logs -> log file only]
 ```
