@@ -25,7 +25,18 @@ make release
 
 This will also generate your `uv.lock` file.
 
-In case you are using the Zed IDE, it is also recommneded to clone https://github.com/fadoss/maude-bindings and it to the Zed project together with the root folder of this file.
+#### Recommendations
+
+- In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
+- Setup the following agent skills:
+  - `codebase-summary`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/codebase-summary.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
+
+```md
+---
+name: codebase-summary
+description: Generates structured codebase documentation — architecture, components, interfaces, data models, workflows — into `.agents/summary/`, and produces consolidated files like `AGENTS.md`, `README.md`, or `CONTRIBUTING.md`. Use when the user asks to document, summarize, understand, or onboard to a codebase.
+---
+```
 
 ### Running the server
 
