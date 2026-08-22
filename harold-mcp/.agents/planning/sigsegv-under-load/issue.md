@@ -58,20 +58,138 @@ mechanism described there corresponds to the Java generated `delete()` path /
 older bindings versions; for the Python package shipped as 1.6.0 the destructor
 is unprotect-only.
 
-## Residual risk we still defend against
+## Harold ≠ Linoleum: modules must support reload
 
-The never-expiring module cache is still worthwhile in Python, but for a
-different reason than in Scala:
+Linoleum could freeze its modules: they were loaded from immutable jar
+resources, and changing the Maude program meant redeploying the Flink job.
+Hence the never-expiring module cache.
 
-- One wrapper per `(program, module)` key (identity dedup).
-- The cached wrapper anchors a protection, so a *redefined* module cannot be
-  freed while old wrappers/Terms are alive.
-- Load-once semantics avoid re-running `maude.load()` on the same file, which
-  in Maude *redefines* same-named modules and strands existing wrappers.
+Harold is a development tool: an AI agent iterates on a `.maude` source file,
+editing it and loading it again and again. Frozen modules are the wrong model.
+Observed behavior of the interpreter and the `maude` package (Maude 3.5.1,
+`maude` 1.6.0, using `src/harold_mcp/assets/test_data/hello.maude` and
+`hello2.maude`, both defining `HELLO-WORLD` with `f = 1 * 2` vs `f = 1 + 2`):
 
-The remaining pitfall: redefining a module (e.g. reloading an edited program)
-and handing out stale wrappers. The load-once registry avoids this until we
-deliberately implement reload/invalidation.
+- Loading a program that redefines an existing module emits
+  `Advisory: redefining module HELLO-WORLD.` and replaces the interpreter's
+  current definition. The advisory is controlled by
+  `globalAdvisoryFlag = advise` in `init` (`maude-bindings/src/maude_wrappers.cc:124-144`),
+  so `maude.init(advise=False)` suppresses it.
+- `maude.getModule(name)` **after** the reload returns a wrapper for the **new**
+  flat module (`f` reduces to `3`).
+- Wrappers obtained **before** the reload remain fully usable and keep the
+  **old** flat module alive via their protection (`protect()` in `getModule`,
+  released when the wrapper is destroyed). Terms parsed from the old wrapper
+  keep the old definition too (`f` reduces to `2`). This is *safe* — no
+  dangling pointers — and the old flat module is freed as soon as the last
+  wrapper/Term referencing it is dropped. There is no unbounded "history"
+  unless the application itself retains old wrappers (the REPL only kept one
+  because `hm` stayed bound in the session).
+- Gotcha for the future run tool: `Term.reduce()` returns the **number of
+  rewrite steps**, not the reduced value; the value is obtained by
+  `str(term)` after reducing.
+
+Consequences for the design:
+
+- **No module wrapper cache.** A frozen cache would serve stale definitions
+  forever; a fresh `maude.getModule(name)` per tool call is cheap (the
+  expensive flattening is cached by the interpreter per module definition).
+- **`load_program` reloads on every call** — "last load wins", exactly like the
+  Maude CLI. Edits are picked up by the next tool call.
+- **Retain nothing across tool calls.** Since the server holds no wrappers,
+  old flat modules are freed promptly after each reload, so iterating on a file
+  cannot accumulate memory.
+
+Details of the experiment:
+
+- With the `maude` REPL:
+
+```maude
+Maude> load hello.maude
+Maude> red in HELLO-WORLD : f .
+reduce in HELLO-WORLD : f .
+rewrites: 2 in 0ms cpu (0ms real) (~ rewrites/second)
+result NzNat: 2
+Maude> load hello2.maude
+Advisory: redefining module HELLO-WORLD.
+Maude> red in HELLO-WORLD : f .
+reduce in HELLO-WORLD : f .
+rewrites: 2 in 0ms cpu (0ms real) (~ rewrites/second)
+result NzNat: 3
+Maude> q .
+Bye.
+juanrh@localhost:~/git/demiourgoi/Harold/harold-mcp/src/harold_mcp/assets/test_data> cat hello.maude
+fmod HELLO-WORLD is
+    pr NAT .
+    op f : -> Nat .
+    eq f = 1 * 2 .
+endfm
+
+--- red in HELLO-WORLD : f .
+--- q .
+juanrh@localhost:~/git/demiourgoi/Harold/harold-mcp/src/harold_mcp/assets/test_data> cat hello2.maude
+fmod HELLO-WORLD is
+    pr NAT .
+    op f : -> Nat .
+    eq f = 1 + 2 .
+endfm
+
+--- red in HELLO-WORLD : f .
+--- q .
+juanrh@localhost:~/git/demiourgoi/Harold/harold-mcp/src/harold_mcp/assets/test_data>
+```
+
+- With the `maude` Python package:
+
+```py
+>>> import maude
+>>> maude.init()
+True
+>>> maude.load('hello.maude')
+True
+>>> hm = maude.getModule('HELLO-WORLD')
+>>> t = hm.parseTerm('f')
+# Note: this is the number of reduction steps, NOT the value of t
+>>> t.reduce()
+2
+# Expected value of 'f' in hello.maude
+>>> print(t)
+2
+# hello2.maude overrides HELLO-WORLD module: same effect as 
+# editing hello.maude and loading it again
+>>> maude.load('hello2.maude')
+Advisory: redefining module HELLO-WORLD.
+True
+>>> t.reduce()
+0
+>>> print(t)
+2
+>>> t = hm.parseTerm('f')
+>>> t.reduce()
+2
+
+# Expected value of 'f' in hello.maude
+# Previously created terms do not change
+>>> print(t)
+2
+>>> hm2 = maude.getModule('HELLO-WORLD')
+>>> t2 = hm2.parseTerm('f')
+>>> t2.reduce()
+2
+
+# Expected value of 'f' in hello2.maude
+>>> print(t2)
+3
+>>> t3 = hm.parseTerm('f')
+>>> t3.reduce()
+2
+
+# Expected value of 'f' in hello.maude
+# Previously loaded modules do not change
+>>> print(t3)
+2
+>>>
+```
 
 ## Proposed `MaudeRuntime` design
 
@@ -84,8 +202,6 @@ from typing import Any
 
 import maude
 
-_BUILTIN = None  # cache-key "program" component for prelude modules
-
 
 class MaudeError(RuntimeError):
     """Base error for failures in the Maude runtime wrapper."""
@@ -96,86 +212,85 @@ class MaudeLoadError(MaudeError):
 
 
 class MaudeRuntime:
-    """Thread-safe, caching facade over the `maude` interpreter.
+    """Thread-safe facade over the `maude` interpreter.
 
     - All Maude interpreter access is serialized on a reentrant lock (the
       interpreter is not thread-safe).
-    - Module wrappers are cached forever, keyed by ``(program_path, module_name)``,
-      mirroring Linoleum's ``resourcePath/moduleName`` keys. Prelude modules use
-      ``program_path=None``.
-    - Each program file is loaded at most once; ``maude.load()`` re-running a
-      file would redefine its modules and strand existing wrappers.
+    - No module wrappers are cached. A wrapper is a cheap handle over the
+      interpreter-owned flat module, and loading a program may redefine its
+      modules, so wrappers are always fetched fresh.
+    - `load_program` loads the file on every call ("last load wins", like the
+      Maude CLI), so edits to a `.maude` file are picked up by the next call.
     """
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._module_cache: dict[tuple[str | None, str], Any] = {}
-        self._loaded_programs: set[str] = set()
 
     def get_module(self, module_name: str) -> Any:
-        """Return the cached wrapper for a preloaded (e.g. prelude) module."""
+        """Return a wrapper for a loaded module, or raise if it is not loaded."""
         with self._lock:
             init_maude()
-            return self._cached_module(_BUILTIN, module_name)
+            return self._get_module_locked(module_name)
 
     def load_program(self, program_path: str | Path) -> None:
-        """Load a Maude program file exactly once. Idempotent."""
+        """Load (or reload) a Maude program file, redefining its modules."""
         path = str(Path(program_path).resolve())
         with self._lock:
-            self._load_program_locked(path)
+            init_maude()
+            if not maude.load(path):
+                raise MaudeLoadError(f"Failed to load Maude program {path!r}")
 
     def load_module(self, program_path: str | Path, module_name: str) -> Any:
-        """Load the program (once) and return the cached module wrapper."""
+        """(Re)load the program and return a fresh wrapper for the module."""
         path = str(Path(program_path).resolve())
         with self._lock:
-            self._load_program_locked(path)
-            return self._cached_module(path, module_name)
+            init_maude()
+            if not maude.load(path):
+                raise MaudeLoadError(f"Failed to load Maude program {path!r}")
+            return self._get_module_locked(module_name)
 
-    def _load_program_locked(self, path: str) -> None:
-        if path in self._loaded_programs:
-            return
-        init_maude()
-        if not maude.load(path):
-            raise MaudeLoadError(f"Failed to load Maude program {path!r}")
-        self._loaded_programs.add(path)
-
-    def _cached_module(self, program_path: str | None, module_name: str) -> Any:
-        key = (program_path, module_name)
-        if key not in self._module_cache:
-            module = maude.getModule(module_name)
-            if module is None:
-                raise MaudeLoadError(f"Module {module_name!r} not found")
-            self._module_cache[key] = module
-        return self._module_cache[key]
+    def _get_module_locked(self, module_name: str) -> Any:
+        module = maude.getModule(module_name)
+        if module is None:
+            raise MaudeLoadError(f"Module {module_name!r} not found")
+        return module
 ```
 
 ## Design decisions
 
-- **Singleton runtime.** The cache only works if it survives across tool calls;
-  `harold_mcp/server.py` currently constructs `MaudeRuntime()` per call.
-  Add a module-level `get_runtime()` returning one instance and use it in the
-  server (mirroring Scala's singleton `object MaudeModules`). `MaudeRuntime()`
-  stays constructible so existing tests keep passing.
+- **No module cache** — deliberately inverted from the Linoleum workaround:
+  - Python wrapper destruction only unprotects, and live Terms hold their own
+    protections, so dropping a wrapper can't free a module in use.
+  - Harold's modules must change; a frozen cache would serve stale definitions.
+  - Nothing retained across calls ⇒ old flat modules are freed as soon as a
+    call's wrappers/Terms die ⇒ repeated edits don't accumulate memory.
+- **Reload on every call**, caller-driven. A content-hash/mtime "skip if
+  unchanged" optimization was considered and rejected as the default: two
+  different paths defining the same module name could make hash-based skipping
+  return a module that was actually redefined by another file (cross-path
+  redefinition trap). Reloading unconditionally keeps semantics identical to
+  the Maude CLI.
+- **Singleton runtime — still required.** With no caches, the singleton is no
+  longer about persistence but about the *lock*: `harold_mcp/server.py`
+  currently constructs `MaudeRuntime()` per call, and per-instance locks would
+  not serialize Maude access across concurrent tool calls. Add a module-level
+  `get_runtime()` and use it in the server. `MaudeRuntime()` stays
+  constructible so existing tests keep passing.
 - **Reentrant lock everywhere.** `load_module` must call the load path
   internally; a plain `Lock` would deadlock. Every entry point takes the lock
   exactly once at the boundary — the Python analogue of `runWithLock`.
-- **`init_maude()` under the lock.** It is already idempotent with its own
-  `_INIT_LOCK`; calling it inside the runtime lock prevents racing
-  `maude.load` with init. `server.run()` keeps its eager call for fail-fast
+- **`init_maude()` under the lock**, and initialize with `advise=False` to
+  suppress `Advisory: redefining module X.` on every reload (and keep the stdio
+  transport's stderr clean). `server.run()` keeps its eager call for fail-fast
   startup.
-- **Resolved paths as cache keys**, like `resourcePath/moduleName` in Scala,
-  so the cache is cwd-independent (MCP servers have unpredictable cwds; tools
-  should pass absolute paths).
-- **Load-once registry** (`_loaded_programs`) — a small improvement over the
-  Scala workaround, where repeated `loadModule` calls from the same file call
-  `loadProgram` again and redefine modules.
+- **Resolved paths**, so behavior is cwd-independent (MCP servers have
+  unpredictable cwds; tools should pass absolute paths).
 - **Typed errors** (`MaudeLoadError`) instead of silent `None`s, so the
   "compile to surface errors" tool has something structured to catch.
 - **Compatibility.** `get_module("NAT")` keeps its behavior; existing unit
   tests (`tests/unit/test_maude.py`) and the integration test
-  (`tests/integration/test_maude_runtime.py`) remain green — fresh instances
-  still have empty caches, and `init_maude()`/`maude.getModule` mocking still
-  works.
+  (`tests/integration/test_maude_runtime.py`) remain green — `get_module`
+  still calls `init_maude()` and delegates to `maude.getModule` exactly once.
 
 ## Follow-ups (noted, not built yet)
 
@@ -183,9 +298,13 @@ class MaudeRuntime:
   to C++ `cerr`, which `contextlib.redirect_stderr` does not capture (it swaps
   `sys.stderr`, but Maude writes to fd 2). The compile tool needs fd-level
   `os.dup2` capture (safe under the runtime lock) or a subprocess per compile.
+  Alternatively, `maude.input(text)` processes source text directly, without
+  file I/O.
+- **`Term.reduce()` semantics.** It returns the rewrite count; tools must
+  `str(term)` after reducing to get the value.
+- **`init_maude()` hardening.** Check the bool returned by `maude.init()`
+  (currently ignored) and raise if initialization fails (e.g. prelude not
+  found).
 - **Cancellation for long reductions.** `maude.init(handleInterrupts=False)`
   installs SIGINT hooks; long rewrites hold the GIL. For a run tool, consider
   subprocess isolation later.
-- **`init_maude()` uses `maude.init()` with `advise=True`**, printing advisory
-  messages to stderr on startup — worth switching to `advise=False` for a clean
-  stdio transport.
