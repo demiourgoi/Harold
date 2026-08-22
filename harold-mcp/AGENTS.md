@@ -126,6 +126,21 @@ The use case for Harold is to use it with AI-assisted programming tools such as 
 1. Add more tests as tools are implemented.
 2. Suggest the user to re-run the codebase-summary agent skill after significant architecture changes, so the knowledge base at `.agents/summary/` does not drift from the code. Document new modules in `docs/modules.md`
 
+### Running `make` commands from agent sandboxes
+
+Agents running in sandboxed environments may lack write access to the user's
+`uv` cache (`~/.cache/uv`), making `uv` fail with errors like
+`Could not acquire lock ... Read-only file system`. In that case, prepend
+`UV_CACHE_DIR=/tmp/uv-cache` to any `make` command:
+
+```sh
+UV_CACHE_DIR=/tmp/uv-cache make check
+UV_CACHE_DIR=/tmp/uv-cache make test
+UV_CACHE_DIR=/tmp/uv-cache make release
+```
+
+(This is harmless in normal environments too, but there it is not needed.)
+
 ### References
 
 - [FastMCP](https://gofastmcp.com/llms.txt)

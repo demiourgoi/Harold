@@ -1,7 +1,7 @@
 from fastmcp import FastMCP
 
 from harold_mcp.logging import get_logger
-from harold_mcp.maude import MaudeRuntime, init_maude
+from harold_mcp.maude import get_runtime, init_maude
 from harold_mcp.resources import HAROLD_ICON
 
 _LOG = get_logger(__name__)
@@ -33,8 +33,7 @@ def greet(name: str) -> str:
 
     Hello-world tool; the `name` argument is currently unused.
     """
-    mr = MaudeRuntime()
-    m = mr.get_module("NAT")
+    m = get_runtime().get_module("NAT")
     t = m.parseTerm("2 * 3")
     t.reduce()
     return f"Result = {t}"

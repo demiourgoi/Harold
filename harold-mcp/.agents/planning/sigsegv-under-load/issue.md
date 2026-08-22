@@ -67,7 +67,7 @@ Hence the never-expiring module cache.
 Harold is a development tool: an AI agent iterates on a `.maude` source file,
 editing it and loading it again and again. Frozen modules are the wrong model.
 Observed behavior of the interpreter and the `maude` package (Maude 3.5.1,
-`maude` 1.6.0, using `src/harold_mcp/assets/test_data/hello.maude` and
+`maude` 1.6.0, using `tests/integration/fixtures/hello.maude` and
 `hello2.maude`, both defining `HELLO-WORLD` with `f = 1 * 2` vs `f = 1 + 2`):
 
 - Loading a program that redefines an existing module emits
@@ -196,8 +196,10 @@ True
 ```python
 """Safe access layer over the SWIG-generated `maude` Python bindings."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any
 
 import maude
@@ -207,8 +209,48 @@ class MaudeError(RuntimeError):
     """Base error for failures in the Maude runtime wrapper."""
 
 
+class MaudeInitError(MaudeError):
+    """Raised when the Maude interpreter fails to initialize."""
+
+    def __init__(self) -> None:
+        super().__init__("Failed to initialize the Maude interpreter")
+
+
 class MaudeLoadError(MaudeError):
-    """Raised when a Maude program fails to load or a module is not found."""
+    """Raised when a Maude program fails to load."""
+
+    def __init__(self, program_path: str) -> None:
+        self.program_path = program_path
+        super().__init__(f"Failed to load Maude program {program_path!r}")
+
+
+class MaudeModuleNotFoundError(MaudeError):
+    """Raised when a requested module is not loaded."""
+
+    def __init__(self, module_name: str) -> None:
+        self.module_name = module_name
+        super().__init__(f"Module {module_name!r} not found")
+
+
+_INIT_LOCK = Lock()
+_maude_initialized = False
+
+
+def init_maude() -> None:
+    """Initialize the Maude interpreter exactly once per process.
+
+    Runs with `advise=False` to suppress advisories on stderr. Failures raise
+    `MaudeInitError` and are retried on the next call.
+    """
+    global _maude_initialized
+    if _maude_initialized:
+        return
+    with _INIT_LOCK:
+        if _maude_initialized:
+            return
+        if not maude.init(advise=False):
+            raise MaudeInitError()
+        _maude_initialized = True
 
 
 class MaudeRuntime:
@@ -226,34 +268,40 @@ class MaudeRuntime:
     def __init__(self) -> None:
         self._lock = RLock()
 
-    def get_module(self, module_name: str) -> Any:
-        """Return a wrapper for a loaded module, or raise if it is not loaded."""
+    @contextmanager
+    def _maude_locked(self) -> Iterator[None]:
+        """Serialize Maude interpreter access and ensure it is initialized."""
         with self._lock:
             init_maude()
-            return self._get_module_locked(module_name)
+            yield
+
+    def get_module(self, module_name: str) -> Any:
+        """Return a wrapper for a loaded module, or raise if it is not loaded."""
+        with self._maude_locked():
+            module = maude.getModule(module_name)
+            if module is None:
+                raise MaudeModuleNotFoundError(module_name)
+            return module
 
     def load_program(self, program_path: str | Path) -> None:
         """Load (or reload) a Maude program file, redefining its modules."""
         path = str(Path(program_path).resolve())
-        with self._lock:
-            init_maude()
+        with self._maude_locked():
             if not maude.load(path):
-                raise MaudeLoadError(f"Failed to load Maude program {path!r}")
+                raise MaudeLoadError(path)
 
     def load_module(self, program_path: str | Path, module_name: str) -> Any:
         """(Re)load the program and return a fresh wrapper for the module."""
-        path = str(Path(program_path).resolve())
-        with self._lock:
-            init_maude()
-            if not maude.load(path):
-                raise MaudeLoadError(f"Failed to load Maude program {path!r}")
-            return self._get_module_locked(module_name)
+        self.load_program(program_path)
+        return self.get_module(module_name)
 
-    def _get_module_locked(self, module_name: str) -> Any:
-        module = maude.getModule(module_name)
-        if module is None:
-            raise MaudeLoadError(f"Module {module_name!r} not found")
-        return module
+
+_RUNTIME = MaudeRuntime()
+
+
+def get_runtime() -> MaudeRuntime:
+    """Return the process-wide `MaudeRuntime` singleton."""
+    return _RUNTIME
 ```
 
 ## Design decisions
@@ -276,21 +324,43 @@ class MaudeRuntime:
   not serialize Maude access across concurrent tool calls. Add a module-level
   `get_runtime()` and use it in the server. `MaudeRuntime()` stays
   constructible so existing tests keep passing.
-- **Reentrant lock everywhere.** `load_module` must call the load path
-  internally; a plain `Lock` would deadlock. Every entry point takes the lock
-  exactly once at the boundary — the Python analogue of `runWithLock`.
+- **Reentrant lock + `init_maude()` via a `contextmanager`.** A private
+  `@contextmanager` method `_maude_locked()` wraps `with self._lock: init_maude();
+  yield`, so every entry point is `with self._maude_locked(): ...` — no
+  duplicated lock/init boilerplate. `RLock` (not `Lock`) so the delegation
+  below can nest acquisitions.
+- **`load_module` delegates.** `load_module(path, name)` is just
+  `load_program(path)` + `get_module(name)`; the reentrant lock makes the
+  nesting safe and keeps a single code path for loading. The two lock
+  acquisitions are not one atomic critical section, but each operation is
+  individually safe, and "last load wins" matches the Maude CLI.
+- **Singleton runtime — still required.** With no caches, the singleton is no
+  longer about persistence but about the *lock*: `harold_mcp/server.py`
+  currently constructs `MaudeRuntime()` per call, and per-instance locks would
+  not serialize Maude access across concurrent tool calls. Add a module-level
+  `get_runtime()` and use it in the server. `MaudeRuntime()` stays
+  constructible so existing tests keep passing.
 - **`init_maude()` under the lock**, and initialize with `advise=False` to
   suppress `Advisory: redefining module X.` on every reload (and keep the stdio
   transport's stderr clean). `server.run()` keeps its eager call for fail-fast
-  startup.
+  startup. **Implemented**: `init_maude()` also checks the bool returned by
+  `maude.init()` and raises `MaudeInitError` on failure (retried on the next
+  call), covering the old FIXME at `maude.py:24`.
 - **Resolved paths**, so behavior is cwd-independent (MCP servers have
   unpredictable cwds; tools should pass absolute paths).
-- **Typed errors** (`MaudeLoadError`) instead of silent `None`s, so the
-  "compile to surface errors" tool has something structured to catch.
-- **Compatibility.** `get_module("NAT")` keeps its behavior; existing unit
-  tests (`tests/unit/test_maude.py`) and the integration test
-  (`tests/integration/test_maude_runtime.py`) remain green — `get_module`
-  still calls `init_maude()` and delegates to `maude.getModule` exactly once.
+- **Typed errors** (`MaudeInitError` / `MaudeLoadError` /
+  `MaudeModuleNotFoundError`) instead of silent `None`s, so the "compile to
+  surface errors" tool has something structured to catch. Messages are built
+  inside the exception classes (ruff `TRY003`).
+- **Test fixtures live in `tests/integration/fixtures/`.** Test-only `.maude`
+  programs do not belong in the package: `src/harold_mcp/assets/` is for
+  runtime assets that ship in the wheel (e.g. the brand icon), and test data
+  there would be packaged and shipped too. `hello.maude` / `hello2.maude` were
+  moved to `tests/integration/fixtures/`, co-located with the integration
+  tests that need a real interpreter.
+- **Compatibility.** `get_module("NAT")` keeps its behavior; the updated unit
+  tests (`tests/unit/test_maude.py`) and integration test
+  (`tests/integration/test_maude_runtime.py`) cover the new API.
 
 ## Follow-ups (noted, not built yet)
 
@@ -302,9 +372,6 @@ class MaudeRuntime:
   file I/O.
 - **`Term.reduce()` semantics.** It returns the rewrite count; tools must
   `str(term)` after reducing to get the value.
-- **`init_maude()` hardening.** Check the bool returned by `maude.init()`
-  (currently ignored) and raise if initialization fails (e.g. prelude not
-  found).
 - **Cancellation for long reductions.** `maude.init(handleInterrupts=False)`
   installs SIGINT hooks; long rewrites hold the GIL. For a run tool, consider
   subprocess isolation later.
