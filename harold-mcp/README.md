@@ -38,6 +38,15 @@ description: Generates structured codebase documentation — architecture, compo
 ---
 ```
 
+  - `pdd`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/pdd.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
+
+```md
+---
+name: pdd
+description: Transforms a rough idea into a detailed design document, implementation plan, and actionable todo list using the Prompt-Driven Development (PDD) methodology. Use when a user describes a project concept or feature idea they want to develop, when they need to flesh out requirements and research before coding, or when they ask to plan, design, or create a structured specification for a new project.
+---
+```
+
 ### Running the server
 
 For development, after `make install` the MCP server runs over stdio with:
