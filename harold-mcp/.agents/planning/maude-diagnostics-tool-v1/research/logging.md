@@ -1,5 +1,12 @@
 # Research: Logging isolation for stderr warning capture
 
+> **Status: CONDITIONAL.** This plan applies only if Maude stays **in-process** (option A).
+> The alternative — a dedicated Maude worker process (see
+> [`worker-process-architecture.md`](worker-process-architecture.md)) — isolates the fd-2
+> capture to a separate process, lets the main process keep its default stderr logging
+> (which the MCP spec recommends for stdio servers), and makes this file-logging plan
+> unnecessary. Decision recorded in [`../idea-honing.md`](../idea-honing.md) (Q1).
+
 <!-- Research topic 4 of the PDD project. Spun off from [`maude-bindings.md`](maude-bindings.md):
      the warning capture mechanism redirects fd 2 (stderr), so the server's own logging must
      not write to fd 2 during the capture window. Verified against the installed fastmcp 3.4.7
@@ -26,8 +33,8 @@
 - `fastmcp/__init__.py` runs **at import time**:
 
   ```python
-  settings = Settings()          # env prefix FASTMCP_
-  if settings.log_enabled:       # default True
+  settings = Settings()  # env prefix FASTMCP_
+  if settings.log_enabled:  # default True
       _configure_logging(level=settings.log_level, enable_rich_tracebacks=...)
   ```
 

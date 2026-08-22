@@ -1,3 +1,23 @@
 # Idea Honing
 
 Requirements clarification Q&A for the Maude diagnostics tool v1.
+
+## Q1. Architecture: in-process fd-2 capture vs. dedicated Maude worker process
+
+**Question**: Should the Maude interpreter run in the MCP server process (with os-level stderr
+capture + file logging), or in a dedicated long-lived worker subprocess that owns the
+interpreter and is reached via `multiprocessing` queues?
+
+Context:
+
+- `os.dup2`-based warning capture redirects fd 2 process-wide; concurrent tool calls and
+  FastMCP's stderr logging can interleave into the capture window (see
+  `research/logging.md`, `research/worker-process-architecture.md`).
+- The worker option isolates capture to a single process, contains Maude SIGSEGVs (see
+  `.agents/planning/sigsegv-under-load/issue.md`), and keeps the MCP server's default stderr
+  logging. Cost: `MaudeRuntime` becomes a proxy returning serializable results (SWIG
+  wrappers can't cross processes), which changes `greet` and the current API.
+- Recommendation: worker process for v1 (full isolation, crash containment; avoids
+  throwaway fd-capture/logging work). Alternative: in-process for v1, defer worker to v2.
+
+**Answer**: (pending)
