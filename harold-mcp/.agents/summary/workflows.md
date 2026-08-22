@@ -21,12 +21,22 @@
 ```mermaid
 flowchart TD
     A[harold-mcp console script] --> B[harold_mcp.main.run]
-    B --> C[harold_mcp.server.mcp.run<br>MCP over stdio]
-    C --> D[tool call: greet]
-    D --> E[maude.init already done at import]
-    E --> F[NAT module: parse 2 * 3]
-    F --> G[reduce term]
-    G --> H[return Result string]
+    B --> C[harold_mcp.server.run]
+    C --> D[init_maude<br>once per process, fail-fast]
+    D --> E[mcp.run<br>MCP over stdio]
+    E --> F[tool call: greet]
+    F --> G[get_runtime.get_module NAT<br>RLock-serialized]
+    G --> H[parse 2 * 3 / reduce]
+    H --> I[return Result string]
+```
+
+## Loading a Maude program (planned tool pattern)
+
+```mermaid
+flowchart TD
+    A[program path] --> B[MaudeRuntime.load_program<br>resolve path, last load wins]
+    B --> C[get_module name<br>fresh wrapper, never cached]
+    C --> D[parse / reduce / inspect module]
 ```
 
 ## Documentation workflow
@@ -34,6 +44,10 @@ flowchart TD
 - `make docs-test` — strict MkDocs build (`-s`, fails on warnings).
 - `make docs` — serve docs locally with MkDocs.
 - Docs are generated from docstrings via mkdocstrings; add new modules to `docs/modules.md`.
+
+## Planning workflow
+
+- Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/` with `rough-idea.md` and `idea-honing.md`); design rationale for existing code (e.g. `MaudeRuntime`) is recorded in `issue.md` files there too. Consult these before implementing a planned feature.
 
 ## Packaging and release
 

@@ -21,6 +21,7 @@
 - **Layout**: `src` layout; the importable package is `src/harold_mcp`
 - **Build backend**: hatchling (`[build-system]` in `pyproject.toml`)
 - **Package name on PyPI**: `harold-mcp` (planned distribution via `uvx`)
+- **Subpackages**: `harold_mcp.tools/` exists but is currently an empty placeholder — the planned home of the MCP tools (see `.agents/planning/maude-diagnostics-tool-v1/`)
 
 ## Dependency management
 

@@ -25,9 +25,9 @@ If AGENTS.md doesn't answer your question, open [`.agents/summary/index.md`](.ag
 
 <!-- tags: overview, stack -->
 
-- **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Today it is a hello-world skeleton: a single `greet` tool.
+- **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Today it is a hello-world skeleton: a single `greet` tool, plus a thread-safe `MaudeRuntime` wrapper over the Maude interpreter. An empty `harold_mcp.tools` subpackage is the planned home of the real tools.
 - **Stack**: Python ≥ 3.14, built with **FastMCP** (the MCP framework), the official **MCP SDK** (`mcp`), and the **Maude bindings** (`maude`). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
-- **Lazy Maude init**: importing `harold_mcp.server` does **not** initialize Maude. Init happens lazily via the cached `maude.init()` in `harold_mcp.maude`, and eagerly in `server.run()` before `mcp.run()` so the server fails fast at startup. Importing still constructs the global `mcp = FastMCP(...)` instance.
+- **Lazy Maude init**: importing `harold_mcp.server` does **not** initialize Maude. Init happens lazily via `init_maude()` in `harold_mcp.maude` (lock-guarded, once per process, retried on failure), and eagerly in `server.run()` before `mcp.run()` so the server fails fast at startup. Importing still constructs the global `mcp = FastMCP(...)` instance.
 
 See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.agents/summary/dependencies.md`](.agents/summary/dependencies.md).
 
@@ -40,20 +40,24 @@ graph TB
     R[harold-mcp/] --> S[src/harold_mcp/<br>all application code]
     R --> T[tests/<br>unit + integration]
     R --> D[docs/<br>MkDocs + mkdocstrings]
-    S --> M[main.py<br>server.py<br>resources.py<br>logging.py]
+    R --> A2[.agents/<br>planning + summary]
+    S --> M[main.py<br>server.py<br>maude.py<br>resources.py<br>logging.py]
+    S --> TO[tools/<br>empty placeholder]
     S --> A[assets/brand/<br>Harold_logo.png]
     R --> C[pyproject.toml<br>Makefile<br>tox.ini<br>mkdocs.yml<br>uv.lock]
 ```
 
-- New application code goes in `src/harold_mcp` (src layout, flat modules).
+- New application code goes in `src/harold_mcp` (src layout, flat modules); MCP tool implementations go in `harold_mcp/tools/` and are registered with `@mcp.tool` on the server instance.
 - New tests go in `tests/unit/` (mocked, hermetic) or `tests/integration/` (real Maude interpreter).
+- Feature plans and design rationale live in `.agents/planning/` (see below).
 
 ## Key entry points
 
 <!-- tags: entry-points -->
 
 - Console script **`harold-mcp`** → `harold_mcp.main:run` (`src/harold_mcp/main.py`); starts the MCP server over stdio.
-- **`src/harold_mcp/server.py`** — the heart of the app: `mcp = FastMCP(name="Harold", ...)`, `run()` (initializes Maude, then calls `mcp.run()`), and tool registration via `@mcp.tool`. **Add new MCP tools here.** Current tool: `greet(name: str) -> str`, which reduces `2 * 3` in Maude's `NAT` module (`name` is accepted but unused — placeholder behavior).
+- **`src/harold_mcp/server.py`** — the heart of the app: `mcp = FastMCP(name="Harold", ...)` (with `instructions`, `website_url`, icon), `run()` (initializes Maude via `init_maude()`, then calls `mcp.run()`), and tool registration via `@mcp.tool`. Current tool: `greet(name: str) -> str`, which reduces `2 * 3` in Maude's `NAT` module (`name` is accepted but unused — placeholder behavior).
+- **`src/harold_mcp/maude.py`** — safe access layer over the SWIG `maude` bindings: `init_maude()` (once per process, retried on failure), `MaudeRuntime` (RLock-serialized `get_module` / `load_program` / `load_module`, no wrapper caching), `get_runtime()` singleton, and the `MaudeError` hierarchy. Design rationale: [`.agents/planning/sigsegv-under-load/issue.md`](.agents/planning/sigsegv-under-load/issue.md).
 - **`src/harold_mcp/resources.py`** — packaged brand icon (`HAROLD_ICON`) used by the server.
 - **`src/harold_mcp/logging.py`** — `get_logger` re-export and the `Logging` base class (`_log` property).
 
@@ -63,14 +67,16 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 
 <!-- tags: conventions, gotchas -->
 
-1. **No import-time Maude init**: importing `harold_mcp.server` builds the server instance but does **not** initialize Maude. Init happens lazily (`maude.init()` is `@cache`d in `harold_mcp.maude`) and eagerly in `server.run()` before `mcp.run()`, so the server fails fast at startup if Maude cannot initialize. Keep heavy logic out of import time.
-2. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate all functions and methods. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are effectively `Any` to mypy.
-3. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
-4. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
-5. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
-6. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. Unit tests live in `tests/unit/` (mocked); integration tests live in `tests/integration/` (real Maude interpreter).
-7. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
-8. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
+1. **No import-time Maude init**: importing `harold_mcp.server` builds the server instance but does **not** initialize Maude. Init happens lazily (`init_maude()` in `harold_mcp.maude`, guarded by a lock and `_maude_initialized` flag; failures are retried on the next call) and eagerly in `server.run()` before `mcp.run()`, so the server fails fast at startup if Maude cannot initialize. Keep heavy logic out of import time.
+2. **All Maude access goes through `MaudeRuntime`**: the interpreter is not thread-safe, so `get_module` / `load_program` / `load_module` serialize access on a reentrant lock. Never call `maude.*` functions directly from tool code; use `get_runtime()`.
+3. **Module wrappers are never cached**: loading a program may redefine its modules, so `MaudeRuntime` always fetches fresh wrappers ("last load wins"). Caching wrappers caused a SIGSEGV failure mode documented in `.agents/planning/sigsegv-under-load/issue.md`.
+4. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate all functions and methods. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are effectively `Any` to mypy.
+5. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
+6. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
+7. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
+8. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. Unit tests live in `tests/unit/` (mocked); integration tests live in `tests/integration/` (real Maude interpreter, fixtures in `tests/integration/fixtures/`).
+9. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
+10. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
 
 ## Repo-specific commands
 
@@ -100,6 +106,7 @@ Setup and IDE-configuration details (Zed, opencode, Cline) live in `README.md`; 
 - **`uv.lock`** — committed lockfile; regenerate after dependency changes.
 - **`Makefile`** — the canonical dev command surface (see commands above).
 - **`.agents/summary/`** — committed knowledge base (routing index plus detailed docs). Trust it as an index into the codebase; refresh it after significant changes.
+- **`.agents/planning/`** — committed design/planning docs: `maude-diagnostics-tool-v1/` (first planned MCP tool, `maude_program_diagnostics`) and `sigsegv-under-load/issue.md` (design rationale for `harold_mcp.maude`). Consult before implementing planned features.
 
 ## Custom Instructions
 
