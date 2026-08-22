@@ -196,7 +196,7 @@ True
 ```python
 """Safe access layer over the SWIG-generated `maude` Python bindings."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock, RLock
@@ -269,7 +269,7 @@ class MaudeRuntime:
         self._lock = RLock()
 
     @contextmanager
-    def _maude_locked(self) -> Iterator[None]:
+    def _maude_locked(self) -> Generator[None]:
         """Serialize Maude interpreter access and ensure it is initialized."""
         with self._lock:
             init_maude()

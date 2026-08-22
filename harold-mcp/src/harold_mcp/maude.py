@@ -6,7 +6,7 @@ redefine its modules, so wrappers are always fetched fresh from the
 interpreter (see `.agents/planning/sigsegv-under-load/issue.md`).
 """
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock, RLock
@@ -80,7 +80,7 @@ class MaudeRuntime:
         self._lock = RLock()
 
     @contextmanager
-    def _maude_locked(self) -> Iterator[None]:
+    def _maude_locked(self) -> Generator[None]:
         """Serialize Maude interpreter access and ensure it is initialized."""
         with self._lock:
             init_maude()
