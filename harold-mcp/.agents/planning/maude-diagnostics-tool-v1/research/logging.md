@@ -2,84 +2,129 @@
 
 <!-- Research topic 4 of the PDD project. Spun off from [`maude-bindings.md`](maude-bindings.md):
      the warning capture mechanism redirects fd 2 (stderr), so the server's own logging must
-     not write to fd 2 during the capture window. -->
+     not write to fd 2 during the capture window. Verified against the installed fastmcp 3.4.7
+     source in `.venv/lib/python3.14/site-packages/fastmcp/`. -->
 
 ## Problem
 
 - Maude prints `Warning:` diagnostics to **fd 2 (stderr)** via C++, and our capture plan
   (`os.dup2` around the locked `maude.load` call) reads everything written to fd 2 in that
   window (see [`maude-bindings.md`](maude-bindings.md)).
-- harold-mcp's loggers come from `fastmcp.utilities.logging.get_logger`, which nests under the
-  `FastMCP` logger namespace; FastMCP's default handlers stream to stderr.
-- The MCP spec deprecation registry
-  (<https://modelcontextprotocol.io/specification/2026-07-28/deprecated>, entry for the
-  deprecated *Logging* feature) recommends: *"Log to `stderr` for stdio transports; use
-  OpenTelemetry for observability."* The hard invariant for stdio is **never write to stdout**
-  (stdout is the transport); stderr is the recommended sink.
-- If server logs land on fd 2 while we capture, they would be parsed as fake Maude warnings
-  (or crash the parser). Hence: **log to a file instead of stderr**, with a single stderr line
-  at startup pointing at the log file. This is a deliberate, documented deviation from the
-  spec's "log to stderr" recommendation, justified by the capture requirement; stdout stays
-  clean either way.
+- FastMCP itself logs to stderr by default — e.g.
+  `INFO Starting MCP server 'Harold' with transport 'stdio'` from
+  `fastmcp/server/mixins/transport.py:242`. If such a message lands on fd 2 while we capture,
+  it would be parsed as a fake Maude warning (or crash the parser). Hence: **log to a file
+  instead of stderr**, with a single stderr line at startup pointing at the log file.
+- MCP spec context: the deprecated *Logging* feature's migration path is
+  *"Log to `stderr` for stdio transports"*
+  (<https://modelcontextprotocol.io/specification/2026-07-28/deprecated>). File logging is a
+  deliberate, documented deviation justified by the capture requirement. The hard invariant
+  for stdio is **never write to stdout** (stdout is the transport); that stays clean.
 
-## Plan (v1, decided with the user)
+## How FastMCP logging actually works (verified in fastmcp 3.4.7)
 
-New `setup_logging()` in `src/harold_mcp/logging.py`, called early in `main.run()` /
-`server.run()` (before `init_maude()` and `mcp.run()`):
+- `fastmcp/__init__.py` runs **at import time**:
 
-1. **Log directory**: `~/.harold-mcp/` (created if missing). Overridable via an environment
-   variable (`HAROLD_LOG_DIR`).
-2. **Log file**: one file per server start, name unique across concurrent sessions —
-   `harold-mcp-<UTC timestamp>.log` (a date-only name would collide when several AI coding
-   sessions run the server on the same day).
-3. **Rotation**: on startup, delete old `harold-mcp-*.log` files beyond the newest 10.
-4. **Handler**: attach a `logging.FileHandler` to the `FastMCP` namespace logger (harold-mcp
-   loggers propagate to it). No stream handler, so nothing is written to stderr by logging.
-   Level from `HAROLD_LOG_LEVEL` (default `INFO`).
-5. **Startup notice**: print exactly one line to stderr with the resolved log file path
-   (before `mcp.run()`), so a human debugging the MCP client can find the logs. Everything
-   after that goes to the file.
+  ```python
+  settings = Settings()          # env prefix FASTMCP_
+  if settings.log_enabled:       # default True
+      _configure_logging(level=settings.log_level, enable_rich_tracebacks=...)
+  ```
+
+- `fastmcp.utilities.logging.configure_logging` (source read) then, on the **`fastmcp`**
+  logger: sets `propagate = False`, **removes existing handlers**, and adds two
+  `RichHandler`s writing to **stderr** (`Console(stderr=True)`). It has **no file-handler
+  parameter**.
+- `get_logger(name)` returns `logging.getLogger(f"fastmcp.{name}")` (lowercase `fastmcp.`),
+  so harold-mcp loggers (`get_logger("harold_mcp.server")`) are children of the `fastmcp`
+  logger and inherit its handlers/propagation.
+- Nothing re-configures logging at `run()` time: the `transport.py:242` "Starting MCP server
+  ..." message is just a log record through the `fastmcp` logger. The import-time
+  configuration is the only one.
+
+### Consequences for our plan
+
+1. **Keep using `from fastmcp.utilities.logging import get_logger`** — it is just a namespaced
+   logger factory; the problem is only FastMCP's default *handlers* (stderr), not the factory.
+2. Our `setup_logging()` (called at the top of `run()`, i.e. *after* the import-time
+   configuration has happened) must **replace** the handlers on the `fastmcp` logger:
+   - `logger = logging.getLogger("fastmcp")`
+   - remove existing handlers (the stderr RichHandlers),
+   - set `logger.propagate = False` and the level,
+   - add a `logging.FileHandler` pointing at the session log file (optionally a
+     `RichHandler(console=Console(file=...))` for pretty logs in the file).
+   Because nothing reconfigures logging after import, this sticks for the whole server
+   lifetime — FastMCP's own messages ("Starting MCP server ...", transport errors, etc.)
+   then go to the file too.
+3. `FASTMCP_LOG_ENABLED=false` in the client's env would skip the import-time stderr handlers,
+   but our handler-replacement approach works regardless of that setting (it replaces
+   whatever is there), so we do not depend on it.
+
+## Configuration via pydantic-settings (decided)
+
+- Add **`pydantic-settings`** as a direct dependency (`uv add pydantic-settings`; it is
+  already present in the venv as a transitive dependency of fastmcp, version 2.15.0, so the
+  lockfile change is small).
+- New `Settings(BaseSettings)` in `src/harold_mcp/logging.py` (or a dedicated module), with
+  `env_prefix = "HAROLD_"`:
+
+  | Env var | Field | Default | Meaning |
+  | --- | --- | --- | --- |
+  | `HAROLD_LOG_DIR` | `log_dir: Path` | `~/.harold-mcp` | directory for log files (created if missing) |
+  | `HAROLD_LOG_LEVEL` | `log_level: str` | `INFO` | logging level |
+  | `HAROLD_MAX_LOG_FILES` | `max_log_files: int` | `10` | how many log files to keep |
+
+- The resolved log file path is printed **once to stderr** at startup (before `mcp.run()`);
+  everything after that goes to the file.
+
+## Rotation: TimedRotatingFileHandler vs. per-session file + sweep
+
+The user proposed `logging.handlers.TimedRotatingFileHandler` with `backupCount`
+(<https://docs.python.org/3/library/logging.handlers.html#logging.handlers.TimedRotatingFileHandler>).
+Analysis:
+
+| Aspect | `TimedRotatingFileHandler` + `backupCount` | Per-session file + startup sweep |
+| --- | --- | --- |
+| File count control | ✅ `backupCount` caps backups | ✅ delete beyond newest `HAROLD_MAX_LOG_FILES` at startup |
+| Concurrent sessions (a stated goal) | ⚠️ all sessions append to **one** base file → interleaved logs | ✅ one file per server start (timestamp in name) → clean per-session logs |
+| Rotation race | ⚠️ at interval rollover each process calls `doRollover()`; the loser hits a missing base file → `handleError` → traceback printed to **stderr** — exactly the fd-2 pollution we are eliminating (it would be captured as fake Maude warnings if it fires during a capture window) | ✅ no rotation at runtime; sweep runs once at startup, outside capture windows |
+| Intra-session size bound | ❌ rotates only on time boundaries; a busy session can grow a huge file within one interval | ❌ one file per session grows unboundedly (acceptable for v1; local server, modest volume) |
+
+**Recommendation**: per-session file (`harold-mcp-<UTC timestamp>.log`) + startup sweep.
+Deterministic, race-free, and gives clean per-session logs for concurrent AI-coding sessions.
+`TimedRotatingFileHandler` remains the right tool later if single-process guarantees emerge or
+we add size-based rotation. (Decision to be confirmed in the requirements phase.)
+
+## Startup flow
 
 ```mermaid
 flowchart TD
-    A[server.run / main.run] --> B[setup_logging: create ~/.harold-mcp,<br>rotate to newest 10,<br>attach FileHandler to FastMCP logger]
-    B --> C[stderr: 'Logging to <path>']
-    C --> D[init_maude + mcp.run]
-    D --> E{maude_program_diagnostics call}
-    E --> F[dup2 fd2 -> capture pipe]
-    F --> G[maude.load: Warning lines -> fd 2 -> pipe]
-    G --> H[restore fd2; parse captured text]
-    H --> I[server logs -> log file only]
+    A[import harold_mcp.server] --> B[import fastmcp:<br>fastmcp logger gets stderr RichHandlers]
+    B --> C[main.run / server.run]
+    C --> D[setup_logging:<br>Settings from HAROLD_* env,<br>replace fastmcp logger handlers with FileHandler,<br>rotate old files]
+    D --> E[stderr: 'Logging to <path>']
+    E --> F[init_maude + mcp.run]
+    F --> G{maude_program_diagnostics call}
+    G --> H[dup2 fd2 -> capture pipe]
+    H --> I[maude.load: Warning lines -> fd 2 -> pipe]
+    I --> J[restore fd2; parse captured text]
+    J --> K[all server logs -> log file only]
 ```
-
-## API notes
-
-- `fastmcp.utilities.logging.configure_logging(level, logger=None, enable_rich_tracebacks=..., **rich_kwargs)`
-  installs a `RichHandler` (stderr stream) — it has **no file-handler parameter**. So for the
-  file-logging plan we configure handlers directly (standard `logging`), not via
-  `configure_logging`. (Docs: <https://gofastmcp.com/python-sdk/fastmcp-utilities-logging>.)
-- `get_logger(name)` prefixes names with `FastMCP.` — harold-mcp loggers are therefore children
-  of the `FastMCP` logger; configuring that parent (level + file handler) covers both FastMCP's
-  own output (e.g. "Server running on stdio") and harold-mcp's.
-
-## Env-var configuration options (for requirements/design)
-
-- Simplest v1: plain `os.getenv("HAROLD_LOG_DIR")` / `os.getenv("HAROLD_LOG_LEVEL")`.
-- The user suggested Pydantic settings: `pydantic-settings` is **not** currently a dependency
-  (fastmcp pulls `pydantic` but not `pydantic-settings`); adding it requires a `uv.lock`
-  update. Decide in the requirements phase: new dependency vs. plain `os.getenv` for v1.
 
 ## Residual risks (documented for the design)
 
 - Direct `print()`/`sys.stderr.write` in our own code would still land on fd 2 during the
-  capture window → avoid prints in the runtime/tool layers (ruff already flags `T20` print).
+  capture window → avoid prints in the runtime/tool layers (ruff flags `T20`).
 - Python's `warnings` module defaults to stderr → not used in the capture path.
-- The capture window is tiny and holds `MaudeRuntime`'s lock; with file logging, the only fd-2
-  writer inside the window is Maude itself.
+- Third-party libraries writing to fd 2 inside the window: after the file-logging change, the
+  only expected writer is Maude itself; the window is tiny and holds `MaudeRuntime`'s lock.
 
 ## Sources
 
+- Installed fastmcp 3.4.7 source: `fastmcp/__init__.py`, `fastmcp/utilities/logging.py`,
+  `fastmcp/server/mixins/transport.py` (verified 2026-08-22).
 - MCP spec deprecation registry: <https://modelcontextprotocol.io/specification/2026-07-28/deprecated>
-- FastMCP logging API: <https://gofastmcp.com/python-sdk/fastmcp-utilities-logging>
+- FastMCP logging API docs: <https://gofastmcp.com/python-sdk/fastmcp-utilities-logging>
+- Python logging handlers: <https://docs.python.org/3/library/logging.handlers.html#logging.handlers.TimedRotatingFileHandler>
 - `src/harold_mcp/logging.py` (current re-export of `fastmcp.utilities.logging.get_logger`)
 - [`maude-bindings.md`](maude-bindings.md) (capture mechanism)
