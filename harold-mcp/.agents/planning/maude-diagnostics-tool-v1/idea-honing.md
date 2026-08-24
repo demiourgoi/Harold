@@ -24,6 +24,13 @@ Context:
 (decided 2026-08-22). See `research/worker-process-architecture.md`. The in-process fd-2
 capture + file-logging plan (`research/logging.md`) is superseded.
 
+> **Transport refinement (2026-08-24)**: the hand-rolled `multiprocessing` queue pair is
+> replaced by a `concurrent.futures.ProcessPoolExecutor` (`max_workers=1`, explicit
+> `spawn` context, `initializer=init_maude`), with a thin recovery wrapper for
+> `BrokenProcessPool`/timeout. `max_workers` configurable via env var (default 1).
+> Rationale and verification: `research/process-pool-executor.md`. The worker-process
+> architecture itself is unchanged.
+
 ## Q2. Remove the placeholder `greet` tool
 
 **Question**: The `greet` tool was a placeholder to validate the FastMCP setup. Now that a

@@ -11,7 +11,7 @@ Harold MCP tools:
 
 ### Development Environment setup
 
-Then, install the environment with
+Install the environment with
 
 ```bash
 make install

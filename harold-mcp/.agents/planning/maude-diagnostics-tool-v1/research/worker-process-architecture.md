@@ -2,8 +2,10 @@
 
 > **Status: CHOSEN for v1** (decision in [`../idea-honing.md`](../idea-honing.md), Q1,
 > 2026-08-22). Maude runs in a dedicated long-lived worker subprocess; the MCP server talks
-> to it over `multiprocessing` queues. This supersedes the in-process fd-2 capture and the
-> file-logging plan ([`logging.md`](logging.md)).
+> to it via `concurrent.futures.ProcessPoolExecutor` (**transport refined 2026-08-24**, see
+> [`process-pool-executor.md`](process-pool-executor.md); the hand-rolled queue protocol
+> below is superseded). This supersedes the in-process fd-2 capture and the file-logging
+> plan ([`logging.md`](logging.md)).
 
 <!-- Research topic 5. Emerged from review of [`maude-bindings.md`](maude-bindings.md) and
      [`logging.md`](logging.md): the fd-2 capture is process-global, and the user proposed
@@ -25,9 +27,12 @@
 ## Architecture (v1)
 
 The Maude interpreter lives in a **dedicated long-lived worker process**. The worker is
-single-threaded, imports only `maude` + stdlib, and serves RPC-style requests over
-`multiprocessing` queues. `MaudeRuntime` in the MCP server becomes a thin **proxy** that
-forwards calls and returns serializable results.
+single-threaded and serves one task at a time. Transport: a
+`ProcessPoolExecutor(max_workers=1, mp_context=spawn, initializer=init_maude)` — the pool
+replaces the raw queue pair (see [`process-pool-executor.md`](process-pool-executor.md) for
+the rationale, verification, and the recovery wrapper). `MaudeRuntime` in the MCP server
+becomes a thin **proxy** (pool wrapper) that submits calls and returns serializable
+results.
 
 ```mermaid
 sequenceDiagram
@@ -48,17 +53,21 @@ sequenceDiagram
 
 ### Worker command protocol (v1)
 
-- Request: `{"op": str, ...}` — a small op registry, so future tools can add ops without
-  restructuring.
+> **Superseded transport**: instead of raw queues + sentinels, submit a **module-level
+> function** per op to the `ProcessPoolExecutor`; each call gets its own `Future` (no
+> result demultiplexing needed), and `future.result(timeout=...)` surfaces crashes as
+> `BrokenProcessPool`. See [`process-pool-executor.md`](process-pool-executor.md). The op
+> surface below is unchanged.
+
+- Ops: small module-level functions, so future tools can add ops without restructuring.
 - **v1 ops** (with the `greet` placeholder removed, decision Q2, no term ops are needed):
-  - `load_diagnostics` `{path: str}` → `{ok: bool, diagnostics: [{line: int | null, message: str}, ...]}`
-    or `{error: str}` on worker failure.
-- Response: JSON-able dict; sentinel `None` request = shutdown.
-- Worker startup: `maude.init(advise=False)` once; if it fails, the worker reports the error
-  so the server can fail fast.
+  - `load_diagnostics(path: str) -> {"ok": bool, "diagnostics": [{"line": int | null, "message": str}, ...]}`
+    (exceptions cross the future as errors).
+- Worker startup: `maude.init(advise=False)` once via the executor `initializer`; if it
+  fails, the pool warm-up ping in the lifespan surfaces it so the server can fail fast.
 - All Maude access happens in the worker's single thread → no interpreter locking needed;
-  the queue provides serialization ("last load wins" semantics preserved, as in the current
-  `load_program`).
+  `max_workers=1` provides serialization ("last load wins" semantics preserved, as in the
+  current `load_program`).
 
 ### Warning capture in the worker
 
@@ -73,16 +82,19 @@ Same fd-2 trick as [`maude-bindings.md`](maude-bindings.md), but scoped to the w
 
 ### Lifecycle
 
-- Proxy starts the worker in `server.run()` **before** `mcp.run()` — this replaces the
-  current `init_maude()` fail-fast call: worker startup reports Maude-init failure, so the
-  server still fails fast at startup.
-- Shutdown: sentinel + `join()` on server exit (or FastMCP lifespan).
-- Crash detection: `result_queue.get(timeout=...)` failing / `proc.is_alive()` false → the
-  current call returns an error ("Maude worker crashed"), and the proxy restarts the worker
-  for subsequent calls.
+- The pool wrapper is created in `server.run()` **before** `mcp.run()` (via the FastMCP
+  lifespan startup) — this replaces the current `init_maude()` fail-fast call: a warm-up
+  ping through the pool reports Maude-init failure, so the server still fails fast at
+  startup.
+- Shutdown: `executor.shutdown(...)` in the lifespan exit (or FastMCP lifespan).
+- Crash detection: `future.result(timeout=...)` raising `BrokenProcessPool` (worker died)
+  or `TimeoutError` (worker stuck) → the wrapper returns an error for the current call,
+  then recreates the pool for subsequent calls (see
+  [`process-pool-executor.md`](process-pool-executor.md)).
 - Start method: **not `fork`** (the parent is threaded — fork+threads is hazardous).
-  Use explicit `multiprocessing.get_context("spawn")` (portable; macOS default) or
-  `forkserver` (Python 3.14's Linux default).
+  Use explicit `multiprocessing.get_context("spawn")` (chosen 2026-08-24; portable, and
+  `forkserver` — Python 3.14's Linux default — needs an `AF_UNIX` socket and failed in the
+  agent sandbox; see [`process-pool-executor.md`](process-pool-executor.md)).
 
 ### Critical invariants
 

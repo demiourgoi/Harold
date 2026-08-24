@@ -37,12 +37,13 @@
 - Today: `init_maude()` (once per process, `advise=False`) + `MaudeRuntime` serializing
   `get_module`/`load_program`/`load_module` on an `RLock` ("last load wins", no wrapper caching —
   see `.agents/planning/sigsegv-under-load/issue.md`).
-- **v1 rework** (decision Q1): the interpreter moves into a dedicated worker process;
-  `MaudeRuntime` becomes a **proxy** that forwards ops over `multiprocessing` queues and
-  returns serializable results (SWIG wrappers cannot cross processes). The wrapper-returning
-  methods (`get_module`, `load_module`) disappear; v1 needs only
-  `load_diagnostics(path) -> DiagnosticsResult` plus worker lifecycle management
-  (see [`worker-process-architecture.md`](worker-process-architecture.md)).
+- **v1 rework** (decision Q1): the interpreter moves into a dedicated worker process
+  driven by a `ProcessPoolExecutor` (transport refined 2026-08-24, see
+  [`process-pool-executor.md`](process-pool-executor.md)); `MaudeRuntime` becomes a **proxy**
+  that submits calls to the pool and returns serializable results (SWIG wrappers cannot
+  cross processes). The wrapper-returning methods (`get_module`, `load_module`) disappear;
+  v1 needs only `load_diagnostics(path) -> DiagnosticsResult` plus worker lifecycle
+  management.
 - `get_runtime()` — process-wide proxy singleton (worker handle + queues).
 - Error hierarchy adapted: `MaudeError(RuntimeError)` base; `MaudeInitError` (worker failed to
   initialize Maude); `MaudeLoadError(.program_path)` (hard load failure); plus a
@@ -102,7 +103,7 @@
 graph TD
     M[harold_mcp.server<br>mcp instance + registration] --> T[harold_mcp.tools.diagnostics<br>maude_program_diagnostics]
     T --> R[harold_mcp.maude<br>MaudeRuntime proxy]
-    R -->|multiprocessing queues| W[Maude worker process<br>maude bindings: load / init]
+    R -->|ProcessPoolExecutor spawn, max_workers=1| W[Maude worker process<br>maude bindings: load / init]
     T --> P[pydantic models<br>output schema]
 ```
 
