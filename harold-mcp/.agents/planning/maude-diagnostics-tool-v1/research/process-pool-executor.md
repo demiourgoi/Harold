@@ -143,17 +143,17 @@ A thin class owning the executor, replacing the queue protocol:
 
 ```mermaid
 sequenceDiagram
-    participant T as MCP tool thread (FastMCP)
-    participant P as Pool wrapper (main process, get_runtime)
-    participant E as ProcessPoolExecutor (spawn, max_workers=1)
-    participant W as Maude worker process
-    T->>P: diagnostics(path)
-    P->>E: submit(load_diagnostics, path)
-    E->>W: run task (serialized)
-    W->>W: init_maude once (initializer); fd-2 capture around maude.load
+    participant T as MCP tool thread
+    participant P as Pool wrapper, get_runtime
+    participant E as ProcessPoolExecutor, spawn, max_workers=1
+    participant W as Maude worker
+    T->>P: diagnostics path
+    P->>E: submit load_diagnostics task
+    E->>W: run task, serialized
+    W->>W: init_maude once, fd-2 capture around maude.load
     W-->>E: result dict
-    E-->>P: future.result(timeout)
-    P-->>T: MaudeProgramDiagnosticsResult (or MaudeError on crash/timeout)
+    E-->>P: future result with timeout
+    P-->>T: result or MaudeError on crash/timeout
 ```
 
 ## Sources
