@@ -39,3 +39,110 @@ real tool (`maude_program_diagnostics`) is coming, do we remove `greet`?
 **Answer**: Confirmed — remove `greet` in v1 (decided 2026-08-22). `maude_program_diagnostics`
 becomes the first real tool; the v1 worker protocol then only needs a `load_diagnostics` op
 (no term-reduction op to migrate `greet`).
+
+## Q3. Confirm the requirements decisions made during research feedback
+
+**Question**: The research notes record several requirements-level decisions that were made
+in conversation during the research phase (2026-08-22 / 2026-08-24) but never written down
+here. Before I record them as official requirements, please confirm they are accurate, and
+flag anything to change:
+
+1. **`success` semantics** (`research/tool-schema.md`): `success=True` only when there are
+   NO warnings and NO errors. A recoverable warning (Maude still loads the file) makes
+   `success=False`, because the tool's purpose is to point out anything the agent should fix.
+2. **LSP-style range** (`research/tool-schema.md`): diagnostics carry a `range` with
+   `start`/`end` positions (1-based line, `column=None`) instead of a bare line number —
+   familiar to LLMs trained on LSP diagnostics, future-proofed for richer sources.
+3. **No module list in the result** (`research/tool-schema.md`): detection relies solely on
+   the `maude.load` return value + captured warnings; module-set heuristics are rejected.
+4. **Dependency injection** (`research/existing-code.md`): the tool receives the runtime via
+   `Depends(get_runtime)`, keeping the MCP schema at `{path: str}`.
+5. **Worker crash/timeout → tool error** (`research/process-pool-executor.md`): failures
+   raise, so FastMCP reports them as `isError` tool results (the "HTTP 500" analogue),
+   rather than encoding failure in the result model.
+6. **`readOnlyHint=True`** (`research/tool-schema.md`, currently only a "consider"): the
+   tool declares a read-only safety profile even though it loads the program into the
+   server-side interpreter. Needs explicit confirmation.
+
+**Answer**: All six items confirmed as-is (2026-08-24). Additionally, the worker-pool
+configuration is settled via **`pydantic-settings`** (new direct dependency; already
+present in the venv as a transitive dependency of fastmcp — see `research/logging.md`):
+
+- `HAROLD_MAUDE_WORKERS` — number of Maude worker processes; default `1`.
+- `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` — timeout in seconds waiting for each future result;
+  default `60`.
+
+Note: the file-logging rework stays **out of v1** (superseded by the worker process);
+pydantic-settings enters v1 for this worker configuration instead.
+
+## Q4. Result convenience: per-severity summary counts
+
+**Question**: Should the result model include a convenience summary of the diagnostics
+(e.g. counts per severity) alongside the `diagnostics` list, or is the list enough?
+
+Context:
+
+- The current sketch is `MaudeProgramDiagnosticsResult {path, success, diagnostics[]}`.
+- `success` already gives the LLM a one-bit verdict, and severities are a fixed set
+  (`warning` | `error`), so counts are derivable from the list — but computing them costs
+  the LLM tokens/effort on every call.
+- Options: (a) list only; (b) add a small `summary` field (e.g. `{"warning": n, "error": n}`);
+  (c) also include a short human-readable summary line.
+
+**Answer**: Option (b) — add a small `summary` field with per-severity counts, e.g.
+`{"warning": n, "error": n}` (2026-08-24). Exact field name/shape to be fixed in the design
+phase.
+
+## Q5. Advisory channel
+
+**Question**: Maude's `Advisory:` messages (e.g. `Advisory: redefining module X.`) are
+currently suppressed by `maude.init(advise=False)` in `init_maude()`. Should the diagnostics
+tool keep them suppressed, or surface them as diagnostics too?
+
+Context:
+
+- Advisories are informational, not errors (e.g. module redefinitions). Research
+  (`research/maude-bindings.md` §1) shows `advise` gates advisories only — warnings always
+  print.
+- Surfacing them would require a third severity (e.g. `info`/`advisory`) in the model, a
+  bigger schema change (`severity` is currently `Literal["warning", "error"]`).
+- The v1 purpose is to point out things the agent should fix; advisories mostly aren't
+  fix-worthy.
+
+**Answer**: Keep advisories suppressed (2026-08-24). Advisories notify things like a module
+being redefined — definitively not errors. No `info`/`advisory` severity in v1;
+`maude.init(advise=False)` stays as-is.
+
+## Q6. Missing/unreadable file: tool error or error diagnostic?
+
+**Question**: If the file at `path` does not exist or cannot be read, how should the tool
+respond?
+
+Context:
+
+- `maude.load(path)` returns `False` both for a missing/unreadable file and for an
+  unrecoverable parse failure — the return value alone cannot distinguish them
+  (`research/maude-bindings.md` §2).
+- A missing file is arguably not a "diagnosis of a Maude program" — the agent likely
+  passed a wrong path; an unrecoverable parse failure IS a diagnosis of the file's contents.
+- Options:
+  - (a) pre-check existence/readability in the tool; missing/unreadable → raise → tool error
+    (`isError`); unrecoverable parse failure → error-severity diagnostic in the result
+    (`success=False`).
+  - (b) treat both alike: synthesize one error diagnostic ("failed to load"), `success=False`,
+    no raise.
+- (Reference: `result.path` echoes the input path as given.)
+
+**Answer**: *(pending)*
+
+## Reminders for final testing (from the research phase)
+
+Two quick verification items deferred from research, to be folded into the final test plan
+(added 2026-08-24):
+
+1. **Warning-format catalog**: feed additional adversarial fixtures through the worker
+   capture (module redefinitions → advisories, multi-line messages, `<standard input>`
+   attribution) to harden the warning parser. Formats observed so far are in
+   `research/maude-bindings.md` §4.
+2. **FastMCP lifespan + `mcp.run()` interaction**: verify that lifespan startup/shutdown
+   actually fires on the stdio transport before relying on it for pool warm-up/teardown.
