@@ -133,7 +133,54 @@ Context:
     no raise.
 - (Reference: `result.path` echoes the input path as given.)
 
-**Answer**: *(pending)*
+**Answer**: Option (a) (2026-08-24). The tool pre-checks that the path exists and is a
+readable regular file (e.g. `Path.is_file()`); missing/unreadable → raise → tool error
+(`isError`). Unrecoverable parse failures from `maude.load` → synthesized error-severity
+diagnostic, `success=False`. `result.path` echoes the input path as given.
+
+## Q7. Position model: nullable line for the synthesized error
+
+**Question**: The synthesized error diagnostic for an unrecoverable load failure has no line
+number (Maude's hard-failure return carries none). How should the position model represent
+that?
+
+Context:
+
+- Sketch: `MaudePosition {line: int, column: int | None}` and
+  `MaudeRange {start: MaudePosition, end: MaudePosition | None}`.
+- Warnings always carry a line (parsed from `Warning: ..., line N:`), but the synthesized
+  error has none.
+- Options:
+  - (a) make `line` nullable (`int | None`) — null only for the synthesized error;
+  - (b) keep `line: int` required and drop the synthesized diagnostic — the failure would be
+    visible only via `success=False` (and a summary count), which reads inconsistently;
+  - (c) something else.
+
+**Answer**: Yes — `MaudeDiagnostic.range: MaudeRange | None` (2026-08-24). `None` means the
+problem affects the whole file (e.g. completely unparseable/binary input). This keeps
+`MaudePosition.line: int` a strict invariant — every positioned diagnostic has a real
+1-based line — and pushes the "no location" case up to the range level, cleaner than a
+nullable line. In practice only the synthesized load-failure error uses `range=None`;
+parsed warnings always carry a line. Missing files raise per Q6, so they never reach the
+model.
+
+## Q8. Success criteria for v1
+
+**Question**: What counts as "done" for v1? Proposed acceptance criteria (confirm or
+amend):
+
+1. `maude_program_diagnostics` is callable over MCP with schema `{path: str}` and returns
+   the structured result model.
+2. The four fixture outcomes are correct end-to-end: clean → `success=True`, no diagnostics;
+   recoverable → `success=False` + warning(s); non-recoverable → `success=False` + warnings
+   + synthesized error; no-new-module → `success=True`.
+3. Missing/unreadable file → tool error (`isError`).
+4. Worker crash (simulated) → the current call errors, the next call succeeds on a
+   recreated worker.
+5. Settings honored: `HAROLD_MAUDE_WORKERS`, `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`.
+6. CI green (`make release`), docs updated (`docs/modules.md`), unit + integration tests.
+
+**Answer**: Confirmed — that is the definition of done for v1 (2026-08-24).
 
 ## Reminders for final testing (from the research phase)
 
