@@ -7,9 +7,7 @@ Harold MCP tools:
 - **Github repository**: <https://github.com/demiourgoi/harold/>
 - **Documentation** <https://demiourgoi.github.io>
 
-## Getting started with your project
-
-### Development Environment setup
+## Development environment setup
 
 Install the environment with
 
@@ -21,11 +19,16 @@ make check test
 
 # run all CI checks before pushing a code change
 make release
+
+# run the MCP server over stdio transport
+make run
+# or directly:
+# uv run harold-mcp
 ```
 
 This will also generate your `uv.lock` file.
 
-#### Recommendations
+### Recommendations
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
 - Setup the following agent skills:
@@ -47,15 +50,9 @@ description: Transforms a rough idea into a detailed design document, implementa
 ---
 ```
 
-### Running the server
+## How to run `harold-mcp`
 
-For development, after `make install` the MCP server runs over stdio with:
-
-```bash
-make run
-# or directly:
-# uv run harold-mcp
-```
+An installer is still to be developed. For now you need to download the code and run `make install`. 
 
 Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE, using the command full path. 
 For example, for Zed add the following to `~/.config/zed/settings.json`:
