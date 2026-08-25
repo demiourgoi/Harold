@@ -1,7 +1,13 @@
+"""Harold MCP server: the FastMCP instance and its lifecycle.
+
+Importing this module builds the `mcp` instance but does **not** initialize
+Maude: the interpreter lives in a worker process managed by the server
+lifespan (see `harold_mcp.maude`).
+"""
+
 from fastmcp import FastMCP
 
 from harold_mcp.logging import get_logger
-from harold_mcp.maude import get_runtime, init_maude
 from harold_mcp.resources import HAROLD_ICON
 
 _LOG = get_logger(__name__)
@@ -21,19 +27,6 @@ Use Harold's tools whenever working with Maude code; consult each tool's descrip
 
 
 def run() -> None:
+    """Run the MCP server over stdio."""
     _LOG.info("Initializing Harold...")
-    init_maude()
-    _LOG.info("Success initializing Harold!")
     mcp.run()
-
-
-@mcp.tool
-def greet(name: str) -> str:
-    """Reduce the term `2 * 3` in Maude's built-in NAT module and return the result.
-
-    Hello-world tool; the `name` argument is currently unused.
-    """
-    m = get_runtime().get_module("NAT")
-    t = m.parseTerm("2 * 3")
-    t.reduce()
-    return f"Result = {t}"

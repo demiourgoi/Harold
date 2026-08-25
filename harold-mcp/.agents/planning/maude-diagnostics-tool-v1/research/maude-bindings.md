@@ -28,7 +28,7 @@ globalAdvisoryFlag = advise;
 
 - `globalAdvisoryFlag` gates **advisories only** (`Advisory: redefining module X.`).
 - **`Warning:` messages are NOT gated by it.** Empirically, harold-mcp's `init_maude()`
-  (which calls `maude.init(advise=False)`) still printed all 14 warnings when loading the
+  (which calls `maude.init(advise=False)`) still printed all 12 warnings when loading the
   broken fixture. So the docstring "Whether debug messages should be printed" is misleading:
   it's the *advisory* flag.
 
@@ -80,8 +80,14 @@ Warning: <standard input>, line 1: skipped unexpected token: HELLO-WORLD
 Warning: "broken-non-recoverable.maude", line 2: skipped unexpected token: pr
 Warning: "broken-non-recoverable.maude", line 2: skipped unexpected token: NAT
 Warning: "broken-non-recoverable.maude", line 3: skipped unexpected token: f
-... (14 warnings total)
+... (12 warnings total)
 ```
+
+> **Count correction (2026-08-24)**: through the Python bindings the broken fixture yields
+> **12** warnings deterministically (re-verified with both relative and absolute paths,
+> fresh and reused interpreters). The two extra `syntax error` lines in the REPL
+> transcript (`rough-idea.md`) are emitted only by the interactive parser and do not
+> appear via `maude.load`.
 
 **Conclusion**: `maude.load`'s bool is NOT a "well-formed" indicator. Failure must be
 detected by combining **only**:
@@ -155,6 +161,13 @@ Warning: <standard input>, line <N>: <message>
 Messages observed: `skipped unexpected token: <tok>`, `syntax error`,
 `missing is keyword.`. A regex like
 `Warning:\s+(\S[^:]*),\s+line\s+(\d+)\s*(?:\([^)]*\))?:\s*(.*)` handles the variants.
+
+**ANSI colorization (found 2026-08-24)**: Maude decides at **init time** whether stderr is a
+TTY and then colorizes its output — so captures made by redirecting fd 2 *after* init still
+contain CSI escape sequences (`\x1b[31mWarning: \x1b[0m...`, and inline keyword coloring
+like `missing \x1b[35mis\x1b[0m keyword.`). The parser strips ANSI CSI escapes before
+matching. (The research-phase transcripts were plain because stderr was redirected to a file
+from process start.)
 
 ## 5. Key findings summary
 

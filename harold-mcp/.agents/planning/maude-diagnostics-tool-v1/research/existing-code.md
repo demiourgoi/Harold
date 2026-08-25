@@ -83,7 +83,7 @@
   `tests/integration/fixtures/`:
   - `hello.maude` / `hello2.maude` — clean programs (module `HELLO-WORLD`).
   - `broken-recoverable.maude` — warning (`missing is keyword.`) but still loads/works.
-  - `broken-non-recoverable.maude` — 14 warnings, module NOT defined.
+  - `broken-non-recoverable.maude` — 12 warnings, module NOT defined.
   - `no_new_module.maude` — no modules defined, only commands; must still report `success`.
   Integration tests assert all four outcomes through the worker protocol.
 - `make test` runs pytest with coverage (`--cov`, branch coverage enabled).

@@ -644,7 +644,7 @@ FastMCP's `Depends` default does not prevent direct calls — unit tests call
 
 | File | Covers |
 | --- | --- |
-| `tests/integration/test_diagnostics_integration.py` | Through a real `MaudeExecutor` + real interpreter, all four fixtures: `hello.maude`/`hello2.maude` → `success=True`, no diagnostics; `broken-recoverable.maude` → `success=False`, warning `missing is keyword.` at line 2; `broken-non-recoverable.maude` → `success=False`, 14 warnings + synthesized error; `no_new_module.maude` → `success=True` (no module-set heuristics) |
+| `tests/integration/test_diagnostics_integration.py` | Through a real `MaudeExecutor` + real interpreter, all four fixtures: `hello.maude`/`hello2.maude` → `success=True`, no diagnostics; `broken-recoverable.maude` → `success=False`, warning `missing is keyword.` at line 2; `broken-non-recoverable.maude` → `success=False`, 12 warnings + synthesized error; `no_new_module.maude` → `success=True` (no module-set heuristics) |
 | | Crash resilience: `executor.submit(worker._crash)` → `BrokenProcessPool`; the next `executor.diagnostics(...)` succeeds on the recreated worker (R18.4) |
 | | Settings honored: an executor with `maude_workers=2` runs tasks on two pids; timeout mapping exercised via a short timeout against a slow task (or left to unit tests if no slow fixture exists) |
 

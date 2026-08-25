@@ -21,13 +21,23 @@ before committing (auto-fix fails CI).
 
 ## Checklist
 
-- [ ] Step 1: Reorganize into packages, add `Settings` + errors, remove `greet`
-- [ ] Step 2: Worker functions: capture + warning parsing (`maude/worker.py`)
+- [x] Step 1: Reorganize into packages, add `Settings` + errors, remove `greet`
+- [x] Step 2: Worker functions: capture + warning parsing (`maude/worker.py`)
 - [ ] Step 3: `MaudeExecutor` wrapper with recovery (`maude/executor.py`)
 - [ ] Step 4: Result models + the `maude_program_diagnostics` tool, registered on `mcp`
 - [ ] Step 5: Lifespan warm-up/shutdown and fail-fast startup
 - [ ] Step 6: End-to-end integration: fixtures, crash resilience, settings, MCP smoke test
 - [ ] Step 7: README, docs, knowledge base, and the two final-testing reminders
+
+> **Pending**: run `uv add pydantic` (pydantic is now a direct dependency — `pyproject.toml`
+> is already edited) so `uv.lock` is in sync and `make check` passes end-to-end.
+
+> **Step 2 findings (2026-08-24)**: (1) Maude colorizes stderr with ANSI CSI escapes when it
+> detects a TTY at init time — the parser strips them (documented in
+> `research/maude-bindings.md`); (2) `broken-non-recoverable.maude` yields **12** warnings
+> through the Python bindings, not 14 (the `syntax error` lines are REPL-only); research
+> notes corrected. Integration test file renamed to `test_maude_worker_integration.py`
+> (pytest basename collision with the unit test).
 
 ---
 
@@ -102,13 +112,16 @@ Tests (write first):
 - `tests/unit/test_maude_worker.py` (pure, no `maude` import needed): `_parse_warnings`
   against synthetic stderr text — the three formats from design §4.2 (`"file"`, `(context)`,
   `<standard input>`), multiple warnings, unmatched lines ignored, empty text → `[]`.
-- `tests/integration/test_maude_worker.py` (real interpreter): drive `load_diagnostics`
-  through a bare `ProcessPoolExecutor(max_workers=1, mp_context=spawn,
+- `tests/integration/test_maude_worker_integration.py` (real interpreter; distinct
+  basename to avoid pytest's module-name collision with the unit test): drive
+  `load_diagnostics` through a bare `ProcessPoolExecutor(max_workers=1, mp_context=spawn,
   initializer=init_maude)` — this also validates the spawn/pickling story early. Assert:
   `hello.maude` → `ok=True`, no warnings; `broken-recoverable.maude` → `ok=True`, one
   warning with `line=2` and message `missing is keyword.`; `broken-non-recoverable.maude` →
-  `ok=True` (empirical result — see `research/maude-bindings.md`) with 14 warnings;
-  `no_new_module.maude` → `ok=True`, no warnings. Use paths relative to the test file.
+  `ok=True` (empirical result — see `research/maude-bindings.md`) with exactly 12
+  warnings (the two `syntax error` lines in the REPL transcript are interactive-parser-only
+  and do not appear through the Python bindings); `no_new_module.maude` → `ok=True`, no
+  warnings. Use paths relative to the test file.
 
 Integration with previous work: lives in the `maude/` package from Step 1; uses the repo
 fixtures that already exist.
