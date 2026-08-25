@@ -17,9 +17,18 @@ stderr while still returning success. A tool that only reported "load failed or 
 miss exactly the recoverable issues an AI coding agent needs to fix. Therefore the tool must
 capture and surface those warnings.
 
-Because feeding arbitrary, LLM-generated files to the Maude interpreter is adversarial (the
-`maude` bindings have a documented SIGSEGV history — `.agents/planning/sigsegv-under-load/issue.md`),
-the interpreter runs in a **dedicated worker process**, isolated from the MCP server.
+The Maude interpreter therefore runs in a **dedicated worker process**, for two reasons:
+
+1. **Stderr isolation / capture**: the `maude` package writes its `Warning:` diagnostics to
+   **fd 2 (stderr) directly from C++**, so Python-level redirection (`contextlib`, `capsys`)
+   cannot capture them. Inside the worker we redirect its stderr to a temp file around each
+   `maude.load` call (the only viable capture mechanism; §4.2), while the parent FastMCP
+   process keeps its own stderr available for logging — as recommended for stdio MCP servers
+   (stdout stays reserved for the transport).
+2. **Crash containment**: feeding arbitrary, LLM-generated files to the interpreter is
+   adversarial — the `maude` bindings have a documented SIGSEGV history
+   (`.agents/planning/sigsegv-under-load/issue.md`). A worker death kills only the worker;
+   the server survives and replaces it.
 
 ### Scope
 
@@ -39,12 +48,13 @@ Out of scope (explicitly deferred):
 
 ## 2. Detailed Requirements
 
-Consolidated from `../idea-honing.md` (Q1–Q8) and `../rough-idea.md`.
+Consolidated from `../idea-honing.md` (Q1–Q8, design-review amendments) and
+`../rough-idea.md`.
 
 | ID | Requirement |
 | --- | --- |
-| R1 | The tool is a function `maude_program_diagnostics` in `src/harold_mcp/tools/diagnostics.py`, registered with `@mcp.tool` on the `mcp` instance from `src/harold_mcp/server.py`. The docstring is the MCP tool description (FastMCP convention). |
-| R2 | Input: a single `path: str` parameter (typically a `.maude` file; the extension is **not** validated). The MCP input schema must be exactly `{path: str}` — the runtime is injected, not a schema parameter (R7). |
+| R1 | The tool is a function `maude_program_diagnostics` in `src/harold_mcp/server/tools/diagnostics.py` (path amended during design review — see the amendments in `../idea-honing.md`), registered with `@mcp.tool` on the `mcp` instance. The docstring is the MCP tool description (FastMCP convention). |
+| R2 | Input: a single `path: str` parameter (typically a `.maude` file; the extension is **not** validated). The MCP input schema must be exactly `{path: str}` — the executor is injected, not a schema parameter (R7). |
 | R3 | Behavior: load the file into the Maude interpreter and report all problems. Tri-state outcome: (a) clean load — no diagnostics; (b) load with recoverable warnings — warnings reported, `success=False`; (c) unrecoverable load failure — warnings (if any) plus one synthesized `error` diagnostic, `success=False`. |
 | R4 | `success=True` **iff there are no warnings and no errors**. A recoverable warning makes `success=False` (the tool's purpose is to point out anything the agent should fix). |
 | R5 | Missing/unreadable file → **tool error** (`isError`), raised before touching the interpreter. Unrecoverable *parse* failures are diagnostics (R3c), not errors. |
@@ -61,14 +71,14 @@ Consolidated from `../idea-honing.md` (Q1–Q8) and `../rough-idea.md`.
 | R16 | No module-set detection: well-formedness is judged solely by the `maude.load` return value + captured warnings. A program may legitimately define no modules. |
 | R17 | The main process never imports or calls `maude.*`; only the worker process touches the interpreter. |
 | R18 | Success criteria (acceptance, Q8): (1) tool callable over MCP with schema `{path: str}`, structured result; (2) four fixture outcomes correct end-to-end (clean / recoverable / non-recoverable / no-new-module); (3) missing/unreadable file → tool error; (4) simulated worker crash → current call errors, next call succeeds; (5) both settings honored; (6) CI green (`make release`), docs updated, unit + integration tests. |
-| R19 | Repo conventions: Python ≥ 3.14, mypy strict (`disallow_untyped_defs`), ruff (auto-fix fails CI), `uv` for deps, new modules documented in `docs/modules.md`, knowledge base refreshed after implementation. |
+| R19 | Repo conventions: Python ≥ 3.14, mypy strict (`disallow_untyped_defs`), ruff (auto-fix fails CI), `uv` for deps, new modules documented in `docs/modules.md`, README documents the env vars, knowledge base refreshed after implementation. |
 
 ## 3. Architecture Overview
 
 Two processes:
 
 - **MCP server process** (FastMCP, threaded): the tool, the result models, and a thin
-  `MaudePool` client wrapper around a `ProcessPoolExecutor`. Never imports the `maude`
+  `MaudeExecutor` client wrapper around a `ProcessPoolExecutor`. Never imports the `maude`
   bindings.
 - **Maude worker process** (spawned, single-threaded): owns the interpreter, performs the
   stderr capture, parses warnings. Executed via `ProcessPoolExecutor`; `max_workers=1` by
@@ -78,10 +88,10 @@ Two processes:
 
 ```mermaid
 graph TB
-    A[FastMCP server process] --> B[tools/diagnostics.py<br>maude_program_diagnostics tool]
-    B --> C[maude.py<br>MaudePool client + Settings]
+    A[FastMCP server process] --> B[server/tools/diagnostics.py<br>maude_program_diagnostics tool]
+    B --> C[maude/executor.py<br>MaudeExecutor client + Settings]
     B --> D[pydantic result models]
-    C -->|ProcessPoolExecutor spawn| E[Maude worker process<br>maude_worker.py]
+    C -->|ProcessPoolExecutor spawn| E[Maude worker process<br>maude/worker.py]
     E --> F[maude SWIG bindings<br>C++ interpreter]
     C --> G[pydantic-settings<br>HAROLD_MAUDE_WORKERS<br>HAROLD_MAUDE_WORKER_TIMEOUT_SECS]
 ```
@@ -93,7 +103,7 @@ sequenceDiagram
     participant C as MCP client
     participant F as FastMCP server
     participant T as diagnostics tool
-    participant P as MaudePool
+    participant P as MaudeExecutor
     participant E as ProcessPoolExecutor
     participant W as Maude worker
     C->>F: call maude_program_diagnostics path
@@ -118,7 +128,7 @@ sequenceDiagram
 flowchart TD
     A[main.py run] --> B[server.run]
     B --> C[mcp.run enters lifespan]
-    C --> D[MaudePool.start]
+    C --> D[MaudeExecutor.start]
     D --> E[create executor with spawn context]
     E --> F[warm-up pings through all workers]
     F --> G{all pings ok}
@@ -131,12 +141,12 @@ flowchart TD
 ### 3.3 Crash recovery
 
 A worker death breaks the whole executor (`BrokenProcessPool`); there is no self-healing.
-`MaudePool` recreates the executor so the next call works.
+`MaudeExecutor` recreates the executor so the next call works.
 
 ```mermaid
 sequenceDiagram
     participant T as tool call thread
-    participant P as MaudePool
+    participant P as MaudeExecutor
     participant E as executor generation 1
     participant E2 as executor generation 2
     T->>P: diagnostics path
@@ -153,25 +163,52 @@ sequenceDiagram
 
 ## 4. Components and Interfaces
 
+### 4.0 Package layout
+
+The design reorganizes the flat modules into two packages (decided in the design review —
+see `../idea-honing.md`, "Design review amendments"):
+
+```
+src/harold_mcp/
+    main.py                  # console-script entry point (unchanged behavior)
+    logging.py               # get_logger re-export (unchanged)
+    resources.py             # HAROLD_ICON (unchanged)
+    server/
+        __init__.py          # public API: mcp, run + registers the tools
+        server.py            # FastMCP instance, lifespan, run()   (moved from server.py)
+        tools/
+            __init__.py      # re-exports the tool functions
+            diagnostics.py   # pydantic result models + maude_program_diagnostics
+    maude/
+        __init__.py          # re-exports errors, Settings, MaudeExecutor, get_maude_executor
+        executor.py          # client-side: errors, Settings, MaudeExecutor   (from maude.py)
+        worker.py            # worker-side: init_maude, ping, load_diagnostics, _crash
+```
+
 File changes:
 
 | File | Change |
 | --- | --- |
-| `src/harold_mcp/maude.py` | Reworked: errors, `Settings`, `MaudePool` client, `get_runtime()`. No `maude` import. |
-| `src/harold_mcp/maude_worker.py` | **New**: interpreter-side functions run by the worker process. |
-| `src/harold_mcp/tools/diagnostics.py` | **New**: pydantic result models + the tool. First occupant of the `tools` package. |
-| `src/harold_mcp/server.py` | Remove `greet`; add `lifespan`; `run()` delegates init to the lifespan. |
-| `src/harold_mcp/main.py` | Import `harold_mcp.tools.diagnostics` (registers the tool). |
-| `pyproject.toml` | Add `pydantic-settings` (then `uv lock`; commit `uv.lock`). |
-| `docs/modules.md` | Add `::: harold_mcp.tools.diagnostics` and `::: harold_mcp.maude_worker`. |
-| `tests/unit/test_maude.py` | Replaced by `test_maude_pool.py` (wrapper) + `test_maude_worker.py` (parser). |
-| `tests/integration/test_maude_runtime.py` | Replaced by integration tests for the pool + tool. |
+| `src/harold_mcp/server/__init__.py` | **New**: re-exports `mcp`/`run`; imports `tools` (registers the tool) |
+| `src/harold_mcp/server/server.py` | Moved from `src/harold_mcp/server.py`; `greet` removed; `lifespan` added |
+| `src/harold_mcp/server/tools/__init__.py` | **New**: re-exports the tool functions |
+| `src/harold_mcp/server/tools/diagnostics.py` | **New**: pydantic result models + the tool |
+| `src/harold_mcp/maude/__init__.py` | **New**: re-exports the public Maude-subsystem API |
+| `src/harold_mcp/maude/executor.py` | Moved/reworked from `maude.py`: errors, `Settings`, `MaudeExecutor` |
+| `src/harold_mcp/maude/worker.py` | **New**: interpreter-side functions run by the worker process |
+| `src/harold_mcp/maude.py`, `src/harold_mcp/server.py` | Deleted (split/moved into the packages above) |
+| `src/harold_mcp/main.py` | Effectively unchanged — importing `harold_mcp.server` now registers the tools |
+| `pyproject.toml` | Add `pydantic-settings` (then `uv lock`; commit `uv.lock`) |
+| `README.md` | Add an env-var configuration subsection under "How to run harold-mcp" (see §4.5) |
+| `docs/modules.md` | Update entries to the new modules |
+| `tests/unit/test_maude.py` | Replaced by `test_maude_executor.py` (wrapper) + `test_maude_worker.py` (parser) |
+| `tests/integration/test_maude_runtime.py` | Replaced by integration tests for the executor + tool |
 
-### 4.1 `harold_mcp/maude.py` — client-side access layer
+### 4.1 `harold_mcp/maude/executor.py` — client-side access layer
 
 Imports: stdlib (`concurrent.futures`, `multiprocessing`, `threading`, `os`, `pathlib`),
-`pydantic_settings`, `harold_mcp.maude_worker` (safe: that module imports `maude` lazily,
-see §4.2). **Never** imports `maude`.
+`pydantic_settings`, and `from . import worker` (safe: `worker.py` imports the third-party
+`maude` lazily, see §4.2). **Never** imports `maude`.
 
 #### Errors
 
@@ -180,7 +217,7 @@ class MaudeError(RuntimeError): ...
 class MaudeInitError(MaudeError):
     """Maude failed to initialize in the worker (surfaced at warm-up)."""
 class MaudeWorkerError(MaudeError):
-    """The worker crashed or timed out during a call; the pool was replaced."""
+    """The worker crashed or timed out during a call; the executor was replaced."""
     def __init__(self, reason: str) -> None: ...
 class MaudeFileNotFoundError(MaudeError):
     """The input path is missing or unreadable (raised before any worker call)."""
@@ -205,12 +242,12 @@ settings = Settings()   # module-level singleton; env vars read once at import
 pydantic-settings maps `HAROLD_MAUDE_WORKERS` / `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`
 (case-insensitive). Invalid values fail fast at import with a pydantic validation error.
 
-#### `MaudePool` — executor wrapper with recovery
+#### `MaudeExecutor` — executor wrapper with recovery
 
 ```python
 ExecutorFactory = Callable[[], ProcessPoolExecutor]
 
-class MaudePool:
+class MaudeExecutor:
     def __init__(
         self,
         settings: Settings | None = None,
@@ -227,10 +264,10 @@ class MaudePool:
 Behavior:
 
 - `_new_executor()`: `ProcessPoolExecutor(max_workers=settings.maude_workers,
-  mp_context=multiprocessing.get_context("spawn"), initializer=maude_worker.init_maude)`.
+  mp_context=multiprocessing.get_context("spawn"), initializer=worker.init_maude)`.
   Explicit **spawn** (portable, pipe-based; `forkserver` — the Linux 3.14 default — needs an
   AF_UNIX socket and failed in sandboxes; never `fork`, the parent is threaded).
-- `start()`: create the executor, then submit one `maude_worker.ping` **per worker**
+- `start()`: create the executor, then submit one `worker.ping` **per worker**
   (`maude_workers` pings — this forces all workers to spawn and run `init_maude`). Await
   all with the configured timeout. Any `BrokenProcessPool`/`TimeoutError` → `MaudeInitError`
   (the initializer's own failure only surfaces as a dead worker, since its exception
@@ -238,15 +275,16 @@ Behavior:
 - `submit(fn, *args)`: lock-guarded; if the current executor is `None` (lazy start) or
   `submit` raises `BrokenProcessPool` (pool already broken), replace the executor and
   resubmit once.
-- `diagnostics(path)`: `submit(maude_worker.load_diagnostics, path)` then
+- `diagnostics(path)`: `submit(worker.load_diagnostics, path)` then
   `future.result(timeout=settings.maude_worker_timeout_secs)`. Maps:
   - `BrokenProcessPool` → replace executor → `MaudeWorkerError("Maude worker crashed")`;
   - `concurrent.futures.TimeoutError` → replace executor (`shutdown(wait=False,
     cancel_futures=True)` — a timeout does **not** cancel the task; killing the pool is the
     only way to interrupt a stuck interpreter) → `MaudeWorkerError("...timed out")`;
   - any other worker exception → propagates unchanged (a real bug should be visible).
-- Replacement is **eager** (new worker spawned immediately) and lock-guarded, so two
-  threads detecting the crash concurrently create exactly one new executor.
+- Replacement is **eager** (new worker spawned immediately — confirmed in the design
+  review) and lock-guarded, so two threads detecting the crash concurrently create exactly
+  one new executor.
 - **No auto-retry** of the failed call itself: a file that crashed the worker would likely
   crash it again. Diagnostics is load-only (idempotent), so the MCP client can retry the
   tool call.
@@ -255,20 +293,35 @@ Behavior:
 #### Singleton
 
 ```python
-_RUNTIME = MaudePool()
-def get_runtime() -> MaudePool:
-    """Process-wide MaudePool singleton (server process)."""
-    return _RUNTIME
+_EXECUTOR = MaudeExecutor()
+def get_maude_executor() -> MaudeExecutor:
+    """Process-wide MaudeExecutor singleton (server process)."""
+    return _EXECUTOR
 ```
 
 Note: the **worker** process has its own equivalent — `init_maude()` — and tasks call the
 interpreter directly (§4.2). Two singletons, one per process, by design.
 
-### 4.2 `harold_mcp/maude_worker.py` — interpreter side (worker only)
+#### Package `__init__.py`
+
+```python
+from harold_mcp.maude.executor import (
+    MaudeError, MaudeInitError, MaudeWorkerError, MaudeFileNotFoundError,
+    MaudeExecutor, Settings, get_maude_executor, settings,
+)
+__all__ = [...]
+```
+
+### 4.2 `harold_mcp/maude/worker.py` — interpreter side (worker only)
 
 This module is pickled/spawn-imported by the worker process. It imports `maude` **lazily,
-inside functions**, so that importing the module in the MCP server process (which `maude.py`
-does, for the function references) does **not** import the SWIG bindings there (R17).
+inside functions**, so that importing the module in the MCP server process (which
+`executor.py` does, for the function references) does **not** import the SWIG bindings there
+(R17).
+
+**Gotcha**: inside this module the lazy `import maude` refers to the **third-party `maude`
+package** (absolute import), not to our `harold_mcp.maude` package. Do not rename it to a
+relative import.
 
 ```python
 class WarningDict(TypedDict):
@@ -325,17 +378,19 @@ _WARNING_RE = re.compile(r"Warning:\s+\S[^:]*,\s+line\s+(\d+)\s*(?:\([^)]*\))?:\
   (multi-line messages, module redefinitions) is a final-testing item (§7.4).
 - `Advisory:` lines are suppressed at the source (`advise=False`), per R15.
 
-### 4.3 `harold_mcp/tools/diagnostics.py` — the tool
+### 4.3 `harold_mcp/server/tools/diagnostics.py` — the tool
 
 Imports: `from fastmcp.dependencies import Depends` (the documented public path,
 verified in fastmcp 3.4.7), `from mcp.types import ToolAnnotations` (the same class fastmcp
-uses), `from harold_mcp.server import mcp`, `from harold_mcp.maude import ...`.
+uses), `from harold_mcp.server.server import mcp` (**the concrete module — never the
+package `__init__`**, which makes the import order cycle-proof), and
+`from harold_mcp.maude import MaudeExecutor, MaudeFileNotFoundError, get_maude_executor`.
 
 ```python
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def maude_program_diagnostics(
     path: str,
-    runtime: MaudePool = Depends(get_runtime),
+    maude_executor: MaudeExecutor = Depends(get_maude_executor),
 ) -> MaudeProgramDiagnosticsResult:
     """Diagnose a Maude source file by loading it into the Maude interpreter.
 
@@ -363,7 +418,7 @@ Logic:
 1. Pre-check (R5): `if not Path(path).is_file() or not os.access(path, os.R_OK):
    raise MaudeFileNotFoundError(path)`. Relative paths resolve against the server's cwd,
    which equals the worker's cwd (spawn inherits it), so the same string is passed through.
-2. `worker: LoadDiagnosticsResult = runtime.diagnostics(path)`.
+2. `worker: LoadDiagnosticsResult = maude_executor.diagnostics(path)`.
 3. Build the result (mapping lives in the tool, keeping the worker dumb):
    - warnings → `MaudeDiagnostic(severity="warning",
      range=MaudeRange(start=MaudePosition(line=line)))` (`range=None` if a parsed warning
@@ -375,28 +430,40 @@ Logic:
    - `summary` = counts by severity;
    - `path` = the input string as given (R6).
 
-Registration wiring: `harold_mcp/main.py` imports `harold_mcp.tools.diagnostics` **after**
-`harold_mcp.server`, so the `@mcp.tool` decorator runs once the `mcp` instance exists:
+Registration wiring: `server/__init__.py` registers the tools as a side effect of importing
+the server package, so `main.py` needs no extra import:
 
 ```python
-from harold_mcp.server import run as run_server
-import harold_mcp.tools.diagnostics  # noqa: F401  (registers the tool)
+# src/harold_mcp/server/__init__.py
+from harold_mcp.server.server import mcp, run
+from harold_mcp.server import tools  # noqa: F401  (registers the tools on mcp)
+
+__all__ = ["mcp", "run"]
 ```
 
-This avoids the import cycle (`server.py` → `tools.diagnostics` → `server.py`) that an
-end-of-`server.py` import would create.
+```python
+# src/harold_mcp/server/tools/__init__.py
+from harold_mcp.server.tools.diagnostics import maude_program_diagnostics
 
-### 4.4 `harold_mcp/server.py` — lifespan and startup
+__all__ = ["maude_program_diagnostics"]
+```
+
+Because `diagnostics.py` imports `mcp` from the concrete `harold_mcp.server.server` module,
+any import order works: importing the package, the subpackage, or the tool module directly
+always runs `server/__init__.py` first, which defines `mcp` before the tool's decorator
+runs. No import cycle.
+
+### 4.4 `harold_mcp/server/server.py` — lifespan and startup
 
 ```python
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
-    runtime = get_runtime()
-    runtime.start()          # pool + warm-up pings; MaudeInitError fails startup
+    executor = get_maude_executor()
+    executor.start()         # pool + warm-up pings; MaudeInitError fails startup
     try:
         yield
     finally:
-        runtime.shutdown()
+        executor.shutdown()
 
 mcp = FastMCP(..., lifespan=lifespan)
 
@@ -412,17 +479,34 @@ def run() -> None:
 - **Verification reminder** (from the research phase, §7.4): confirm the lifespan actually
   fires on the stdio transport before relying on it.
 
-### 4.5 Dependencies and docs
+### 4.5 Dependencies, docs, and README
 
 - `uv add pydantic-settings` (already in the venv as a fastmcp transitive dep), commit the
   new `uv.lock`. deptry (in `make check`) requires the direct import to be declared.
-- `docs/modules.md`: add `::: harold_mcp.tools.diagnostics`, `::: harold_mcp.maude_worker`.
-- After implementation: re-run the codebase-summary skill to refresh `.agents/summary/`.
+- `docs/modules.md` — replace the old entries with:
+
+  ```
+  ::: harold_mcp.server.server
+  ::: harold_mcp.server.tools.diagnostics
+  ::: harold_mcp.maude.executor
+  ::: harold_mcp.maude.worker
+  ```
+
+- `README.md` — add a subsection under "How to run harold-mcp" documenting the
+  configuration env vars (what they do and their defaults):
+
+  | Env var | Meaning | Default |
+  | --- | --- | --- |
+  | `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes (parallel diagnostics) | `1` |
+  | `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Max seconds to wait for each worker call before failing it | `60` |
+
+- After implementation: re-run the codebase-summary skill to refresh `.agents/summary/`
+  (AGENTS.md describes the old flat layout).
 
 ## 5. Data Models
 
-All models are pydantic `BaseModel`s defined in `tools/diagnostics.py`. FastMCP derives the
-output JSON Schema from the return annotation and emits the result as both
+All models are pydantic `BaseModel`s defined in `server/tools/diagnostics.py`. FastMCP
+derives the output JSON Schema from the return annotation and emits the result as both
 `structuredContent` and a JSON text block.
 
 ```mermaid
@@ -494,8 +578,8 @@ Example (recoverable fixture `broken-recoverable.maude`):
 | Condition | Where detected | Response |
 | --- | --- | --- |
 | Input path missing/unreadable | Tool pre-check (before any worker call) | `MaudeFileNotFoundError` → FastMCP `ToolError` → `isError` result |
-| Maude fails to initialize (worker start) | `MaudePool.start` warm-up ping | `MaudeInitError` → server fails fast at startup |
-| Worker crashes mid-call (e.g. SIGSEGV) | `future.result` → `BrokenProcessPool` | `MaudeWorkerError` ("worker crashed") → `isError`; pool replaced for the next call |
+| Maude fails to initialize (worker start) | `MaudeExecutor.start` warm-up ping | `MaudeInitError` → server fails fast at startup |
+| Worker crashes mid-call (e.g. SIGSEGV) | `future.result` → `BrokenProcessPool` | `MaudeWorkerError` ("worker crashed") → `isError`; executor replaced for the next call |
 | Worker times out | `future.result(timeout=...)` → `concurrent.futures.TimeoutError` | `MaudeWorkerError` ("worker timed out") → `isError`; pool killed and replaced |
 | Recoverable parse warnings | worker stderr capture | `success=False` + `warning` diagnostics (not an error) |
 | Unrecoverable parse failure | `maude.load` → `False` | `success=False` + warnings + one synthesized `error` diagnostic (`range=None`) |
@@ -520,7 +604,7 @@ Notes:
 
 Per repo convention: `tests/unit/` hermetic (mocked), `tests/integration/` real interpreter.
 FastMCP's `Depends` default does not prevent direct calls — unit tests call
-`maude_program_diagnostics(path, runtime=fake)` explicitly.
+`maude_program_diagnostics(path, maude_executor=fake)` explicitly.
 
 ### 7.1 Unit
 
@@ -528,16 +612,16 @@ FastMCP's `Depends` default does not prevent direct calls — unit tests call
 | --- | --- |
 | `tests/unit/test_settings.py` | defaults; env-var overrides (`HAROLD_MAUDE_WORKERS`, `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`); invalid values rejected |
 | `tests/unit/test_maude_worker.py` | `_parse_warnings`: the three observed formats, `<standard input>` attribution, `(context)` fragments, unmatched lines ignored, empty capture |
-| `tests/unit/test_maude_pool.py` | (fake executor factory + fake futures) `start` warm-up success; warm-up `BrokenProcessPool` → `MaudeInitError`; `submit` recovery (broken submit → recreate → resubmit once); `diagnostics` success delegation; result `BrokenProcessPool` → `MaudeWorkerError` + executor replaced; `TimeoutError` → `MaudeWorkerError` + executor replaced; `shutdown` idempotence; concurrent replacement creates one executor (lock) |
-| `tests/unit/test_diagnostics.py` | (fake `MaudePool`) tri-state mapping → model (clean / warnings / hard failure + synthesized error with `range=None`); `success` semantics; `summary` counts; `path` echo; missing file → `MaudeFileNotFoundError`; unreadable file (chmod 000, skipped if root) |
+| `tests/unit/test_maude_executor.py` | (fake executor factory + fake futures) `start` warm-up success; warm-up `BrokenProcessPool` → `MaudeInitError`; `submit` recovery (broken submit → recreate → resubmit once); `diagnostics` success delegation; result `BrokenProcessPool` → `MaudeWorkerError` + executor replaced; `TimeoutError` → `MaudeWorkerError` + executor replaced; `shutdown` idempotence; concurrent replacement creates one executor (lock) |
+| `tests/unit/test_diagnostics.py` | (fake `MaudeExecutor`) tri-state mapping → model (clean / warnings / hard failure + synthesized error with `range=None`); `success` semantics; `summary` counts; `path` echo; missing file → `MaudeFileNotFoundError`; unreadable file (chmod 000, skipped if root) |
 
 ### 7.2 Integration
 
 | File | Covers |
 | --- | --- |
-| `tests/integration/test_diagnostics_integration.py` | Through a real `MaudePool` + real interpreter, all four fixtures: `hello.maude`/`hello2.maude` → `success=True`, no diagnostics; `broken-recoverable.maude` → `success=False`, warning `missing is keyword.` at line 2; `broken-non-recoverable.maude` → `success=False`, 14 warnings + synthesized error; `no_new_module.maude` → `success=True` (no module-set heuristics) |
-| | Crash resilience: `pool.submit(maude_worker._crash)` → `BrokenProcessPool`; the next `pool.diagnostics(...)` succeeds on the recreated worker (R18.4) |
-| | Settings honored: a pool with `maude_workers=2` runs tasks on two pids; timeout mapping exercised via a short timeout against a slow task (or left to unit tests if no slow fixture exists) |
+| `tests/integration/test_diagnostics_integration.py` | Through a real `MaudeExecutor` + real interpreter, all four fixtures: `hello.maude`/`hello2.maude` → `success=True`, no diagnostics; `broken-recoverable.maude` → `success=False`, warning `missing is keyword.` at line 2; `broken-non-recoverable.maude` → `success=False`, 14 warnings + synthesized error; `no_new_module.maude` → `success=True` (no module-set heuristics) |
+| | Crash resilience: `executor.submit(worker._crash)` → `BrokenProcessPool`; the next `executor.diagnostics(...)` succeeds on the recreated worker (R18.4) |
+| | Settings honored: an executor with `maude_workers=2` runs tasks on two pids; timeout mapping exercised via a short timeout against a slow task (or left to unit tests if no slow fixture exists) |
 
 Replaced: `tests/unit/test_maude.py`, `tests/integration/test_maude_runtime.py` (their API —
 `get_module`/`load_program`/`load_module`, in-process `init_maude` — no longer exists).
@@ -545,7 +629,8 @@ Replaced: `tests/unit/test_maude.py`, `tests/integration/test_maude_runtime.py` 
 ### 7.3 Acceptance mapping (R18 / Q8)
 
 1–2 → unit + integration above; 3 → `test_diagnostics.py`; 4 → crash tests; 5 →
-`test_settings.py` + integration; 6 → `make release` (install, check, test, docs-test).
+`test_settings.py` + integration; 6 → `make release` (install, check, test, docs-test) plus
+the README subsection (§4.5).
 
 ### 7.4 Final-testing reminders (from `../idea-honing.md`)
 
@@ -567,6 +652,7 @@ Replaced: `tests/unit/test_maude.py`, `tests/integration/test_maude_runtime.py` 
 | fd-2 capture (`os.dup2` to a tempfile) inside the worker | The only mechanism that captures C++-side stderr; the bindings expose no warning hook; scoped to the worker so the server's stderr is untouched. | Process-global within the worker → no logging during the window; fragile against new Maude warning formats (hardened in final testing). |
 | Structured pydantic output over plain text | LLM consumers get `structuredContent` + text for free; matches Zed/LSP diagnostic shapes. | Slightly more code than a text dump. |
 | `readOnlyHint=True` | Declares the tool's safety profile for clients; accurate — user files are never modified. | None; interpreter-state mutation is documented in the tool description. |
+| Package layout (`server/`, `maude/`) over flat modules | Tool registration becomes a package side effect (no wiring in `main.py`); groups the coupled server+tools and the Maude subsystem; scales to more tools. | One-time churn: AGENTS.md conventions, docs entries, knowledge base refresh (all in the plan). |
 
 ### 8.2 Research findings (key facts)
 

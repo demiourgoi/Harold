@@ -182,6 +182,25 @@ amend):
 
 **Answer**: Confirmed — that is the definition of done for v1 (2026-08-24).
 
+## Design review amendments (2026-08-24)
+
+Recorded during the design review; they refine earlier answers without reopening the Q&A.
+
+1. **Worker rationale completed**: besides SIGSEGV containment, the worker process exists so
+   the `maude` package's fd-2 (stderr) warning output can be redirected to a temp file for
+   capture, while the parent FastMCP process keeps its own stderr for logging — as
+   recommended for stdio MCP servers. See `design/detailed-design.md` §1.
+2. **Code organization (supersedes the path in `rough-idea.md`)**: packages replace flat
+   modules — `src/harold_mcp/server/` (FastMCP instance, lifespan, tools) and
+   `src/harold_mcp/maude/` (executor client + worker code). The tool lives at
+   `src/harold_mcp/server/tools/diagnostics.py`; tool registration happens in
+   `server/__init__.py` (a side effect of importing the package). Public APIs are
+   re-exported from the package `__init__`s.
+3. **Naming**: `MaudePool` → `MaudeExecutor`; `get_runtime()` → `get_maude_executor()`.
+   Eager executor replacement after a crash confirmed.
+4. **New task**: document `HAROLD_MAUDE_WORKERS` and `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`
+   (purpose + defaults) in a README subsection under "How to run harold-mcp".
+
 ## Reminders for final testing (from the research phase)
 
 Two quick verification items deferred from research, to be folded into the final test plan
