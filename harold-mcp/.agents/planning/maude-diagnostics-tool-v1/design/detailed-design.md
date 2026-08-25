@@ -214,13 +214,21 @@ Imports: stdlib (`concurrent.futures`, `multiprocessing`, `threading`, `os`, `pa
 
 ```python
 class MaudeError(RuntimeError): ...
+
+
 class MaudeInitError(MaudeError):
     """Maude failed to initialize in the worker (surfaced at warm-up)."""
+
+
 class MaudeWorkerError(MaudeError):
     """The worker crashed or timed out during a call; the executor was replaced."""
+
     def __init__(self, reason: str) -> None: ...
+
+
 class MaudeFileNotFoundError(MaudeError):
     """The input path is missing or unreadable (raised before any worker call)."""
+
     def __init__(self, path: str) -> None: ...
 ```
 
@@ -236,7 +244,8 @@ class Settings(BaseSettings):
     maude_workers: int = Field(default=1, gt=0)
     maude_worker_timeout_secs: int = Field(default=60, gt=0)
 
-settings = Settings()   # module-level singleton; env vars read once at import
+
+settings = Settings()  # module-level singleton; env vars read once at import
 ```
 
 pydantic-settings maps `HAROLD_MAUDE_WORKERS` / `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`
@@ -294,6 +303,8 @@ Behavior:
 
 ```python
 _EXECUTOR = MaudeExecutor()
+
+
 def get_maude_executor() -> MaudeExecutor:
     """Process-wide MaudeExecutor singleton (server process)."""
     return _EXECUTOR
@@ -306,9 +317,16 @@ interpreter directly (§4.2). Two singletons, one per process, by design.
 
 ```python
 from harold_mcp.maude.executor import (
-    MaudeError, MaudeInitError, MaudeWorkerError, MaudeFileNotFoundError,
-    MaudeExecutor, Settings, get_maude_executor, settings,
+    MaudeError,
+    MaudeInitError,
+    MaudeWorkerError,
+    MaudeFileNotFoundError,
+    MaudeExecutor,
+    Settings,
+    get_maude_executor,
+    settings,
 )
+
 __all__ = [...]
 ```
 
@@ -328,19 +346,24 @@ class WarningDict(TypedDict):
     line: int | None
     message: str
 
+
 class LoadDiagnosticsResult(TypedDict):
     ok: bool
     warnings: list[WarningDict]
+
 
 def init_maude() -> None:
     """Idempotent; maude.init(advise=False). Raises RuntimeError on failure."""
     # raises RuntimeError("Failed to initialize the Maude interpreter") — the
     # client maps the resulting dead-worker signal to MaudeInitError.
 
+
 def ping() -> None:
     """No-op task used to warm up workers (initializer runs before it)."""
 
+
 def load_diagnostics(path: str) -> LoadDiagnosticsResult: ...
+
 
 def _crash() -> None:
     """Test-only: os._exit(1) to simulate an abrupt worker death (SIGSEGV analogue)."""
@@ -459,17 +482,19 @@ runs. No import cycle.
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     executor = get_maude_executor()
-    executor.start()         # pool + warm-up pings; MaudeInitError fails startup
+    executor.start()  # pool + warm-up pings; MaudeInitError fails startup
     try:
         yield
     finally:
         executor.shutdown()
 
+
 mcp = FastMCP(..., lifespan=lifespan)
+
 
 def run() -> None:
     _LOG.info("Initializing Harold...")
-    mcp.run()                # enters the lifespan (start + shutdown)
+    mcp.run()  # enters the lifespan (start + shutdown)
 ```
 
 - The current `init_maude()` call in `run()` is replaced by the lifespan warm-up (R12).
