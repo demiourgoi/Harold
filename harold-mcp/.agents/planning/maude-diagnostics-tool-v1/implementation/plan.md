@@ -38,6 +38,14 @@ before committing (auto-fix fails CI).
 > through the Python bindings, not 14 (the `syntax error` lines are REPL-only); research
 > notes corrected. Integration test file renamed to `test_maude_worker_integration.py`
 > (pytest basename collision with the unit test).
+>
+> **Step 3 notes (2026-08-24)**: settings live in `harold_mcp/settings.py` (`get_settings()`);
+> `get_maude_executor(settings: Settings = Depends(get_settings))` is a lazily-initialized,
+> lock-guarded singleton (FastMCP nested dependency); `MaudeWorkerCrashedError` /
+> `MaudeWorkerTimeoutError` subclasses; `_reset_executor` is a pure command (CQS) and the
+> old pool is torn down with `ProcessPoolExecutor.kill_workers()` (3.14); the
+> submit+await+recover loop is the generic `_run_task`; parallelism tests use slow
+> `worker.sleep` tasks (the executor only spawns a worker when none is idle).
 
 ---
 
