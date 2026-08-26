@@ -314,8 +314,11 @@ Behavior:
   running C++ task.
 - `start()`: `_reset_executor()` (pure effect — it returns `None`, per
   command-query separation) then reads the pool back under `_executor_lock` (fine: `start`
-  runs once at startup) and submits one `worker.ping` **per worker** (forcing spawn +
-  `init_maude` in each), awaited with the configured timeout. Any
+  runs once at startup) and submits one `worker.ping` **per configured worker**. Note the
+  executor spawns workers **on demand** (only when none is idle), so a fast ping does not
+  guarantee `maude_workers` processes exist; the warm-up's real job is to fail fast — a
+  broken `init_maude` kills the pinged worker, surfacing as `BrokenProcessPool`. Any
+  worker spawned later still runs `init_maude` first via the initializer. Any
   `BrokenProcessPool`/`TimeoutError` → discard + kill the failed pool (`_reset_executor(
   replace=False, failed=...)`) → `MaudeInitError` (the initializer's own failure only
   surfaces as a dead worker, since its exception cannot cross the process boundary).
@@ -417,6 +420,10 @@ def init_maude() -> None:
 
 def ping() -> None:
     """No-op task used to warm up workers (initializer runs before it)."""
+
+
+def sleep(seconds: float) -> int:
+    """Test/timeout support: sleep and return the worker's pid."""
 
 
 def load_diagnostics(path: str) -> LoadDiagnosticsResult: ...
@@ -704,7 +711,7 @@ FastMCP's `Depends` default does not prevent direct calls — unit tests call
 | --- | --- |
 | `tests/integration/test_diagnostics_integration.py` | Through a real `MaudeExecutor` + real interpreter, all four fixtures: `hello.maude`/`hello2.maude` → `success=True`, no diagnostics; `broken-recoverable.maude` → `success=False`, warning `missing is keyword.` at line 2; `broken-non-recoverable.maude` → `success=False`, 12 warnings + synthesized error; `no_new_module.maude` → `success=True` (no module-set heuristics) |
 | | Crash resilience: `executor.submit(worker._crash)` → `BrokenProcessPool`; the next `executor.diagnostics(...)` succeeds on the recreated worker (R18.4) |
-| | Settings honored: an executor with `maude_workers=2` runs tasks on two pids; timeout mapping exercised via a short timeout against a slow task (or left to unit tests if no slow fixture exists) |
+| | Settings honored: an executor with `maude_workers=2` runs two `worker.sleep(1.0)` tasks on two distinct pids in parallel (asserted by wall-clock < 1.8s — slow tasks are required because the executor only spawns a worker when none is idle; microsecond tasks would never exercise the second worker); timeout mapping exercised via a short timeout against a slow task (or left to unit tests if no slow fixture exists) |
 
 Replaced: `tests/unit/test_maude.py`, `tests/integration/test_maude_runtime.py` (their API —
 `get_module`/`load_program`/`load_module`, in-process `init_maude` — no longer exists).

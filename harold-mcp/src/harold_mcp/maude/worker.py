@@ -14,6 +14,7 @@ No thread locking is required because the worker process only runs a single thre
 import os
 import re
 import tempfile
+import time
 from typing import TypedDict
 
 
@@ -61,6 +62,16 @@ def init_maude() -> None:
 
 def ping() -> None:
     """No-op task used to warm up workers (the initializer runs before it)."""
+
+
+def sleep(seconds: float) -> int:
+    """Test/timeout support: sleep and return the worker's pid.
+
+    Slow enough to keep a worker busy, which forces the executor to spawn
+    additional workers (it only spawns when no worker is idle).
+    """
+    time.sleep(seconds)
+    return os.getpid()
 
 
 _WARNING_RE = re.compile(r"Warning:\s+\S[^:]*,\s+line\s+(\d+)\s*(?:\([^)]*\))?:\s*(.*)")
