@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.4.7",
+    # Note this is built against Maude 3.5.1. https://github.com/fadoss/maude-bindings/releases/tag/v1.6.0
     "maude==1.6.0",
     "mcp>=1.29.0",
     "pydantic>=2.13.4",
