@@ -7,6 +7,8 @@ in the MCP server process never touches them.
 Gotcha: the lazy `import maude` below is an absolute import of the
 **third-party** `maude` package, not of our `harold_mcp.maude` package. Do not
 change it to a relative import.
+
+No thread locking is required because the worker process only runs a single thread.
 """
 
 import os
@@ -29,15 +31,15 @@ class LoadDiagnosticsResult(TypedDict):
     warnings: list[WarningDict]
 
 
-_maude_initialized = False
-
-
 class WorkerInitError(RuntimeError):
     """Maude failed to initialize in the worker process.
 
     The client cannot receive this exception across the process boundary; it
     maps the resulting dead worker to `MaudeInitError`.
     """
+
+
+_maude_initialized = False
 
 
 def init_maude() -> None:

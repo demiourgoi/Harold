@@ -62,7 +62,7 @@ Consolidated from `../idea-honing.md` (Q1–Q8, design-review amendments) and
 | R7 | Diagnostics use LSP-style positions: a `range` with `start`/`end` positions, 1-based `line`, `column=None` (Maude reports no columns). `range=None` means a whole-file problem. |
 | R8 | `summary` is a small per-severity counts object (`warning`, `error`). |
 | R9 | Worker architecture: Maude runs in a dedicated long-lived worker process driven by `ProcessPoolExecutor(max_workers=HAROLD_MAUDE_WORKERS, mp_context=spawn, initializer=init_maude)`. `max_tasks_per_child` stays `None` (long-lived). |
-| R10 | Settings via `pydantic-settings`, env prefix `HAROLD_`: `HAROLD_MAUDE_WORKERS` (default `1`, `gt=0`), `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` (default `60`, `gt=0`). `pydantic-settings` becomes a direct dependency. |
+| R10 | Settings via `pydantic-settings` in `src/harold_mcp/settings.py` (flat class, `HAROLD_` env prefix): `HAROLD_MAUDE_WORKERS` (default `1`, `gt=0`), `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` (default `60`, `gt=0`), plus a `get_settings()` singleton for FastMCP dependency injection. `pydantic-settings` becomes a direct dependency. |
 | R11 | Timeout: each call waits at most `maude_worker_timeout_secs` for the worker future. Timeout and worker crash → **tool error** (`isError`), and the pool is recreated so the *next* call works. |
 | R12 | Fail fast at startup: the server warms up the pool (ping through every worker) during lifespan startup; Maude-init failure aborts server start with a meaningful error. |
 | R13 | `greet` is removed (no migration needed: the worker protocol has no term-reduction op). |
@@ -173,6 +173,7 @@ src/harold_mcp/
     main.py                  # console-script entry point (unchanged behavior)
     logging.py               # get_logger re-export (unchanged)
     resources.py             # HAROLD_ICON (unchanged)
+    settings.py              # Settings + get_settings (pydantic-settings)
     server/
         __init__.py          # public API: mcp, run + registers the tools
         server.py            # FastMCP instance, lifespan, run()   (moved from server.py)
@@ -180,8 +181,8 @@ src/harold_mcp/
             __init__.py      # re-exports the tool functions
             diagnostics.py   # pydantic result models + maude_program_diagnostics
     maude/
-        __init__.py          # re-exports errors, Settings, MaudeExecutor, get_maude_executor
-        executor.py          # client-side: errors, Settings, MaudeExecutor   (from maude.py)
+        __init__.py          # re-exports errors, MaudeExecutor, get_maude_executor
+        executor.py          # client-side: errors, MaudeExecutor               (from maude.py)
         worker.py            # worker-side: init_maude, ping, load_diagnostics, _crash
 ```
 
@@ -194,8 +195,9 @@ File changes:
 | `src/harold_mcp/server/tools/__init__.py` | **New**: re-exports the tool functions |
 | `src/harold_mcp/server/tools/diagnostics.py` | **New**: pydantic result models + the tool |
 | `src/harold_mcp/maude/__init__.py` | **New**: re-exports the public Maude-subsystem API |
-| `src/harold_mcp/maude/executor.py` | Moved/reworked from `maude.py`: errors, `Settings`, `MaudeExecutor` |
+| `src/harold_mcp/maude/executor.py` | Moved/reworked from `maude.py`: errors, `MaudeExecutor`, `get_maude_executor` |
 | `src/harold_mcp/maude/worker.py` | **New**: interpreter-side functions run by the worker process |
+| `src/harold_mcp/settings.py` | **New**: `Settings` (pydantic-settings) + `get_settings()` singleton |
 | `src/harold_mcp/maude.py`, `src/harold_mcp/server.py` | Deleted (split/moved into the packages above) |
 | `src/harold_mcp/main.py` | Effectively unchanged — importing `harold_mcp.server` now registers the tools |
 | `pyproject.toml` | Add `pydantic-settings` (then `uv lock`; commit `uv.lock`) |
@@ -206,9 +208,11 @@ File changes:
 
 ### 4.1 `harold_mcp/maude/executor.py` — client-side access layer
 
-Imports: stdlib (`concurrent.futures`, `multiprocessing`, `threading`, `os`, `pathlib`),
-`pydantic_settings`, and `from . import worker` (safe: `worker.py` imports the third-party
-`maude` lazily, see §4.2). **Never** imports `maude`.
+Imports: stdlib (`concurrent.futures`, `multiprocessing`, `threading`), `fastmcp.dependencies`
+(`Depends`, for the nested dependency below), `harold_mcp.logging.Logging` (mixin),
+`from harold_mcp.maude import worker` (safe: `worker.py` imports the third-party `maude`
+lazily, see §4.2), and `from harold_mcp.settings import Settings, get_settings`.
+**Never** imports `maude`.
 
 #### Errors
 
@@ -221,9 +225,21 @@ class MaudeInitError(MaudeError):
 
 
 class MaudeWorkerError(MaudeError):
-    """The worker crashed or timed out during a call; the executor was replaced."""
+    """Base error for failures of a running Maude worker call."""
 
     def __init__(self, reason: str) -> None: ...
+
+
+class MaudeWorkerCrashedError(MaudeWorkerError):
+    """The worker process died during a call; the pool was replaced."""
+
+    # super().__init__("Maude worker crashed")
+
+
+class MaudeWorkerTimeoutError(MaudeWorkerError):
+    """A call timed out; the stuck worker was killed and the pool replaced."""
+
+    # super().__init__("Maude worker timed out")
 
 
 class MaudeFileNotFoundError(MaudeError):
@@ -235,7 +251,10 @@ class MaudeFileNotFoundError(MaudeError):
 `MaudeLoadError` and `MaudeModuleNotFoundError` are removed (load failures are diagnostics,
 not exceptions; no module lookups cross the process boundary).
 
-#### Settings
+#### Settings (`harold_mcp/settings.py`)
+
+Settings are application-wide and live in their own module (future settings beyond Maude
+are expected):
 
 ```python
 class Settings(BaseSettings):
@@ -246,6 +265,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()  # module-level singleton; env vars read once at import
+
+
+def get_settings() -> Settings:
+    return settings
 ```
 
 pydantic-settings maps `HAROLD_MAUDE_WORKERS` / `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`
@@ -256,78 +279,112 @@ pydantic-settings maps `HAROLD_MAUDE_WORKERS` / `HAROLD_MAUDE_WORKER_TIMEOUT_SEC
 ```python
 ExecutorFactory = Callable[[], ProcessPoolExecutor]
 
-class MaudeExecutor:
+
+class MaudeExecutor(Logging):
     def __init__(
         self,
         settings: Settings | None = None,
         *,
-        executor_factory: ExecutorFactory | None = None,   # test seam
+        executor_factory: ExecutorFactory | None = None,  # test seam
     ) -> None: ...
 
-    def start(self) -> None:        # create executor + warm-up pings; MaudeInitError on failure
-    def shutdown(self) -> None:     # idempotent; shutdown(wait=False, cancel_futures=True)
-    def submit(self, fn, *args) -> Future:  # recovery on BrokenProcessPool from submit()
+    def start(self) -> None:        # reset + warm-up pings; MaudeInitError on failure
+    def shutdown(self) -> None:     # idempotent pool teardown
+    def submit(self, fn, *args) -> Future:  # raises MaudeWorkerCrashedError on a broken pool
     def diagnostics(self, path: str) -> LoadDiagnosticsResult: ...
+
+    def _reset_executor(
+        self, *, replace: bool = True, failed: ProcessPoolExecutor | None = None
+    ) -> None: ...  # pure effect (CQS); callers read `self._executor` under the lock if needed
 ```
 
 Behavior:
 
-- `_new_executor()`: `ProcessPoolExecutor(max_workers=settings.maude_workers,
+- `_default_executor()`: `ProcessPoolExecutor(max_workers=settings.maude_workers,
   mp_context=multiprocessing.get_context("spawn"), initializer=worker.init_maude)`.
-  Explicit **spawn** (portable, pipe-based; `forkserver` — the Linux 3.14 default — needs an
-  AF_UNIX socket and failed in sandboxes; never `fork`, the parent is threaded).
-- `start()`: create the executor, then submit one `worker.ping` **per worker**
-  (`maude_workers` pings — this forces all workers to spawn and run `init_maude`). Await
-  all with the configured timeout. Any `BrokenProcessPool`/`TimeoutError` → `MaudeInitError`
-  (the initializer's own failure only surfaces as a dead worker, since its exception
-  message cannot cross the process boundary).
-- `submit(fn, *args)`: lock-guarded; if the current executor is `None` (lazy start) or
-  `submit` raises `BrokenProcessPool` (pool already broken), replace the executor and
-  resubmit once.
-- `diagnostics(path)`: `submit(worker.load_diagnostics, path)` then
-  `future.result(timeout=settings.maude_worker_timeout_secs)`. Maps:
-  - `BrokenProcessPool` → replace executor → `MaudeWorkerError("Maude worker crashed")`;
-  - `concurrent.futures.TimeoutError` → replace executor (`shutdown(wait=False,
-    cancel_futures=True)` — a timeout does **not** cancel the task; killing the pool is the
-    only way to interrupt a stuck interpreter) → `MaudeWorkerError("...timed out")`;
+  Explicit **spawn** (see the rationale box below).
+- `_reset_executor(replace=True, failed=None)`: swaps the executor under
+  **`_executor_lock` (an `RLock`)** — reentrant because `_submit` holds it while calling
+  `_reset_executor`. With `failed` given, the swap is identity-checked so concurrent
+  threads reporting the same failure perform **exactly one** replacement. The old pool is
+  killed **after** releasing the lock via `old.kill_workers()` (Python 3.14; sends SIGKILL
+  to every worker and internally calls `shutdown()` to free the executor's resources).
+  SIGKILL rather than `shutdown`/`terminate_workers` because a worker stuck inside
+  `maude.load` must be interrupted unconditionally — graceful shutdown cannot stop a
+  running C++ task.
+- `start()`: `_reset_executor()` (pure effect — it returns `None`, per
+  command-query separation) then reads the pool back under `_executor_lock` (fine: `start`
+  runs once at startup) and submits one `worker.ping` **per worker** (forcing spawn +
+  `init_maude` in each), awaited with the configured timeout. Any
+  `BrokenProcessPool`/`TimeoutError` → discard + kill the failed pool (`_reset_executor(
+  replace=False, failed=...)`) → `MaudeInitError` (the initializer's own failure only
+  surfaces as a dead worker, since its exception cannot cross the process boundary).
+- `_submit(fn, *args)`: lazily creates the pool if `None`; on submit-time
+  `BrokenProcessPool` it replaces the pool and raises `MaudeWorkerCrashedError` — **no
+  resubmit** (no reason to assume a retry would succeed; diagnostics is idempotent, so the
+  MCP client retries the tool call).
+- `diagnostics(path)`: `_submit(worker.load_diagnostics, path)` then
+  `future.result(timeout=settings.maude_worker_timeout_secs)`. Result-time failures are
+  handled here — submit-time recovery cannot see them, and a timed-out worker must be
+  killed or it poisons the pool forever:
+  - `BrokenProcessPool` → `_reset_executor(failed=executor)` → `MaudeWorkerCrashedError`;
+  - `concurrent.futures.TimeoutError` → `_reset_executor(failed=executor)` (kills the stuck
+    worker) → `MaudeWorkerTimeoutError`;
   - any other worker exception → propagates unchanged (a real bug should be visible).
-- Replacement is **eager** (new worker spawned immediately — confirmed in the design
-  review) and lock-guarded, so two threads detecting the crash concurrently create exactly
-  one new executor.
-- **No auto-retry** of the failed call itself: a file that crashed the worker would likely
-  crash it again. Diagnostics is load-only (idempotent), so the MCP client can retry the
-  tool call.
-- `shutdown()`: idempotent, `executor.shutdown(wait=False, cancel_futures=True)`.
+- Replacement is **eager** (confirmed in the design review); the typed errors float up to
+  the tool unchanged (the tool does not catch them — FastMCP turns them into `isError`
+  tool results).
+- `shutdown()`: idempotent — `_reset_executor(replace=False)`.
+- The `Logging` mixin provides `self._log` (info: pool launch/teardown/ping; debug: task
+  submission; error: pool recovery).
 
-#### Singleton
+**Why `mp_context=multiprocessing.get_context("spawn")`**: the MCP server process is
+**multithreaded** (FastMCP runs sync tools in a thread pool), so `fork` is unsafe — fork
+copies only the calling thread, and locks held by other threads stay locked in the child
+(deadlocks/corruption). `forkserver` (Python 3.14's Linux default) is thread-safe but needs
+an AF_UNIX socket and failed in sandboxes. `spawn` is pipe-based, portable (macOS default,
+Windows-only option), and gives each worker a fresh interpreter with no inherited state;
+the one-time cost (module re-import + prelude load per worker) is paid once at warm-up.
+
+#### Singleton (nested FastMCP dependency)
 
 ```python
-_EXECUTOR = MaudeExecutor()
+_EXECUTOR: MaudeExecutor | None = None
+_EXECUTOR_LOCK = threading.Lock()
 
 
-def get_maude_executor() -> MaudeExecutor:
-    """Process-wide MaudeExecutor singleton (server process)."""
+def get_maude_executor(settings: Settings = Depends(get_settings)) -> MaudeExecutor:  # noqa: B008
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        with _EXECUTOR_LOCK:
+            if _EXECUTOR is None:
+                _EXECUTOR = MaudeExecutor(settings)
     return _EXECUTOR
 ```
 
-Note: the **worker** process has its own equivalent — `init_maude()` — and tasks call the
-interpreter directly (§4.2). Two singletons, one per process, by design.
+- Created lazily under a lock, like `init_maude`.
+- `settings` is a **nested FastMCP dependency**: when the tool asks for
+  `Depends(get_maude_executor)`, FastMCP resolves `get_settings` first and passes its
+  result. Direct callers (the lifespan) pass a `Settings` explicitly.
+- Note: the **worker** process has its own equivalent — `init_maude()` — and tasks call
+  the interpreter directly (§4.2). Two singletons, one per process, by design.
 
 #### Package `__init__.py`
 
 ```python
 from harold_mcp.maude.executor import (
     MaudeError,
-    MaudeInitError,
-    MaudeWorkerError,
-    MaudeFileNotFoundError,
     MaudeExecutor,
-    Settings,
+    MaudeFileNotFoundError,
+    MaudeInitError,
+    MaudeWorkerCrashedError,
+    MaudeWorkerError,
+    MaudeWorkerTimeoutError,
     get_maude_executor,
-    settings,
 )
 
 __all__ = [...]
+```
 ```
 
 ### 4.2 `harold_mcp/maude/worker.py` — interpreter side (worker only)
@@ -515,6 +572,7 @@ def run() -> None:
   ::: harold_mcp.server.tools.diagnostics
   ::: harold_mcp.maude.executor
   ::: harold_mcp.maude.worker
+  ::: harold_mcp.settings
   ```
 
 - `README.md` — add a subsection under "How to run harold-mcp" documenting the
@@ -604,8 +662,8 @@ Example (recoverable fixture `broken-recoverable.maude`):
 | --- | --- | --- |
 | Input path missing/unreadable | Tool pre-check (before any worker call) | `MaudeFileNotFoundError` → FastMCP `ToolError` → `isError` result |
 | Maude fails to initialize (worker start) | `MaudeExecutor.start` warm-up ping | `MaudeInitError` → server fails fast at startup |
-| Worker crashes mid-call (e.g. SIGSEGV) | `future.result` → `BrokenProcessPool` | `MaudeWorkerError` ("worker crashed") → `isError`; executor replaced for the next call |
-| Worker times out | `future.result(timeout=...)` → `concurrent.futures.TimeoutError` | `MaudeWorkerError` ("worker timed out") → `isError`; pool killed and replaced |
+| Worker crashes mid-call (e.g. SIGSEGV) | `future.result` or `submit` → `BrokenProcessPool` | `MaudeWorkerCrashedError` → `isError`; pool replaced for the next call |
+| Worker times out | `future.result(timeout=...)` → `concurrent.futures.TimeoutError` | `MaudeWorkerTimeoutError` → `isError`; stuck worker killed and pool replaced |
 | Recoverable parse warnings | worker stderr capture | `success=False` + `warning` diagnostics (not an error) |
 | Unrecoverable parse failure | `maude.load` → `False` | `success=False` + warnings + one synthesized `error` diagnostic (`range=None`) |
 | Unexpected worker task exception (bug) | `future.result` | propagates unchanged (visible in server logs; client gets a generic tool error) |

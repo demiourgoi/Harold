@@ -201,6 +201,31 @@ Recorded during the design review; they refine earlier answers without reopening
 4. **New task**: document `HAROLD_MAUDE_WORKERS` and `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`
    (purpose + defaults) in a README subsection under "How to run harold-mcp".
 
+### Design review amendments, round 2 (2026-08-24)
+
+1. **`Settings` moved to `src/harold_mcp/settings.py`** (application-wide config, flat
+   class, `maude_`-prefixed fields) with a `get_settings()` singleton. `get_maude_executor`
+   now takes a `Settings` argument, initializes the singleton lazily under a lock (like
+   `init_maude`), and is wired through FastMCP nested dependencies
+   (`get_maude_executor(settings: Settings = Depends(get_settings))`).
+2. **Lock semantics**: the executor lock is renamed `_executor_lock` and is an **RLock**
+   (`_submit` holds it while calling `_reset_executor`). It only guards the executor
+   reference against replacement-vs-submit races; task execution is NOT serialized — with
+   `max_workers > 1`, futures run in parallel in the pool.
+3. **Error hierarchy**: `MaudeWorkerCrashedError` and `MaudeWorkerTimeoutError` subclass
+   `MaudeWorkerError`, each calling `super().__init__` with its own message.
+4. **Pool teardown**: replaced `shutdown`/hand-rolled termination with
+   `ProcessPoolExecutor.kill_workers()` (new in Python 3.14; SIGKILL + internal
+   `shutdown()`). `_terminate_workers` helper deleted as redundant.
+5. **Executor swap**: `_new_executor`/`_replace_locked`/`_replace_after_failure` collapsed
+   into `_reset_executor(replace=True, failed=None)` (identity-checked exactly-once swap,
+   kill outside the lock, `Logging` mixin for pool lifecycle logs).
+6. **No resubmit**: a submit-time `BrokenProcessPool` replaces the pool and raises
+   `MaudeWorkerCrashedError` — no reason to assume a retry would succeed; the idempotent
+   tool call is retried by the MCP client. Result-time failures are still mapped (and the
+   stuck worker killed on timeout) in `diagnostics`, because submit-time recovery cannot
+   see a crash that happens mid-task or a hung worker.
+
 ## Reminders for final testing (from the research phase)
 
 Two quick verification items deferred from research, to be folded into the final test plan
