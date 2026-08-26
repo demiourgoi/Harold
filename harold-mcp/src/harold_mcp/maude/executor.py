@@ -9,7 +9,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from fastmcp.dependencies import Depends
 
@@ -64,6 +64,9 @@ class MaudeFileNotFoundError(MaudeError):
 
 
 ExecutorFactory = Callable[[], ProcessPoolExecutor]
+
+
+T = TypeVar("T")
 
 
 class MaudeExecutor(Logging):
@@ -183,24 +186,28 @@ class MaudeExecutor(Logging):
                 self._reset_executor(failed=self._executor)
                 raise MaudeWorkerCrashedError() from exc
 
-    def diagnostics(self, path: str) -> worker.LoadDiagnosticsResult:
-        """Run `load_diagnostics` in the worker, with crash/timeout mapping.
+    def _run_task(self, fn: Callable[..., T], *args: Any) -> T:
+        """Run a worker task to completion, mapping crash/timeout failures.
 
         Raises `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`; the pool
         is replaced so the next call works. Other worker exceptions propagate
         unchanged.
         """
-        executor, future = self._submit(worker.load_diagnostics, path)
-        # We need to reset the executor here because submit does not catch errors
-        # in the middle of the execution of the future
+        executor, future = self._submit(fn, *args)
+        # Reset here too: submit only sees failures at submission time, not a
+        # worker that dies mid-task.
         try:
-            return cast(worker.LoadDiagnosticsResult, future.result(timeout=self._settings.maude_worker_timeout_secs))
+            return cast(T, future.result(timeout=self._settings.maude_worker_timeout_secs))
         except BrokenProcessPool as exc:
             self._reset_executor(failed=executor)
             raise MaudeWorkerCrashedError() from exc
         except TimeoutError as exc:
             self._reset_executor(failed=executor)
             raise MaudeWorkerTimeoutError() from exc
+
+    def diagnostics(self, path: str) -> worker.LoadDiagnosticsResult:
+        """Run `load_diagnostics` in the worker, with crash/timeout mapping."""
+        return self._run_task(worker.load_diagnostics, path)
 
 
 _executor: MaudeExecutor | None = None

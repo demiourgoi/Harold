@@ -326,14 +326,17 @@ Behavior:
   `BrokenProcessPool` it replaces the pool and raises `MaudeWorkerCrashedError` — **no
   resubmit** (no reason to assume a retry would succeed; diagnostics is idempotent, so the
   MCP client retries the tool call).
-- `diagnostics(path)`: `_submit(worker.load_diagnostics, path)` then
-  `future.result(timeout=settings.maude_worker_timeout_secs)`. Result-time failures are
-  handled here — submit-time recovery cannot see them, and a timed-out worker must be
-  killed or it poisons the pool forever:
+- `_run_task(fn, *args)`: the shared submit-and-await runner (generic in the task's return
+  type): `_submit(...)` then `future.result(timeout=settings.maude_worker_timeout_secs)`.
+  Result-time failures are handled **here** — submit-time recovery cannot see a crash
+  mid-task, and a timed-out worker must be killed or it poisons the pool forever:
   - `BrokenProcessPool` → `_reset_executor(failed=executor)` → `MaudeWorkerCrashedError`;
   - `concurrent.futures.TimeoutError` → `_reset_executor(failed=executor)` (kills the stuck
     worker) → `MaudeWorkerTimeoutError`;
   - any other worker exception → propagates unchanged (a real bug should be visible).
+- `diagnostics(path)`: a thin typed wrapper — `self._run_task(worker.load_diagnostics, path)`
+  (future ops get the same crash/timeout semantics by calling `_run_task` with their
+  worker function).
 - Replacement is **eager** (confirmed in the design review); the typed errors float up to
   the tool unchanged (the tool does not catch them — FastMCP turns them into `isError`
   tool results).
