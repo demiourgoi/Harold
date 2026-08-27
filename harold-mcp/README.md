@@ -1,6 +1,6 @@
 # harold-mcp
 
-<img src="src/harold_mcp/assets/brand/Harold_logo.png" alt="Harold logo" width="100" />
+<img src="https://raw.githubusercontent.com/demiourgoi/Harold/refs/heads/main/harold-mcp/src/harold_mcp/assets/brand/Harold_logo.png" alt="Harold logo" width="100" />
 
 Harold MCP tools:
 
