@@ -68,3 +68,12 @@ def test_program_without_modules_loads_clean(pool: ProcessPoolExecutor) -> None:
     result = _diagnose(pool, "no_new_module.maude")
     assert result["ok"] is True
     assert result["warnings"] == []
+
+
+def test_module_redefinition_advisory_is_suppressed(pool: ProcessPoolExecutor) -> None:
+    """Reloading a program redefines its module; the `Advisory:` message is
+    suppressed at the source by `advise=False`, so the capture stays clean."""
+    assert _diagnose(pool, "hello.maude")["ok"] is True
+    result = _diagnose(pool, "hello.maude")
+    assert result["ok"] is True
+    assert result["warnings"] == []

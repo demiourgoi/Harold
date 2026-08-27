@@ -48,3 +48,9 @@ def test_ansi_colorized_warning_is_parsed() -> None:
 
 def test_empty_text_yields_no_warnings() -> None:
     assert _parse_warnings("") == []
+
+
+def test_advisory_lines_are_ignored() -> None:
+    """Advisories (e.g. module redefinitions) are suppressed by advise=False;
+    if one ever leaks into the capture, the parser must not treat it as a warning."""
+    assert _parse_warnings("Advisory: redefining module HELLO-WORLD.\n") == []
