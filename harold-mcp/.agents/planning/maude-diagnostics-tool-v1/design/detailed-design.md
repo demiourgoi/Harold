@@ -546,17 +546,20 @@ runs. No import cycle.
 ### 4.4 `harold_mcp/server/server.py` — lifespan and startup
 
 ```python
-@asynccontextmanager
-async def lifespan(server: FastMCP) -> AsyncIterator[None]:
-    executor = get_maude_executor()
-    executor.start()  # pool + warm-up pings; MaudeInitError fails startup
+from fastmcp.server.lifespan import lifespan
+
+
+@lifespan
+async def app_lifespan(server: FastMCP) -> AsyncGenerator[dict[str, Any] | None]:
+    executor = get_maude_executor(get_settings())
     try:
-        yield
+        executor.start()  # pool + warm-up pings; MaudeInitError fails startup
+        yield None
     finally:
         executor.shutdown()
 
 
-mcp = FastMCP(..., lifespan=lifespan)
+mcp = FastMCP(..., lifespan=app_lifespan)
 
 
 def run() -> None:
@@ -568,8 +571,19 @@ def run() -> None:
 - `greet` and its imports are removed.
 - The warm-up ping blocks the event loop briefly at startup (worker spawn + `maude` import
   + prelude load). Acceptable for v1; documented trade-off.
-- **Verification reminder** (from the research phase, §7.4): confirm the lifespan actually
-  fires on the stdio transport before relying on it.
+- **Signal handling** (verified on stdio, 2026-08-27 — final-testing reminder #2): FastMCP's
+  `mcp.run()` installs no signal handling, so `run()` registers a SIGTERM handler that
+  raises `KeyboardInterrupt`; the asyncio runner then cancels the server task, running the
+  lifespan's `finally` (pool teardown) before `run()` catches the `KeyboardInterrupt`. The
+  catch block calls `os._exit(0)`: FastMCP's stdio transport leaves a non-daemon worker
+  thread blocked reading stdin, and a normal interpreter shutdown would hang forever
+  joining it while the client is still connected. (SIGINT already behaves the same way via
+  the default `KeyboardInterrupt` handler.) Known cosmetic side effect: `os._exit` skips
+  multiprocessing's atexit cleanup, so the resource tracker may print a benign
+  "leaked semaphore objects" warning at shutdown. The lifespan follows the FastMCP docs
+  pattern: `@lifespan`-decorated `app_lifespan` async generator
+  (`from fastmcp.server.lifespan import lifespan`), avoiding the deprecated
+  `@asynccontextmanager` + `AsyncIterator` annotation.
 
 ### 4.5 Dependencies, docs, and README
 

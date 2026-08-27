@@ -237,3 +237,12 @@ Two quick verification items deferred from research, to be folded into the final
    `research/maude-bindings.md` §4.
 2. **FastMCP lifespan + `mcp.run()` interaction**: verify that lifespan startup/shutdown
    actually fires on the stdio transport before relying on it for pool warm-up/teardown.
+
+   **Verified 2026-08-27** (implemented in Step 5): the lifespan startup fires on stdio, but
+   FastMCP's `mcp.run()` installs no signal handling — on SIGTERM the process died without
+   running the lifespan teardown (orphaning the workers). Fixed in `server.run()`: a SIGTERM
+   handler raises `KeyboardInterrupt`, which cancels the server task and runs the lifespan
+   `finally`; the catch block then calls `os._exit(0)` because FastMCP's stdio transport
+   leaves a non-daemon worker thread blocked on stdin, which would hang a normal
+   interpreter shutdown. Verified end-to-end: warm-up logs at startup, teardown logs and
+   exit code 0 on SIGTERM.
