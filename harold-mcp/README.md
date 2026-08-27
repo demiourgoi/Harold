@@ -26,7 +26,11 @@ retrieval-augmented generation (RAG).
 
 ## Installation
 
-An installer is still to be developed. For now you need to download the code and run `make install`. 
+- Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+- Run `uvx harold-mcp --version`
+
+To update run `uvx harold-mcp@latest --version`.   
+If you want to run a specific version, check the release [history in pypi](https://pypi.org/project/harold-mcp/#history) use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.  
 
 Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE, using the command full path. 
 For example, for Zed add the following to `~/.config/zed/settings.json`:
@@ -36,7 +40,7 @@ For example, for Zed add the following to `~/.config/zed/settings.json`:
     "harold": {
       "enabled": true,
       "remote": false,
-      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "command": "uvx harold-mcp",
       "args": [],
       "env": {}
     }
@@ -51,7 +55,7 @@ for opencode (useful for automated testing) add the following to `~/.config/open
   "mcp" : {
     "harold": {
       "type": "local",
-      "command": ["/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp"],
+      "command": ["uvx harold-mcp"],
       "enabled": true,
       "environment": {}
     }
@@ -64,7 +68,7 @@ for Cline (useful for manual testing and Maude programming) add the following to
 ```json
   "mcpServers" : {
     "harold": {
-      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "command": "uvx harold-mcp",
       "args": [],
       "disabled": false,
       "autoApprove": [],
@@ -107,7 +111,8 @@ make run
 # uv run harold-mcp
 ```
 
-This will also generate your `uv.lock` file.
+This will also generate your `uv.lock` file.   
+Use the full path to `harold-mcp/.venv/bin/harold-mcp` on opencode or whatever agent harness you want to use, to run it locally. 
 
 #### Recommendations
 
@@ -137,6 +142,7 @@ description: Transforms a rough idea into a detailed design document, implementa
 One time setup:
 - Create an API Token on [PyPI](https://pypi.org/).
 - Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/demiourgoi/harold/settings/secrets/actions/new).
+- On https://github.com/demiourgoi/Harold/settings/pages enable GitHub pages with source "GitHub Actions". On https://github.com/demiourgoi/Harold/settings/environments the environment github-pages, on "Deployment branches and tags" use "Selected branches and tags" and add a rule for the tag patttern "*.*.*".
 
 __New release__ process:
 
