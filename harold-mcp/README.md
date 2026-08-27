@@ -7,7 +7,88 @@ Harold MCP tools:
 - **Github repository**: <https://github.com/demiourgoi/harold/>
 - **Documentation** <https://demiourgoi.github.io>
 
-## Development environment setup
+## What is this?
+
+`harold-mcp` is an MCP server that gives AI coding assistants tools for working with the Maude specification and verification language. 
+
+### Harold MCP Tools
+
+- **`maude_program_diagnostics(path)`** — diagnoses a Maude source file by loading it
+  into the Maude interpreter and reporting every problem it finds, including warnings
+  Maude can recover from. Returns a structured, LSP-style result: a `success` flag (true
+  only when the file loads with no warnings and no errors), per-severity counts, and one
+  diagnostic per problem with a 1-based line range (`range` is `null` for whole-file
+  problems). Use it to check whether a Maude program is well formed, and to get a list of
+  issues to fix.
+
+Planned tools: running Maude programs, and a vector index of the Maude documentation for
+retrieval-augmented generation (RAG).
+
+## Installation
+
+An installer is still to be developed. For now you need to download the code and run `make install`. 
+
+Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE, using the command full path. 
+For example, for Zed add the following to `~/.config/zed/settings.json`:
+
+```json
+  "context_servers": {
+    "harold": {
+      "enabled": true,
+      "remote": false,
+      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "args": [],
+      "env": {}
+    }
+  },
+  ...
+```
+
+for opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
+
+
+```json
+  "mcp" : {
+    "harold": {
+      "type": "local",
+      "command": ["/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp"],
+      "enabled": true,
+      "environment": {}
+    }
+  }
+```
+
+for Cline (useful for manual testing and Maude programming) add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
+
+
+```json
+  "mcpServers" : {
+    "harold": {
+      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "args": [],
+      "disabled": false,
+      "autoApprove": [],
+      "env": {}
+    }
+  }
+```
+
+For production, harold-mcp will be distributed as a Python package and run with `uvx`. 
+
+### Configuration
+
+The server is configured through environment variables (`HAROLD_*` prefix) set in the MCP server configuration:
+
+| Env var | Meaning | Default |
+| --- | --- | --- |
+| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Diagnostics run in parallel across workers; more workers use more memory (each creates its own Maude interpreter). | `1` |
+| `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Seconds to wait for each worker call before failing it as timed out. | `60` |
+
+Invalid values (e.g. `HAROLD_MAUDE_WORKERS=0`) make the server fail fast at startup.
+
+## Developer guide
+
+### Development environment setup
 
 Install the environment with
 
@@ -28,9 +109,10 @@ make run
 
 This will also generate your `uv.lock` file.
 
-### Recommendations
+#### Recommendations
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
+- Cline is great for debugging tool behaviour, because it displays the full JSON response from each tool call.
 - Setup the following agent skills:
   - `codebase-summary`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/codebase-summary.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
 
@@ -50,55 +132,7 @@ description: Transforms a rough idea into a detailed design document, implementa
 ---
 ```
 
-## How to run `harold-mcp`
-
-An installer is still to be developed. For now you need to download the code and run `make install`. 
-
-Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE, using the command full path. 
-For example, for Zed add the following to `~/.config/zed/settings.json`:
-
-```json
-  "context_servers": {
-    "harold": {
-      "enabled": true,
-      "remote": false,
-      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
-      "args": []
-    }
-  },
-  ...
-```
-
-for opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
-
-
-```json
-  "mcp" : {
-    "harold": {
-      "type": "local",
-      "command": ["/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp"],
-      "enabled": true
-    }
-  }
-```
-
-for Cline (useful for manual testing and Maude programming) add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
-
-
-```json
-  "mcpServers" : {
-    "harold": {
-      "command": "/home/juanrh/git/demiourgoi/Harold/harold-mcp/.venv/bin/harold-mcp",
-      "args": [],
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-```
-
-For production, harold-mcp will be distributed as a Python package and run with `uvx`. 
-
-## Releasing a new version
+### Releasing a new version
 
 - Create an API Token on [PyPI](https://pypi.org/).
 - Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/demiourgoi/harold/settings/secrets/actions/new).
@@ -106,7 +140,7 @@ For production, harold-mcp will be distributed as a Python package and run with 
 - Create a new tag in the form `*.*.*`.
 
 
-## References
+### References
 
 - Maude
   - [Maude manual](https://maude.lcc.uma.es/maude-manual/)
