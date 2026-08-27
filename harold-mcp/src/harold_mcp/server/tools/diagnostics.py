@@ -98,7 +98,7 @@ def maude_program_diagnostics(
     to fix when it is not.
 
     Args:
-        path: Path to the Maude source file to diagnose (typically `.maude`).
+        path: Absolute path to the Maude source file to diagnose (typically `.maude`).
 
     Returns:
         A structured result with `success` (true only when the file loaded
