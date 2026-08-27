@@ -578,12 +578,16 @@ def run() -> None:
   catch block calls `os._exit(0)`: FastMCP's stdio transport leaves a non-daemon worker
   thread blocked reading stdin, and a normal interpreter shutdown would hang forever
   joining it while the client is still connected. (SIGINT already behaves the same way via
-  the default `KeyboardInterrupt` handler.) Known cosmetic side effect: `os._exit` skips
-  multiprocessing's atexit cleanup, so the resource tracker may print a benign
-  "leaked semaphore objects" warning at shutdown. The lifespan follows the FastMCP docs
-  pattern: `@lifespan`-decorated `app_lifespan` async generator
-  (`from fastmcp.server.lifespan import lifespan`), avoiding the deprecated
-  `@asynccontextmanager` + `AsyncIterator` annotation.
+  the default `KeyboardInterrupt` handler.) **No OS resources are left hanging**: the workers
+  are killed in the lifespan `finally`, and the multiprocessing resource tracker (a
+  separate daemon) unlinks the remaining named semaphores itself when the parent dies —
+  the "leaked semaphore objects" warning it prints is it announcing that cleanup, not a
+  persistent leak (verified empirically: 0 lingering processes/semaphores after SIGTERM).
+  Caveat: a hard kill (SIGKILL) skips the lifespan, so workers then exit on their own via
+  the queue pipe breaking; `prctl(PR_SET_PDEATHSIG)` in the worker would close that gap
+  (future hardening). The lifespan follows the FastMCP docs pattern: `@lifespan`-decorated
+  `app_lifespan` async generator (`from fastmcp.server.lifespan import lifespan`),
+  avoiding the deprecated `@asynccontextmanager` + `AsyncIterator` annotation.
 
 ### 4.5 Dependencies, docs, and README
 
