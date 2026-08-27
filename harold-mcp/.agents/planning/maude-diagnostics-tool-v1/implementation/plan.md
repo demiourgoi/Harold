@@ -24,7 +24,7 @@ before committing (auto-fix fails CI).
 - [x] Step 1: Reorganize into packages, add `Settings` + errors, remove `greet`
 - [x] Step 2: Worker functions: capture + warning parsing (`maude/worker.py`)
 - [x] Step 3: `MaudeExecutor` wrapper with recovery (`maude/executor.py`)
-- [ ] Step 4: Result models + the `maude_program_diagnostics` tool, registered on `mcp`
+- [x] Step 4: Result models + the `maude_program_diagnostics` tool, registered on `mcp`
 - [ ] Step 5: Lifespan warm-up/shutdown and fail-fast startup
 - [ ] Step 6: End-to-end integration: fixtures, crash resilience, settings, MCP smoke test
 - [ ] Step 7: README, docs, knowledge base, and the two final-testing reminders
