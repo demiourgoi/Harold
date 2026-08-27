@@ -169,6 +169,17 @@ like `missing \x1b[35mis\x1b[0m keyword.`). The parser strips ANSI CSI escapes b
 matching. (The research-phase transcripts were plain because stderr was redirected to a file
 from process start.)
 
+**Additional findings (2026-08-27, Step 6)**:
+
+- More formats observed: `Warning: <file>, line 1: skipped: <byte>` and
+  `Warning: <file>, line 1: unable to locate file: <path>` (the latter accompanies
+  `maude.load` returning `False` for a missing file — though the tool pre-checks
+  existence, so it only reaches the worker via TOCTOU races).
+- **Binary input**: Maude recovers from arbitrary bytes too (`ok=True`, warnings echo the
+  skipped bytes). The capture tempfile must therefore be opened in **binary mode** and
+  decoded lossily (`errors="replace"`) — a text-mode tempfile crashed the worker with
+  `UnicodeDecodeError` when the file's bytes reached the warnings.
+
 ## 5. Key findings summary
 
 1. `advise=False` suppresses advisories, **not** warnings — warnings always print to stderr.

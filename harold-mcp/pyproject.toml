@@ -41,6 +41,7 @@ dev = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.6",
     "mkdocstrings[python]>=1.0.3",
+    "basedpyright>=1.39.10",
 ]
 
 [build-system]
@@ -63,6 +64,14 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = "maude"
 ignore_missing_imports = true
+
+[tool.basedpyright]
+# Minimal companion to mypy: enforce the unused-call-result check that Zed's
+# basedpyright reports (no ruff equivalent exists — B018 exempts function
+# calls). All other diagnostics are left to mypy.
+include = ["src"]
+typeCheckingMode = "off"
+reportUnusedCallResult = "error"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

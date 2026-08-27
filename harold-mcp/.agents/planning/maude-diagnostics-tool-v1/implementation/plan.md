@@ -26,7 +26,7 @@ before committing (auto-fix fails CI).
 - [x] Step 3: `MaudeExecutor` wrapper with recovery (`maude/executor.py`)
 - [x] Step 4: Result models + the `maude_program_diagnostics` tool, registered on `mcp`
 - [x] Step 5: Lifespan warm-up/shutdown and fail-fast startup
-- [ ] Step 6: End-to-end integration: fixtures, crash resilience, settings, MCP smoke test
+- [x] Step 6: End-to-end integration: fixtures, crash resilience, settings, MCP smoke test
 - [ ] Step 7: README, docs, knowledge base, and the two final-testing reminders
 
 > **Pending**: run `uv add pydantic` (pydantic is now a direct dependency — `pyproject.toml`
@@ -46,6 +46,14 @@ before committing (auto-fix fails CI).
 > old pool is torn down with `ProcessPoolExecutor.kill_workers()` (3.14); the
 > submit+await+recover loop is the generic `_run_task`; parallelism tests use slow
 > `worker.sleep` tasks (the executor only spawns a worker when none is idle).
+>
+> **Step 6 findings (2026-08-27)**: (1) the synthesized `error` path never fires with real
+> files — `maude.load` recovers from everything parseable (`ok=True`), so it is covered by
+> unit tests with a mocked `ok=False`; (2) binary files crashed the worker with
+> `UnicodeDecodeError` — fixed by capturing in **binary mode** and decoding lossily
+> (`errors="replace"`), with a regression test; (3) new warning formats documented in
+> `research/maude-bindings.md`; (4) MCP smoke test drives the real stdio server
+> (initialize → tools/list → tools/call) with a select-based read timeout.
 
 ---
 

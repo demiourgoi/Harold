@@ -11,6 +11,8 @@ check: ## Run code quality tools.
 	@uv run ruff format
 	@echo "🚀 Static type checking: Running mypy"
 	@uv run mypy
+	@echo "🚀 Checking unused call results: Running basedpyright"
+	@uv run basedpyright src
 	@echo "🚀 Checking for obsolete dependencies: Running deptry"
 	@uv run deptry src
 

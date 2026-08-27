@@ -112,7 +112,7 @@ def load_diagnostics(path: str) -> LoadDiagnosticsResult:
     # would break the "interpreter only lives in the worker" invariant (R17).
     import maude
 
-    with tempfile.TemporaryFile(mode="w+") as capture:
+    with tempfile.TemporaryFile(mode="w+b") as capture:
         saved_fd = os.dup(2)
         try:
             _ = os.dup2(capture.fileno(), 2)
@@ -121,7 +121,10 @@ def load_diagnostics(path: str) -> LoadDiagnosticsResult:
             _ = os.dup2(saved_fd, 2)
             os.close(saved_fd)
         _ = capture.seek(0)
-        captured_text = capture.read()
+        captured_bytes = capture.read()
+    # Maude writes raw C++ bytes (it may echo the file's contents into
+    # warnings); decode lossily so arbitrary input cannot crash the parser.
+    captured_text = captured_bytes.decode("utf-8", errors="replace")
     return {"ok": ok, "warnings": _parse_warnings(captured_text)}
 
 
