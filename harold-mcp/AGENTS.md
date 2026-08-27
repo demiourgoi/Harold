@@ -139,8 +139,11 @@ The use case for Harold is to use it with AI-assisted programming tools such as 
 ### Recommendations
 
 1. Add more tests as tools are implemented.
-2. After significant architecture changes:
-  1. Suggest the user to re-run the codebase-summary agent skill, so the knowledge base at `.agents/summary/` does not drift from the code. Document new modules in `docs/modules.md`
+2. After significant architecture or functionality changes:
+    1. Suggest the user to re-run the codebase-summary agent skill, so the knowledge base at `.agents/summary/` does not drift from the code. Document new modules in `docs/modules.md`
+    2. Record a summary of the new functionality on `CHANGELOG.md`
+    3. Review the user documentation on `README.md` is up to date. In particular check the list of tools and their description is accurate.
+    4. Suggest the user a minor increase on the project `version` on `pyproject.toml`. Also add a new section for the new version to `CHANGELOG.md`
 
 ### Running `make` commands from agent sandboxes
 
