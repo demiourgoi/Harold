@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.3]
+
 ## [0.0.2] - 2026-08-27
 
 First functional tool: `maude_program_diagnostics`.

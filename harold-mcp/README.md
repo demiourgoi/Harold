@@ -134,11 +134,24 @@ description: Transforms a rough idea into a detailed design document, implementa
 
 ### Releasing a new version
 
+One time setup:
 - Create an API Token on [PyPI](https://pypi.org/).
 - Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/demiourgoi/harold/settings/secrets/actions/new).
-- Create a [new release](https://github.com/demiourgoi/harold/releases/new) on Github.
-- Create a new tag in the form `*.*.*`.
 
+__New release__ process:
+
+1. Create a [new release](https://github.com/demiourgoi/harold/releases/new) on Github.
+    1. Set tag to a new tag in the form `*.*.*` for the current version on `pyproject.toml`, removing the ".dev0" suffix. Use "Create new tag on publish".
+    2. Set target to `main`. Note the [release GH workflow](https://github.com/demiourgoi/Harold/blob/main/.github/workflows/on-release-main.yml) will patch `pyproject.toml` to use the version specified in the previous step, irrespective of the versión that appears in the main branch
+    3. Use the `CHANGELOG.md` entry for that version for the release notes
+    4. Add the pre-release label as required, and any suitable binaries
+    5. Click "Publish release"
+    6. Watch it run under the **Actions** tab → `release-main`. Success means the package is on PyPI and docs are live. Confirm all went well on https://pypi.org/project/harold-mcp/
+2. New the version on `pyproject.toml` so the tip of main is the code for the next release, still WIP. Also add a new entry on CHANGELOG.md for the new version (without the  the ".dev0" suffix).
+
+Note:
+
+- PyPI versions are immutable — you can never re-upload or fix a released version. If a release fails after a partial publish, you must bump to `0.0.4` (or use a dev suffix).
 
 ### References
 
