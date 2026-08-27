@@ -23,7 +23,7 @@ _LOG = get_logger(__name__)
 
 
 @lifespan
-async def app_lifespan(server: FastMCP) -> AsyncGenerator[dict[str, Any] | None]:
+async def app_lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, Any] | None]:
     """Warm up the Maude worker pool at startup and tear it down at exit.
 
     Fails fast: if Maude cannot initialize in the worker, `MaudeInitError`
@@ -33,6 +33,7 @@ async def app_lifespan(server: FastMCP) -> AsyncGenerator[dict[str, Any] | None]
     executor = get_maude_executor(get_settings())
     try:
         executor.start()
+        _LOG.info("Harold initialized with success!")
         yield None
     finally:
         executor.shutdown()
