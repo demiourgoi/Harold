@@ -235,6 +235,13 @@ Two quick verification items deferred from research, to be folded into the final
    capture (module redefinitions → advisories, multi-line messages, `<standard input>`
    attribution) to harden the warning parser. Formats observed so far are in
    `research/maude-bindings.md` §4.
+
+   **Verified 2026-08-27** (Step 7): advisory suppression pinned by unit + integration
+   tests (redefinition of `HELLO-WORLD` → clean capture); `<standard input>` attribution
+   and multi-line-continuation handling covered by unit tests; two new formats found and
+   documented in `research/maude-bindings.md` (`skipped: <byte>` and
+   `unable to locate file: <path>`), plus binary-input robustness (lossy decode). No
+   parser gaps found.
 2. **FastMCP lifespan + `mcp.run()` interaction**: verify that lifespan startup/shutdown
    actually fires on the stdio transport before relying on it for pool warm-up/teardown.
 

@@ -7,77 +7,116 @@
 ### `harold_mcp.main`
 
 - **Responsibility**: CLI/stdio entry point for the MCP server.
-- `run() -> None` delegates to `server.run()`, which initializes Maude and runs the MCP server.
-- Executable directly (`if __name__ == "__main__"`) and exposed as the `harold-mcp` console script.
+- `run() -> None` delegates to `harold_mcp.server.run`. The `if __name__ == "__main__"`
+  guard is required: the `spawn`-context worker re-imports the main module.
+- Exposed as the `harold-mcp` console script.
 
-### `harold_mcp.server`
+### `harold_mcp.settings`
 
-- **Responsibility**: owns the MCP server and its tools. This is where new MCP tools should be registered (`@mcp.tool`), though their implementations are expected to live in `harold_mcp.tools` (see below).
-- Defines `mcp = FastMCP(name="Harold", ...)` — the single shared server instance, configured with:
-  - `instructions=` describing the three tool areas: diagnosing Maude programs, running Maude programs, and RAG over the Maude documentation.
-  - `website_url="https://demiourgoi.github.io"` and `icons=[HAROLD_ICON]`.
-- `run()` — logs startup, calls `init_maude()` (fail-fast at startup), then `mcp.run()`.
-- Registers the hello-world tool `greet(name: str) -> str` with `@mcp.tool`. `greet` gets the `MaudeRuntime` singleton via `get_runtime()`, loads Maude's built-in `NAT` module, parses the term `2 * 3`, reduces it, and returns the result as a string. (Note: the `name` parameter is currently accepted but unused.)
-- Cross-reference: `interfaces.md`.
+- **Responsibility**: application configuration, read once from `HAROLD_*` env vars.
+- `Settings(BaseSettings)` — flat model: `maude_workers: int` (default 1, `gt=0`),
+  `maude_worker_timeout_secs: int` (default 60, `gt=0`). Invalid values fail at import.
+- `settings` — module-level singleton; `get_settings() -> Settings` returns it (FastMCP
+  dependency factory). Env vars are documented in `README.md`.
 
-### `harold_mcp.maude`
+### `harold_mcp.server` (package)
 
-- **Responsibility**: safe access layer over the SWIG-generated `maude` Python bindings. The Maude interpreter is not thread-safe, so all access is serialized. See `.agents/planning/sigsegv-under-load/issue.md` for the design rationale (including why module wrappers are never cached).
-- **Error hierarchy** (all subclass `MaudeError(RuntimeError)`):
-  - `MaudeError` — base error for failures in the Maude runtime wrapper.
-  - `MaudeInitError` — raised when the interpreter fails to initialize.
-  - `MaudeLoadError` — raised when a program file fails to load; carries `program_path`.
-  - `MaudeModuleNotFoundError` — raised when a requested module is not loaded; carries `module_name`.
-- `init_maude() -> None` — initializes the interpreter exactly once per process. Double-checked locking on the module-level `_INIT_LOCK` and `_maude_initialized` flag; the flag is set only on success, so a failed init is retried on the next call. Calls `maude.init(advise=False)` to suppress advisories (e.g. `Advisory: redefining module X.`) on stderr.
-- `MaudeRuntime` — thread-safe facade over the interpreter:
-  - `_lock` — a `threading.RLock`; `_maude_locked()` context manager acquires it and ensures `init_maude()` ran.
-  - `get_module(module_name) -> Any` — returns a fresh wrapper for a loaded module; raises `MaudeModuleNotFoundError` if absent.
-  - `load_program(program_path) -> None` — loads (or reloads) a Maude program file, resolving the path to absolute; raises `MaudeLoadError` on failure. "Last load wins", so edits to a `.maude` file are picked up by the next call.
-  - `load_module(program_path, module_name) -> Any` — (re)loads the program, then returns a fresh wrapper for the module.
-- `get_runtime() -> MaudeRuntime` — returns the process-wide `_RUNTIME` singleton (no state cached; exists to share the interpreter lock across tool calls).
-- Cross-reference: `data_models.md` (types), `interfaces.md` (API).
+- **`__init__.py`** — re-exports `mcp` and `run` from `server.server`, and imports
+  `harold_mcp.server.tools` (tool registration as a package side effect).
+- **`server.py`** — the FastMCP instance and its lifecycle:
+  - `mcp = FastMCP(name="Harold", instructions=..., website_url=..., icons=[HAROLD_ICON], lifespan=app_lifespan)`.
+  - `app_lifespan` — `@lifespan`-decorated async generator: `get_maude_executor(
+    get_settings()).start()` (warm-up, fail-fast), teardown in `finally`.
+  - `run()` — registers a SIGTERM handler that raises `KeyboardInterrupt`, calls
+    `mcp.run()`, and on `KeyboardInterrupt` logs and calls `os._exit(0)` (see
+    `architecture.md` §5 for why).
+  - `_handle_shutdown_signal` — the SIGTERM→`KeyboardInterrupt` bridge.
+- **`tools/__init__.py`** — re-exports `maude_program_diagnostics`.
+- **`tools/diagnostics.py`** — the pydantic result models (see `data_models.md`) and the
+  `maude_program_diagnostics` tool (see `interfaces.md`): file pre-check → executor
+  `diagnostics` → tri-state mapping (warnings → LSP ranges; `ok=False` → synthesized
+  whole-file `error`; `success = ok and no warnings`; per-severity counts).
+
+### `harold_mcp.maude` (package)
+
+- **`__init__.py`** — re-exports the public API: error hierarchy, `MaudeExecutor`,
+  `get_maude_executor`. Importing the package never imports the SWIG `maude` bindings.
+- **`executor.py`** — the client-side access layer:
+  - Error hierarchy: `MaudeError(RuntimeError)` base; `MaudeInitError` (worker init
+    failure, surfaced at warm-up); `MaudeWorkerError(reason)` with
+    `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError` subclasses (messages defined in
+    the classes); `MaudeFileNotFoundError(path)` (input path missing/unreadable).
+  - `MaudeExecutor(Logging)` — wraps a `ProcessPoolExecutor` (spawn,
+    `initializer=worker.init_maude`): `start()` (warm-up pings, `MaudeInitError` on
+    failure), `shutdown()` (idempotent), `submit()` (raises `MaudeWorkerCrashedError` on a
+    broken pool, replaces it), `diagnostics(path)` (thin wrapper over `_run_task`), and
+    the generic `_run_task(fn, *args) -> T` runner (submit + await + crash/timeout
+    mapping). `_reset_executor(replace=True, failed=None)` is a pure command (CQS) that
+    swaps the pool under `_executor_lock` (an RLock) and kills the old pool with
+    `kill_workers()` outside the lock; the `failed` identity check makes concurrent
+    failure reports replace exactly once.
+  - `get_maude_executor(settings: Settings = Depends(get_settings)) -> MaudeExecutor` —
+    process-wide singleton, created lazily under a lock (nested FastMCP dependency).
+- **`worker.py`** — the interpreter side, pickled/spawn-imported by the worker process;
+  imports `maude` **lazily inside functions** so the server process never touches the
+  bindings (the absolute `import maude` is the third-party package, not this one):
+  - `init_maude()` — idempotent, `maude.init(advise=False)`, raises `WorkerInitError`.
+  - `ping()` — warm-up no-op. `sleep(seconds) -> int` — test/timeout support.
+  - `load_diagnostics(path) -> LoadDiagnosticsResult` — fd-2 capture around `maude.load`
+    (binary tempfile, lossy UTF-8 decode, ANSI CSI stripping, `Warning:` regex parsing).
+  - `_crash()` — test-only `os._exit(1)` (SIGSEGV analogue).
 
 ### `harold_mcp.resources`
 
-- **Responsibility**: packaging of static brand assets.
-- `HAROLD_RESOURCES` — the `importlib.resources` anchor for the package.
-- `HAROLD_LOGO_PATH` — path to `assets/brand/Harold_logo.png`.
-- `HAROLD_ICON` — an `mcp.types.Icon` built from the logo: `fastmcp.utilities.types.Image(path=...).to_data_uri()`, passed to the `FastMCP` constructor.
+- **Responsibility**: packaging of static brand assets. `HAROLD_ICON` — an `mcp.types.Icon`
+  built from `assets/brand/Harold_logo.png`, passed to the `FastMCP` constructor.
 
 ### `harold_mcp.logging`
 
-- **Responsibility**: logging utilities for the package.
-- Re-exports `get_logger` from `fastmcp.utilities.logging` and defines `Logging`, a base class exposing a `_log` property that returns a logger named after the concrete class.
-- Cross-reference: `data_models.md`.
-
-### `harold_mcp.tools`
-
-- **Responsibility**: planned home of the MCP tool implementations. Currently an **empty placeholder**.
-- The first planned tool is `maude_program_diagnostics` (diagnose a Maude source file by loading it), defined in `tools/diagnostics.py` and annotated with `@mcp.tool` on the `mcp` instance from `harold_mcp.server` — see `.agents/planning/maude-diagnostics-tool-v1/rough-idea.md`.
-
-### `harold_mcp.assets.brand`
-
-- Static asset directory containing `Harold_logo.png` (the server icon).
+- **Responsibility**: logging utilities. Re-exports `get_logger` from
+  `fastmcp.utilities.logging` and defines `Logging`, a base class exposing a `_log`
+  property (logger named after the concrete class). `MaudeExecutor` uses the mixin.
 
 ## Tests
 
-- `tests/unit/test_maude.py` — mocked unit tests for `harold_mcp.maude` (9 tests): `init_maude` calls `maude.init(advise=False)` exactly once, retries after an exception or a `False` return; `MaudeRuntime.get_module` initializes and delegates to `maude.getModule`, raises `MaudeModuleNotFoundError` for missing modules; `load_program` passes the resolved absolute path, raises `MaudeLoadError` on failure; `load_module` chains load + get; `get_runtime()` returns a singleton. An autouse fixture resets `_maude_initialized` between tests.
-- `tests/integration/test_maude_runtime.py` — real-interpreter tests (2):
-  - `get_module("NAT")` → `parseTerm("2 * 3")` → `reduce()` → `"Result = 6"`.
-  - `load_module` picks up a redefined module: `hello.maude` and `hello2.maude` both define `HELLO-WORLD` with `f = 1 * 2` and `f = 1 + 2` respectively (simulating an edit), and the fresh wrapper reduces `f` to `2` then `3`.
-- `tests/integration/fixtures/` — `hello.maude`, `hello2.maude` (used by the integration tests) and `broken-recoverable.maude`, `broken-non-recoverable.maude` (recoverable/non-recoverable parse errors; not referenced by tests yet, studied in `.agents/planning/maude-diagnostics-tool-v1/rough-idea.md` for the diagnostics tool).
+- `tests/unit/` (hermetic, mocked):
+  - `test_settings.py` — defaults, env overrides, case-insensitivity, invalid values.
+  - `test_maude_worker.py` — `_parse_warnings`: observed formats, ANSI stripping,
+    unmatched/advisory lines ignored.
+  - `test_maude_executor.py` — fake executors/futures: warm-up (success/fail), broken
+    submit, crash/timeout mapping + kill, exception propagation, exactly-once concurrent
+    replacement, singleton.
+  - `test_diagnostics.py` — fake executor: tri-state mapping, summary counts, `range=None`,
+    path echo, missing/unreadable file errors.
+- `tests/integration/` (real interpreter; distinct basenames to avoid pytest module-name
+  collisions):
+  - `test_maude_worker_integration.py` — `load_diagnostics` on the four fixtures +
+    advisory suppression on redefinition.
+  - `test_maude_executor_integration.py` — warm-up, fixtures, real `_crash` containment +
+    retry, two-worker parallelism via slow `sleep` tasks.
+  - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-pool drive.
+  - `test_diagnostics_integration.py` — the acceptance suite: tool-level fixtures, binary
+    file regression, crash recovery, and the MCP smoke test (real stdio server).
+- `tests/integration/fixtures/` — `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
+  (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude recovers
+  from everything parseable), `no_new_module.maude`.
 
 ## Planning docs (`.agents/planning/`)
 
-- `maude-diagnostics-tool-v1/` — PDD work for the first real MCP tool: `rough-idea.md` (goal, tool schema questions, experiments on detecting load failures), `idea-honing.md` (requirements Q&A), plus empty `design/`, `implementation/`, `research/` subdirectories.
-- `sigsegv-under-load/issue.md` — analysis of SIGSEGV issues in the `maude` Python bindings and the proposed `MaudeRuntime` design that `harold_mcp.maude` implements (also `scala-issue.md`, `issue.md.html`).
+- `maude-diagnostics-tool-v1/` — complete PDD cycle for the first tool:
+  `rough-idea.md`, `idea-honing.md` (Q&A + amendments + verified final-testing reminders),
+  `research/` (six notes; `logging.md` superseded), `design/detailed-design.md`,
+  `implementation/plan.md` (7 steps, checklist ticked), `summary.md`.
+- `sigsegv-under-load/issue.md` — analysis of SIGSEGV issues in the `maude` Python
+  bindings, which motivated the worker-process architecture.
 
 ## Docs
 
-- `docs/` — MkDocs sources (see `workflows.md` and `dependencies.md` for the toolchain).
-- `docs/modules.md` — mkdocstrings entry point; currently renders `harold_mcp.server` and `harold_mcp.maude`. New modules must be added here to appear in the rendered docs.
+- `docs/` — MkDocs sources; `docs/modules.md` renders `harold_mcp.server.server`,
+  `harold_mcp.server.tools.diagnostics`, `harold_mcp.maude.executor`,
+  `harold_mcp.maude.worker`, `harold_mcp.settings` via mkdocstrings.
 
 ## Related documents
 
-- `architecture.md` — module dependency graph
+- `architecture.md` — module dependency graph and architectural decisions
 - `interfaces.md` — public surface of these components

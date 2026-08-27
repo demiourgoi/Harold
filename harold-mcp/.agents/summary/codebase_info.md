@@ -21,7 +21,7 @@
 - **Layout**: `src` layout; the importable package is `src/harold_mcp`
 - **Build backend**: hatchling (`[build-system]` in `pyproject.toml`)
 - **Package name on PyPI**: `harold-mcp` (planned distribution via `uvx`)
-- **Subpackages**: `harold_mcp.tools/` exists but is currently an empty placeholder — the planned home of the MCP tools (see `.agents/planning/maude-diagnostics-tool-v1/`)
+- **Subpackages**: `harold_mcp.server` (FastMCP instance + tools) and `harold_mcp.maude` (worker executor + worker-side code), plus the `harold_mcp.settings` module.
 
 ## Dependency management
 
@@ -31,14 +31,17 @@
 ## Runtime dependencies
 
 - `fastmcp>=3.4.7` — the framework used to build the MCP server
-- `maude>=1.6.0` — Python bindings for the Maude system
-- `mcp>=1.29.0` — the official MCP Python SDK (types, transports)
+- `maude>=1.6.0` — Python bindings for the Maude system (loaded only in the worker process)
+- `mcp>=1.29.0` — the official MCP Python SDK (types such as `ToolAnnotations`)
+- `pydantic>=2.13.4` — data models and validation
+- `pydantic-settings>=2.15.0` — configuration from `HAROLD_*` env vars
 
 ## Dev dependencies (dev group)
 
 - `pytest`, `pytest-cov` — testing and coverage
 - `ruff` — linter and formatter
-- `mypy` — static type checking
+- `mypy` — primary static type checker
+- `basedpyright` — minimal companion check (unused call results only)
 - `deptry` — dependency hygiene (unused/missing/misplaced dependencies)
 - `tox-uv` — test matrix across Python versions
 - `mkdocs`, `mkdocs-material`, `mkdocstrings[python]` — documentation
@@ -46,7 +49,7 @@
 ## Entry point
 
 - Console script `harold-mcp` → `harold_mcp.main:run` (defined in `pyproject.toml` `[project.scripts]`)
-- Runs an MCP server over stdio.
+- Runs an MCP server over stdio, with the Maude interpreter in a dedicated worker process.
 
 ## Related documents
 

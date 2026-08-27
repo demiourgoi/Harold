@@ -27,7 +27,7 @@ before committing (auto-fix fails CI).
 - [x] Step 4: Result models + the `maude_program_diagnostics` tool, registered on `mcp`
 - [x] Step 5: Lifespan warm-up/shutdown and fail-fast startup
 - [x] Step 6: End-to-end integration: fixtures, crash resilience, settings, MCP smoke test
-- [ ] Step 7: README, docs, knowledge base, and the two final-testing reminders
+- [x] Step 7: README, docs, knowledge base, and the two final-testing reminders
 
 > **Pending**: run `uv add pydantic` (pydantic is now a direct dependency — `pyproject.toml`
 > is already edited) so `uv.lock` is in sync and `make check` passes end-to-end.

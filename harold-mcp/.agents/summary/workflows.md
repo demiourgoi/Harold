@@ -6,37 +6,52 @@
 
 1. `make install` — `uv sync`, creates the environment and refreshes `uv.lock`.
 2. Edit code under `src/harold_mcp` (tests under `tests/`).
-3. `make check` — lockfile consistency (`uv lock --locked`), ruff (lint fails if any auto-fix is applied), ruff format, mypy, deptry.
+3. `make check` — lockfile consistency (`uv lock --locked`), ruff (lint fails if any
+   auto-fix is applied) + ruff format, mypy, **basedpyright** (unused call results), deptry.
 4. `make test` — pytest with coverage (`--cov --cov-config=pyproject.toml`).
-5. `make release` — full CI pass (`install check test docs-test`), then prints a success message.
+5. `make release` — full CI pass (`install check test docs-test`), then prints a success
+   message.
 
 ## Running the server
 
 - Development: `make run` (or `uv run harold-mcp`) — serves MCP over stdio.
-- Connect an MCP client (Zed, opencode, Cline) to the `harold-mcp` command; configuration examples live in `README.md`.
-- Production distribution will be via `uvx` (Python package on PyPI).
+- Startup: lifespan warm-up pings the Maude worker (fail-fast on init failure).
+- Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
+  lifespan; workers then exit on their own via the queue pipe).
+- Connect an MCP client (Zed, opencode, Cline) to the `harold-mcp` command; configuration
+  examples and the `HAROLD_*` env-var table live in `README.md`.
 
 ## Tool execution flow
 
 ```mermaid
 flowchart TD
-    A[harold-mcp console script] --> B[harold_mcp.main.run]
-    B --> C[harold_mcp.server.run]
-    C --> D[init_maude<br>once per process, fail-fast]
-    D --> E[mcp.run<br>MCP over stdio]
-    E --> F[tool call: greet]
-    F --> G[get_runtime.get_module NAT<br>RLock-serialized]
-    G --> H[parse 2 * 3 / reduce]
-    H --> I[return Result string]
+    A[harold-mcp console script] --> B[main.run]
+    B --> C[server.run<br>SIGTERM handler installed]
+    C --> D[mcp.run enters lifespan]
+    D --> E[MaudeExecutor.start<br>pool warm-up, fail-fast]
+    E --> F[MCP over stdio]
+    F --> G[tool call maude_program_diagnostics path]
+    G --> H{file exists and readable}
+    H -->|no| I[MaudeFileNotFoundError isError]
+    H -->|yes| J[MaudeExecutor.diagnostics]
+    J --> K[worker load_diagnostics<br>fd-2 capture, parse warnings]
+    K --> L[tri-state mapping to result model]
+    L --> M[structuredContent plus JSON text]
+    F --> N[SIGTERM]
+    N --> O[lifespan finally kills pool]
+    O --> P[os._exit 0]
 ```
 
-## Loading a Maude program (planned tool pattern)
+## Worker crash recovery
 
 ```mermaid
 flowchart TD
-    A[program path] --> B[MaudeRuntime.load_program<br>resolve path, last load wins]
-    B --> C[get_module name<br>fresh wrapper, never cached]
-    C --> D[parse / reduce / inspect module]
+    A[worker dies mid-task] --> B[BrokenProcessPool on future]
+    B --> C[MaudeWorkerCrashedError<br>pool replaced eagerly]
+    C --> D[client retries tool call]
+    D --> E[fresh worker serves the call]
+    F[submit on known-broken pool] --> G[replace pool, raise MaudeWorkerCrashedError]
+    G --> D
 ```
 
 ## Documentation workflow
@@ -47,7 +62,10 @@ flowchart TD
 
 ## Planning workflow
 
-- Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/` with `rough-idea.md` and `idea-honing.md`); design rationale for existing code (e.g. `MaudeRuntime`) is recorded in `issue.md` files there too. Consult these before implementing a planned feature.
+- Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`
+  with `rough-idea.md`, `idea-honing.md`, `research/`, `design/`, `implementation/`).
+  Design rationale for existing code is recorded there too (e.g.
+  `sigsegv-under-load/issue.md`). Consult these before implementing a planned feature.
 
 ## Packaging and release
 
@@ -56,7 +74,9 @@ flowchart TD
 
 ## Cross-environment testing
 
-- `tox` — runs the test suite on Python 3.14 (single env `py314` in `tox.ini`). The CI workflows themselves live at the Git repository root (`../.github/workflows/` relative to this package directory).
+- `tox` — runs the test suite on Python 3.14 (single env `py314` in `tox.ini`). The CI
+  workflows themselves live at the Git repository root (`../.github/workflows/` relative
+  to this package directory).
 
 ## Related documents
 

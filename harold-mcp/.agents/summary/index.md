@@ -11,36 +11,38 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **What stack/dependencies are in play, and what are their constraints?** → `dependencies.md`, `codebase_info.md`
 - **What data structures/types exist?** → `data_models.md`
 - **What are the known gaps or inconsistencies?** → `review_notes.md`
-- **Why is `harold_mcp.maude` designed this way?** → `.agents/planning/sigsegv-under-load/issue.md` (design rationale)
-- **What is planned next (Maude diagnostics tool)?** → `.agents/planning/maude-diagnostics-tool-v1/`
+- **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale)
+- **What is planned next (run tool, RAG index)?** → `.agents/planning/maude-diagnostics-tool-v1/`
 
 ## Table of contents
 
 | File | Content | Consult when… |
 | --- | --- | --- |
 | [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, layout, dependency management, entry point | you need basic facts about the project (language, versions, tooling) |
-| [`architecture.md`](architecture.md) | Module layering and dependency graph (with Mermaid diagrams) | you need the big picture of how modules relate |
-| [`components.md`](components.md) | Per-module responsibilities (`main`, `server`, `maude`, `resources`, `logging`, `tools`, assets, tests, docs, planning) | you need to know what a specific module does or where to add code |
-| [`interfaces.md`](interfaces.md) | MCP tools, console script, internal Python API (`MaudeRuntime`), import-time side effects | you need the public surface or must call/register a tool |
-| [`data_models.md`](data_models.md) | Domain models (`MaudeError` hierarchy), framework types in use, typing conventions | you need the type landscape or must add a model |
-| [`workflows.md`](workflows.md) | Dev loop, running the server, docs, packaging, release, tool execution flow | you need to know how to develop, test, or ship |
-| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints | you plan to add, upgrade, or reason about a dependency |
+| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker), module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
+| [`components.md`](components.md) | Per-module responsibilities (`main`, `settings`, `server` package, `maude` package, `resources`, `logging`, tests, docs, planning) | you need to know what a specific module does or where to add code |
+| [`interfaces.md`](interfaces.md) | MCP tool surface, console script, env-var config, internal Python API (`MaudeExecutor`, worker ops), import-time side effects | you need the public surface or must call/register a tool |
+| [`data_models.md`](data_models.md) | Tool result models, worker protocol TypedDicts, the `MaudeError` hierarchy, framework types, typing conventions | you need the type landscape or must add a model |
+| [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution, crash recovery, docs, packaging, release | you need to know how to develop, test, or ship |
+| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role) | you plan to add, upgrade, or reason about a dependency |
 | [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations | you hit an inconsistency or want to improve the docs |
 
 ## Relationships between documents
 
 - `architecture.md` (structure) ↔ `components.md` (responsibilities) ↔ `interfaces.md` (surfaces)
 - `codebase_info.md` (facts) ↔ `dependencies.md` (constraints) ↔ `workflows.md` (usage)
-- `data_models.md` documents the types defined in `maude.py`, whose behavior lives in `components.md`
+- `data_models.md` documents the types defined in `tools/diagnostics.py` and `maude/executor.py`, whose behavior lives in `components.md`
 - `review_notes.md` cross-references every file it flags as incomplete.
 
 ## Example queries
 
-- "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server` (the planned diagnostics tool goes in `harold_mcp.tools` per `.agents/planning/maude-diagnostics-tool-v1/rough-idea.md`), then `interfaces.md` for the `@mcp.tool` pattern.
-- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (lazy init; fail-fast in `server.run()`); `components.md` → `harold_mcp.maude` for `init_maude()` semantics.
-- "How do I load a Maude program and get its module?" → `interfaces.md` → `MaudeRuntime.load_module` / `load_program`.
+- "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server` package (tools live in `server/tools/`, registered via `server/__init__.py`), then `interfaces.md` for the `@mcp.tool` + `Depends` pattern.
+- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
+- "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
+- "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.
 - "Can I use Python 3.12 syntax here?" → `codebase_info.md` → language floor is 3.14.
-- "Why doesn't `MaudeRuntime` cache module wrappers?" → `.agents/planning/sigsegv-under-load/issue.md` and `components.md` → `harold_mcp.maude`.
+- "Why `os._exit(0)` in `server.run()`?" → `architecture.md` → graceful SIGTERM; `review_notes.md` → remaining issue 3.
+- "How do I add a worker op?" → `components.md` → `harold_mcp.maude.worker` + `MaudeExecutor._run_task`.
 
 ## Consolidated file
 

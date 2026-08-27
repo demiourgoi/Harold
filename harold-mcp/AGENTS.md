@@ -25,9 +25,10 @@ If AGENTS.md doesn't answer your question, open [`.agents/summary/index.md`](.ag
 
 <!-- tags: overview, stack -->
 
-- **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Today it is a hello-world skeleton: a single `greet` tool, plus a thread-safe `MaudeRuntime` wrapper over the Maude interpreter. An empty `harold_mcp.tools` subpackage is the planned home of the real tools.
-- **Stack**: Python ≥ 3.14, built with **FastMCP** (the MCP framework), the official **MCP SDK** (`mcp`), and the **Maude bindings** (`maude`). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
-- **Lazy Maude init**: importing `harold_mcp.server` does **not** initialize Maude. Init happens lazily via `init_maude()` in `harold_mcp.maude` (lock-guarded, once per process, retried on failure), and eagerly in `server.run()` before `mcp.run()` so the server fails fast at startup. Importing still constructs the global `mcp = FastMCP(...)` instance.
+- **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Its first real tool is `maude_program_diagnostics`: it loads a Maude source file into the interpreter and reports every problem, including recoverable warnings, as a structured LSP-style result.
+- **Architecture**: two processes. The **MCP server** (FastMCP, threaded) never imports the `maude` SWIG bindings; the **Maude worker** (spawned via `ProcessPoolExecutor`, single-threaded, `initializer=init_maude`) owns the interpreter, captures its stderr (where `Warning:` lines go), and parses them. The split gives stderr isolation for the capture and SIGSEGV containment.
+- **Stack**: Python ≥ 3.14, built with **FastMCP**, the official **MCP SDK** (`mcp`), the **Maude bindings** (`maude`), **pydantic** + **pydantic-settings**. Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
+- **Configuration**: `HAROLD_MAUDE_WORKERS` (default `1`) and `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` (default `60`), read once at import via `pydantic-settings` (`harold_mcp.settings`).
 
 See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.agents/summary/dependencies.md`](.agents/summary/dependencies.md).
 
@@ -41,25 +42,28 @@ graph TB
     R --> T[tests/<br>unit + integration]
     R --> D[docs/<br>MkDocs + mkdocstrings]
     R --> A2[.agents/<br>planning + summary]
-    S --> M[main.py<br>server.py<br>maude.py<br>resources.py<br>logging.py]
-    S --> TO[tools/<br>empty placeholder]
+    S --> F[main.py<br>settings.py<br>logging.py<br>resources.py]
+    S --> SRV[server/<br>FastMCP instance + tools]
+    SRV --> TO[tools/diagnostics.py<br>models + maude_program_diagnostics]
+    S --> MD[maude/<br>executor.py client<br>worker.py worker side]
     S --> A[assets/brand/<br>Harold_logo.png]
     R --> C[pyproject.toml<br>Makefile<br>tox.ini<br>mkdocs.yml<br>uv.lock]
 ```
 
-- New application code goes in `src/harold_mcp` (src layout, flat modules); MCP tool implementations go in `harold_mcp/tools/` and are registered with `@mcp.tool` on the server instance.
-- New tests go in `tests/unit/` (mocked, hermetic) or `tests/integration/` (real Maude interpreter).
+- New application code goes in `src/harold_mcp`; MCP tools go in `harold_mcp/server/tools/`, registered with `@mcp.tool` on the instance from `harold_mcp.server.server` (registration happens as a side effect of importing the `harold_mcp.server` package).
+- New tests go in `tests/unit/` (mocked, hermetic) or `tests/integration/` (real Maude interpreter; give test files distinct basenames — pytest treats same-named files in both trees as one module).
 - Feature plans and design rationale live in `.agents/planning/` (see below).
 
 ## Key entry points
 
 <!-- tags: entry-points -->
 
-- Console script **`harold-mcp`** → `harold_mcp.main:run` (`src/harold_mcp/main.py`); starts the MCP server over stdio.
-- **`src/harold_mcp/server.py`** — the heart of the app: `mcp = FastMCP(name="Harold", ...)` (with `instructions`, `website_url`, icon), `run()` (initializes Maude via `init_maude()`, then calls `mcp.run()`), and tool registration via `@mcp.tool`. Current tool: `greet(name: str) -> str`, which reduces `2 * 3` in Maude's `NAT` module (`name` is accepted but unused — placeholder behavior).
-- **`src/harold_mcp/maude.py`** — safe access layer over the SWIG `maude` bindings: `init_maude()` (once per process, retried on failure), `MaudeRuntime` (RLock-serialized `get_module` / `load_program` / `load_module`, no wrapper caching), `get_runtime()` singleton, and the `MaudeError` hierarchy. Design rationale: [`.agents/planning/sigsegv-under-load/issue.md`](.agents/planning/sigsegv-under-load/issue.md).
-- **`src/harold_mcp/resources.py`** — packaged brand icon (`HAROLD_ICON`) used by the server.
-- **`src/harold_mcp/logging.py`** — `get_logger` re-export and the `Logging` base class (`_log` property).
+- Console script **`harold-mcp`** → `harold_mcp.main:run` (`src/harold_mcp/main.py`); starts the MCP server over stdio. `main.py`'s `__main__` guard is required (the `spawn`-context worker re-imports the main module).
+- **`src/harold_mcp/server/server.py`** — the `mcp = FastMCP(..., lifespan=app_lifespan)` instance; the `@lifespan`-decorated `app_lifespan` warms up the worker pool (fail-fast on `MaudeInitError`) and tears it down in `finally`; `run()` installs a SIGTERM→`KeyboardInterrupt` handler and calls `os._exit(0)` after cleanup (FastMCP's stdio transport leaves a non-daemon stdin-reader thread that would hang interpreter shutdown).
+- **`src/harold_mcp/server/tools/diagnostics.py`** — the tool and its pydantic result models (`MaudeProgramDiagnosticsResult` etc.): file pre-check → executor call → tri-state mapping (`success` = no warnings and no errors; `range=None` for whole-file problems).
+- **`src/harold_mcp/maude/executor.py`** — the client: error hierarchy, `MaudeExecutor` (pool lifecycle, warm-up pings, generic `_run_task` with crash/timeout recovery via `kill_workers`), `get_maude_executor(settings=Depends(get_settings))` lazy singleton.
+- **`src/harold_mcp/maude/worker.py`** — worker-side ops (`init_maude`, `ping`, `sleep`, `load_diagnostics` with fd-2 capture + ANSI-stripping warning parser, `_crash`). Imports `maude` **lazily inside functions** so the server process never touches the bindings.
+- **`src/harold_mcp/settings.py`** — `Settings` (pydantic-settings, `HAROLD_` prefix) + `get_settings()`.
 
 See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents/summary/components.md`](.agents/summary/components.md).
 
@@ -67,16 +71,18 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 
 <!-- tags: conventions, gotchas -->
 
-1. **No import-time Maude init**: importing `harold_mcp.server` builds the server instance but does **not** initialize Maude. Init happens lazily (`init_maude()` in `harold_mcp.maude`, guarded by a lock and `_maude_initialized` flag; failures are retried on the next call) and eagerly in `server.run()` before `mcp.run()`, so the server fails fast at startup if Maude cannot initialize. Keep heavy logic out of import time.
-2. **All Maude access goes through `MaudeRuntime`**: the interpreter is not thread-safe, so `get_module` / `load_program` / `load_module` serialize access on a reentrant lock. Never call `maude.*` functions directly from tool code; use `get_runtime()`.
-3. **Module wrappers are never cached**: loading a program may redefine its modules, so `MaudeRuntime` always fetches fresh wrappers ("last load wins"). Caching wrappers caused a SIGSEGV failure mode documented in `.agents/planning/sigsegv-under-load/issue.md`.
-4. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate all functions and methods. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are effectively `Any` to mypy.
-5. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`, so any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
-6. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled.
-7. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
-8. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. Unit tests live in `tests/unit/` (mocked); integration tests live in `tests/integration/` (real Maude interpreter, fixtures in `tests/integration/fixtures/`).
-9. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
-10. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
+1. **The server process never imports `maude`.** Only the worker touches the interpreter. `worker.py` keeps the import lazy; keep it that way (the absolute `import maude` is the third-party package, not `harold_mcp.maude`).
+2. **Worker lifecycle is the lifespan's job.** The pool starts in `app_lifespan` (warm-up pings, fail-fast) and is killed in its `finally` (`ProcessPoolExecutor.kill_workers()`, Python 3.14). `start()` is not called at import time.
+3. **Crash/timeout recovery semantics.** `MaudeExecutor._run_task` maps `BrokenProcessPool`/`TimeoutError` to `MaudeWorkerCrashedError`/`MaudeWorkerTimeoutError`, replaces the pool exactly once (identity check under `_executor_lock`, an RLock), and never auto-retries the failed call — diagnostics is idempotent, the MCP client retries. A timed-out worker must be killed (`kill_workers`); `shutdown()` cannot stop a hung `maude.load`.
+4. **FastMCP DI and lint**: `Depends(...)` defaults need `# noqa: B008`; the `@lifespan` decorator replaces the deprecated `@asynccontextmanager` + `AsyncIterator` annotation (yield `None`, annotate `AsyncGenerator[dict[str, Any] | None]`).
+5. **Strict typing is enforced**: mypy runs with `disallow_untyped_defs = true` — annotate everything. The `maude` package has no type stubs (mypy override `ignore_missing_imports`), so Maude values are `Any`; narrow boundaries explicitly (`bool(...)`, `cast`). basedpyright additionally enforces **unused call results** (`reportUnusedCallResult`) — mark intentional discards with `_ = ...`.
+6. **Ruff auto-fix fails CI**: `make check` runs `ruff check --exit-non-zero-on-fix`; any lint issue ruff could auto-fix fails the check. Run `uv run ruff check` and `uv run ruff format` before committing.
+7. **Style floor**: Python 3.14 (`target-version = "py314"`), line length 120 (`E501` ignored), `ruff format` with preview enabled (PEP 758 `except A, B:` is valid).
+8. **Use `uv`, not raw pip**: all commands go through `uv run` / `uv sync`. After changing dependencies, run `uv lock` and commit `uv.lock`; `make check` verifies sync via `uv lock --locked`.
+9. **Tests run with coverage flags**: `make test` invokes pytest with `--cov --cov-config=pyproject.toml --cov-report=xml`; tox adds `--doctest-modules tests`. Unit tests live in `tests/unit/` (mocked); integration tests live in `tests/integration/` (real interpreter and, in the smoke test, the real stdio server; fixtures in `tests/integration/fixtures/`).
+10. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
+11. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
+12. **Empirical Maude facts** (see `.agents/planning/maude-diagnostics-tool-v1/research/maude-bindings.md`): `maude.load` returns `True` for every parseable input (even 12-warning garbage and binary files) — the synthesized `error` path only fires for missing files, which the tool pre-checks away; warnings are colorized with ANSI escapes when stderr is a TTY at init time; capture in binary mode and decode lossily.
 
 ## Repo-specific commands
 
@@ -87,26 +93,26 @@ All commands are `Makefile` targets that wrap `uv` (repo-specific wrappers, not 
 | Command | Purpose |
 | --- | --- |
 | `make install` | `uv sync` — create/refresh the environment |
-| `make check` | lockfile sync, ruff (lint + format), mypy, deptry |
+| `make check` | lockfile sync, ruff (lint + format), mypy, basedpyright (unused call results), deptry |
 | `make test` | pytest with coverage |
 | `make release` | full CI pass: `install check test docs-test` |
 | `make run` | start the MCP server over stdio |
 | `make docs` / `make docs-test` | serve docs / strict docs build |
 | `make build` / `make publish` | build wheel / upload to PyPI |
 
-Setup and IDE-configuration details (Zed, opencode, Cline) live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`.
+Setup and IDE-configuration details (Zed, opencode, Cline) and the `HAROLD_*` env-var table live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`.
 
 ## Config files agents might miss
 
 <!-- tags: config -->
 
-- **`pyproject.toml`** — single source of tool config: ruff, mypy, pytest, coverage, deptry inputs, console script, dependencies.
+- **`pyproject.toml`** — single source of tool config: ruff, mypy, **basedpyright** (`reportUnusedCallResult` only, everything else off), pytest, coverage, deptry inputs, console script, dependencies.
 - **`tox.ini`** — single-version test env (`py314`). The GitHub Actions workflows themselves live at the repository root (`../.github/workflows/` relative to this package directory).
 - **`mkdocs.yml`** — docs site config; nav lists `docs/index.md` and `docs/modules.md`.
 - **`uv.lock`** — committed lockfile; regenerate after dependency changes.
 - **`Makefile`** — the canonical dev command surface (see commands above).
 - **`.agents/summary/`** — committed knowledge base (routing index plus detailed docs). Trust it as an index into the codebase; refresh it after significant changes.
-- **`.agents/planning/`** — committed design/planning docs: `maude-diagnostics-tool-v1/` (first planned MCP tool, `maude_program_diagnostics`) and `sigsegv-under-load/issue.md` (design rationale for `harold_mcp.maude`). Consult before implementing planned features.
+- **`.agents/planning/`** — committed design/planning docs: `maude-diagnostics-tool-v1/` (the complete PDD cycle for `maude_program_diagnostics`: requirements, research, design, implementation plan) and `sigsegv-under-load/issue.md` (SIGSEGV history that motivated the worker architecture). Consult before implementing planned features.
 
 ## Custom Instructions
 
@@ -133,7 +139,8 @@ The use case for Harold is to use it with AI-assisted programming tools such as 
 ### Recommendations
 
 1. Add more tests as tools are implemented.
-2. Suggest the user to re-run the codebase-summary agent skill after significant architecture changes, so the knowledge base at `.agents/summary/` does not drift from the code. Document new modules in `docs/modules.md`
+2. After significant architecture changes:
+  1. Suggest the user to re-run the codebase-summary agent skill, so the knowledge base at `.agents/summary/` does not drift from the code. Document new modules in `docs/modules.md`
 
 ### Running `make` commands from agent sandboxes
 

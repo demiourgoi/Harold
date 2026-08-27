@@ -7,57 +7,95 @@
 ### MCP server (stdio)
 
 - **Transport**: stdio (FastMCP default via `mcp.run()`).
-- **Server name**: `Harold`, with the packaged logo as icon, `website_url="https://demiourgoi.github.io"`, and `instructions` describing the tool areas (diagnose, run, RAG over Maude docs).
+- **Server name**: `Harold`, with the packaged logo as icon,
+  `website_url="https://demiourgoi.github.io"`, and `instructions` describing the tool
+  areas (diagnose, run, RAG over Maude docs).
 - **Tools**:
-  - `greet(name: str) -> str` — hello-world tool; loads Maude module `NAT`, parses `2 * 3`, reduces it, and returns `Result = <term>`. (`name` is accepted but unused.)
+  - `maude_program_diagnostics(path: str) -> MaudeProgramDiagnosticsResult` — loads the
+    Maude source file at `path` into the interpreter (in the worker process) and reports
+    every problem, including recoverable warnings. Input schema is exactly `{path: str}`
+    (the executor is injected via `Depends`, excluded from the schema). Annotated
+    `readOnlyHint=True`. Missing/unreadable files raise `MaudeFileNotFoundError` →
+    `isError`; worker crashes/timeouts raise `MaudeWorkerCrashedError` /
+    `MaudeWorkerTimeoutError` → `isError` (the MCP client retries; the pool is replaced).
+    The docstring is the MCP tool description. Loading mutates interpreter state
+    ("last load wins"), documented in the description.
 
 ```mermaid
 sequenceDiagram
-    participant C as MCP client<br>(IDE / AI agent)
-    participant S as harold_mcp.server<br>(FastMCP over stdio)
-    participant R as harold_mcp.maude<br>(MaudeRuntime)
-    participant M as Maude interpreter<br>(SWIG bindings)
-    C->>S: tool call: greet(name)
-    S->>R: get_runtime().get_module("NAT")
-    R->>M: getModule("NAT")<br>(serialized on RLock)
-    M-->>R: module wrapper
-    R-->>S: module
-    S->>M: parseTerm("2 * 3") / reduce()
-    M-->>S: reduced term
-    S-->>C: "Result = 6"
+    participant C as MCP client
+    participant F as FastMCP server
+    participant T as diagnostics tool
+    participant P as MaudeExecutor
+    participant W as Maude worker
+    C->>F: tools/call maude_program_diagnostics path
+    F->>T: run tool, inject executor via Depends
+    T->>T: pre-check file exists and readable
+    T->>P: diagnostics path
+    P->>W: run load_diagnostics task
+    W->>W: redirect fd 2 to tempfile, maude.load, parse warnings
+    W-->>P: ok and warnings dict
+    P-->>T: result
+    T-->>F: MaudeProgramDiagnosticsResult
+    F-->>C: structuredContent plus JSON text
 ```
 
 ### Console script
 
 - **`harold-mcp`** → `harold_mcp.main:run` (declared in `pyproject.toml` `[project.scripts]`).
-- Intended for installation as a command for MCP clients (Zed, opencode, Cline configuration examples live in `README.md`).
+- On startup the lifespan warms up the worker pool (fail-fast on `MaudeInitError`); on
+  SIGTERM the server tears the pool down and exits 0.
+- Intended for installation as a command for MCP clients (Zed, opencode, Cline
+  configuration examples live in `README.md`).
+
+### Configuration (env vars)
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `HAROLD_MAUDE_WORKERS` | `1` | number of Maude worker processes |
+| `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | `60` | per-call timeout in seconds |
+
+Invalid values fail fast at import (pydantic validation).
 
 ## Internal Python interfaces
 
-- `harold_mcp.server.mcp` — the shared `FastMCP` instance. Modules register tools on it via `@mcp.tool`.
-- `harold_mcp.server.run` — initializes Maude (fail-fast at startup), then runs the server (`mcp.run()`). Console script entry: `harold-mcp` → `main.run` → `server.run`.
-- `harold_mcp.maude.init_maude` — lock-guarded, once-per-process Maude initialization; safe to call repeatedly; retries after failure; raises `MaudeInitError`.
-- `harold_mcp.maude.MaudeRuntime` — thread-safe facade over the Maude bindings; serializes all interpreter access on an `RLock` and fetches fresh module wrappers on every call:
-  - `get_module(module_name) -> Any` — module wrapper or `MaudeModuleNotFoundError`.
-  - `load_program(program_path: str | Path) -> None` — (re)load a program file, absolute-resolved; `MaudeLoadError` on failure.
-  - `load_module(program_path, module_name) -> Any` — reload program, then return a fresh wrapper.
-- `harold_mcp.maude.get_runtime` — returns the process-wide `MaudeRuntime` singleton.
-- `harold_mcp.maude.MaudeError` hierarchy — `MaudeInitError`, `MaudeLoadError` (`.program_path`), `MaudeModuleNotFoundError` (`.module_name`).
+- `harold_mcp.server.mcp` / `harold_mcp.server.run` — the shared FastMCP instance and the
+  server entry point. Tools register via `@mcp.tool` on the instance imported from
+  `harold_mcp.server.server` (never the package `__init__` — cycle-proof).
+- `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton.
+- `harold_mcp.maude.MaudeExecutor` — the client wrapper:
+  - `start()` / `shutdown()` — pool lifecycle.
+  - `submit(fn, *args) -> Future` — raw submit (test/crash support); raises
+    `MaudeWorkerCrashedError` on a broken pool.
+  - `diagnostics(path) -> LoadDiagnosticsResult` — typed worker op; crash/timeout mapped to
+    `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`, pool replaced.
+  - `_run_task(fn, *args) -> T` — generic submit-and-await runner for future worker ops.
+- `harold_mcp.maude.get_maude_executor(settings=Depends(get_settings))` — lazy, lock-guarded
+  singleton; FastMCP resolves the nested `get_settings` dependency. Direct callers pass
+  settings explicitly.
+- `harold_mcp.maude.worker` — worker-side module (imported by the worker process only in
+  practice; safe to import anywhere): `init_maude`, `ping`, `sleep`, `load_diagnostics`,
+  `_crash`, and the `WarningDict` / `LoadDiagnosticsResult` TypedDicts.
+- `harold_mcp.maude` error hierarchy — `MaudeError`, `MaudeInitError`,
+  `MaudeWorkerError` (`MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`),
+  `MaudeFileNotFoundError` (`.path`).
 - `harold_mcp.resources.HAROLD_ICON` — `mcp.types.Icon` used for server branding.
-- `harold_mcp.logging.get_logger` — re-exported logging helper (module-level loggers like `_LOG = get_logger(__name__)`).
-- `harold_mcp.logging.Logging` — base class providing a per-class `_log` property.
+- `harold_mcp.logging.get_logger` / `harold_mcp.logging.Logging` — logging helpers.
 
 ## Import-time side effects
 
 Importing `harold_mcp.server`:
 
-1. Constructs the global `mcp` server instance.
-2. Registers the `greet` tool.
+1. Builds the global `mcp` server instance (in `harold_mcp.server.server`).
+2. Registers the tools (via `server/__init__.py` → `tools/__init__.py` → `diagnostics.py`).
+3. Reads the `HAROLD_*` env vars once (pydantic-settings `Settings`).
 
-The Maude runtime is **not** initialized at import time. `harold_mcp.maude.init_maude()` initializes it lazily on first interpreter access, and `server.run()` calls it before `mcp.run()` so the server fails fast at startup if Maude cannot initialize.
+The Maude interpreter is **not** touched at import time: no `maude` import in the server
+process (worker.py imports it lazily), and the worker pool is created in the lifespan
+(startup), not at import.
 
 ## Related documents
 
 - `components.md` — module responsibilities
 - `workflows.md` — end-to-end flows
-- `data_models.md` — the error types these interfaces raise
+- `data_models.md` — the types these interfaces use
