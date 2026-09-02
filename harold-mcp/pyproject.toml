@@ -14,6 +14,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "cyclopts>=4.23.0",
     "fastmcp>=3.4.7",
     # Note this is built against Maude 3.5.1. https://github.com/fadoss/maude-bindings/releases/tag/v1.6.0
     "maude==1.6.0",
@@ -23,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-harold-mcp = "harold_mcp.main:run"
+harold-mcp = "harold_mcp.main:app"
 
 [project.urls]
 Homepage = "https://demiourgoi.github.io"
