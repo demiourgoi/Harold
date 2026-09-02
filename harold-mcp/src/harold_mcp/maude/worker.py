@@ -57,6 +57,10 @@ def init_maude() -> None:
 
     if not maude.init(advise=False):
         raise WorkerInitError()
+    # Disable IO from Maude
+    maude.setAllowDir(False)
+    maude.setAllowFiles(False)
+    maude.setAllowProcesses(False)
     _maude_initialized = True
 
 
