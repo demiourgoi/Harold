@@ -7,3 +7,7 @@
 | Subproject | Release | Build status |
 | --- | --- | --- |
 | [harold-mcp](harold-mcp/) | [![Release](https://img.shields.io/github/v/release/demiourgoi/Harold)](https://github.com/demiourgoi/Harold/releases) | [![Build status](https://github.com/demiourgoi/Harold/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/demiourgoi/Harold/actions/workflows/main.yml) |
+
+## Acknowledgements
+
+This repository is based on ideas and coding prototypes developed by Enguérand Dampierre, Adrián Riesco Rodríguez, Juan Rodríguez Hortalá, and Rubén Rubio.
