@@ -10,4 +10,4 @@
 
 ## Acknowledgements
 
-This repository is based on ideas and coding prototypes developed by Enguérand Dampierre, Adrián Riesco Rodríguez, Juan Rodríguez Hortalá, and Rubén Rubio.
+This repository is based on ideas and prototypes developed by Enguérand Dampierre, Adrián Riesco Rodríguez, Juan Rodríguez Hortalá, and Rubén Rubio.
