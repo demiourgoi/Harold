@@ -28,7 +28,7 @@ harold-mcp = "harold_mcp.main:run"
 [project.urls]
 Homepage = "https://demiourgoi.github.io"
 Repository = "https://github.com/demiourgoi/harold"
-Documentation = "https://demiourgoi.github.io/Harold"
+Documentation = "https://github.com/demiourgoi/Harold/blob/main/harold-mcp/README.md"
 
 [dependency-groups]
 dev = [
