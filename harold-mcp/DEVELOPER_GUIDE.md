@@ -61,7 +61,10 @@ One time setup:
 
 __New release__ process:
 
-1. Create a [new release](https://github.com/demiourgoi/harold/releases/new) on GitHub.
+1. Update `CHANGELOG.md` for the release. 
+    1. Use the skill `update-changelog-for-release`, and review the output and add any additional comments
+    2. Bump the version on `pyproject.toml` so the tip of `main` is the code for the next release, still WIP. Also add a new entry to `CHANGELOG.md` for the new version (without the ".dev0" suffix). Note the release overrides the version on `pyproject.toml`.
+2. Create a [new release](https://github.com/demiourgoi/harold/releases/new) on GitHub.
     1. Make sure `make release` passes and CI checks are passing. 
     2. Set tag to a new tag in the form `*.*.*` for the current version on `pyproject.toml`, removing the ".dev0" suffix. Use "Create new tag on publish".
     3. Set target to `main`. Note the [release GH workflow](https://github.com/demiourgoi/Harold/blob/main/.github/workflows/on-release-main.yml) will patch `pyproject.toml` to use the version specified in the previous step, irrespective of the version that appears in the main branch.
@@ -69,7 +72,6 @@ __New release__ process:
     5. Add the pre-release label as required, and any suitable binaries
     6. Click "Publish release"
     7. Watch it run under the **Actions** tab → `release-main`. Success means the package is on PyPI and docs are live. Confirm all went well on https://pypi.org/project/harold-mcp/
-2. Bump the version on `pyproject.toml` so the tip of `main` is the code for the next release, still WIP. Also add a new entry to `CHANGELOG.md` for the new version (without the ".dev0" suffix).
 
 Note:
 
