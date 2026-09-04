@@ -44,63 +44,25 @@ If you are proposing a new feature:
 
 # Get Started!
 
-Ready to contribute? Here's how to set up `harold-mcp` for local development.
-Please note this documentation assumes you already have `uv` and `Git` installed and ready to go.
+Ready to contribute? Here's the contribution workflow. This document covers the
+process only; for setting up the development environment and running the code
+validations, see [`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md).
 
 1. Fork the `harold-mcp` repo on GitHub.
 
-2. Clone your fork locally:
-
-```bash
-cd <directory_in_which_repo_should_be_created>
-git clone git@github.com:YOUR_NAME/harold-mcp.git
-```
-
-3. Now we need to install the environment. Navigate into the directory
-
-```bash
-cd harold-mcp
-```
-
-Then, install and activate the environment with:
-
-```bash
-uv sync
-```
-
-4. Create a branch for local development:
+2. Create a branch for local development:
 
 ```bash
 git checkout -b name-of-your-bugfix-or-feature
 ```
 
-Now you can make your changes locally.
+3. Set up your development environment and run the code validations as
+described in [`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md).
 
-5. Don't forget to add test cases for your added functionality to the `tests` directory.
+4. Make your changes locally. Don't forget to add test cases for your added
+functionality to the `tests` directory.
 
-6. When you're done making changes, check that your changes pass the formatting tests.
-
-```bash
-make check
-```
-
-Now, validate that all unit tests are passing:
-
-```bash
-make test
-```
-
-7. Before raising a pull request you should also run tox.
-   This will run the tests across different versions of Python:
-
-```bash
-tox
-```
-
-This requires you to have multiple versions of python installed.
-This step is also triggered in the CI/CD pipeline, so you could also choose to skip this step locally.
-
-8. Commit your changes and push your branch to GitHub:
+5. Commit your changes and push your branch to GitHub:
 
 ```bash
 git add .
@@ -108,7 +70,7 @@ git commit -m "Your detailed description of your changes."
 git push origin name-of-your-bugfix-or-feature
 ```
 
-9. Submit a pull request through the GitHub website.
+6. Submit a pull request through the GitHub website.
 
 # Pull Request Guidelines
 

@@ -70,7 +70,7 @@ flowchart TD
 ## Packaging and release
 
 - `make build` — build the wheel with `pyproject-build`.
-- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`; see `README.md`).
+- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`; see `DEVELOPER_GUIDE.md`).
 
 ## Cross-environment testing
 

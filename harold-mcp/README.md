@@ -9,7 +9,7 @@ Harold MCP tools:
 
 ## What is this?
 
-`harold-mcp` is an MCP server that gives AI coding assistants tools for working with the Maude specification and verification language. 
+`harold-mcp` is an MCP server that gives AI coding assistants tools for working with the Maude specification and verification language.
 
 ### Harold MCP Tools
 
@@ -30,9 +30,12 @@ retrieval-augmented generation (RAG).
 - Run `uvx harold-mcp --version`
 
 To update run `uvx harold-mcp@latest --version`.   
-If you want to run a specific version, check the release [history in pypi](https://pypi.org/project/harold-mcp/#history) use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.  
+If you want to run a specific version, check the release [history in PyPI](https://pypi.org/project/harold-mcp/#history) use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.  
 
-Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE, using the command full path. 
+The `maude` dependency bundles the Maude interpreter (built against Maude 3.5.1),
+so there is nothing else to install.
+
+Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE.  
 For example, for Zed add the following to `~/.config/zed/settings.json`:
 
 ```json
@@ -49,7 +52,6 @@ For example, for Zed add the following to `~/.config/zed/settings.json`:
 ```
 
 for opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
-
 
 ```json
   "mcp" : {
@@ -77,8 +79,6 @@ for Cline (useful for manual testing and Maude programming) add the following to
   }
 ```
 
-For production, harold-mcp will be distributed as a Python package and run with `uvx`. 
-
 ### Configuration
 
 The server is configured through environment variables (`HAROLD_*` prefix) set in the MCP server configuration:
@@ -89,6 +89,14 @@ The server is configured through environment variables (`HAROLD_*` prefix) set i
 | `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Seconds to wait for each worker call before failing it as timed out. | `60` |
 
 Invalid values (e.g. `HAROLD_MAUDE_WORKERS=0`) make the server fail fast at startup.
+
+## Development
+
+Contributions are welcome! See
+[`CONTRIBUTING.md`](https://github.com/demiourgoi/harold/blob/main/harold-mcp/CONTRIBUTING.md)
+for the contribution workflow, and
+[`DEVELOPER_GUIDE.md`](https://github.com/demiourgoi/harold/blob/main/harold-mcp/DEVELOPER_GUIDE.md)
+for the development environment and release process.
 
 ---
 
