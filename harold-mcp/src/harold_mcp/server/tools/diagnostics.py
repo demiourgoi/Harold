@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from harold_mcp.maude import MaudeExecutor, MaudeFileNotFoundError, get_maude_executor
 from harold_mcp.maude.worker import WarningDict
 from harold_mcp.server.server import mcp
+from harold_mcp.server.tags import DIAGNOSTICS, harold_tags
 
 
 class MaudePosition(BaseModel):
@@ -85,7 +86,15 @@ def _build_result(path: str, ok: bool, warnings: list[WarningDict]) -> MaudeProg
     )
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    tags=harold_tags(DIAGNOSTICS),
+)
 def maude_program_diagnostics(
     path: str,
     maude_executor: MaudeExecutor = Depends(get_maude_executor),  # noqa: B008 - FastMCP dependency-injection convention

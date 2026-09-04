@@ -133,7 +133,7 @@ def _send(proc: subprocess.Popen, message: dict) -> None:
 
 
 def test_mcp_smoke() -> None:
-    """The tool is served over MCP stdio with schema `{path}` and returns structured results (R18.1)."""
+    """The tool is served over MCP stdio with schema `{path}`, metadata, and structured results (R18.1)."""
     proc = subprocess.Popen(
         [sys.executable, "-m", "harold_mcp.main"],
         stdin=subprocess.PIPE,
@@ -163,6 +163,18 @@ def test_mcp_smoke() -> None:
         tools = _recv(proc, 2)["result"]["tools"]
         assert [tool["name"] for tool in tools] == ["maude_program_diagnostics"]
         assert sorted(tools[0]["inputSchema"]["properties"]) == ["path"]
+
+        # Client-visible annotations: the read-only/idempotent/closed-world profile
+        # (note `destructiveHint` defaults to true and must be negated explicitly).
+        # Tags are not asserted here: with mcp SDK 1.29 (spec 2025-06-18) they are a
+        # server-side categorization for visibility control (`mcp.disable(tags=...)`)
+        # and are not serialized to clients; see tests/unit/test_tags.py for the
+        # vocabulary itself.
+        annotations = tools[0]["annotations"]
+        assert annotations["readOnlyHint"] is True
+        assert annotations["destructiveHint"] is False
+        assert annotations["idempotentHint"] is True
+        assert annotations["openWorldHint"] is False
 
         _send(
             proc,

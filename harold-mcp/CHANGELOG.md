@@ -2,6 +2,19 @@
 
 ## [0.0.3]
 
+### Changed
+
+- **Tool tags** — `maude_program_diagnostics` now advertises the tags `maude`,
+  `programming`, and `diagnostics`, defined in the shared `harold_mcp.server.tags`
+  vocabulary so future tools reuse the same strings. Tags power server-side
+  visibility control (e.g. `mcp.disable(tags={"diagnostics"})`); with mcp SDK 1.29
+  (spec 2025-06-18) they are not serialized to clients, but they are ready for
+  protocol revisions that do.
+- **Richer tool annotations** — `maude_program_diagnostics` now advertises the full
+  read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`,
+  `openWorldHint=False`) so clients can skip confirmations and treat the tool as safe
+  to retry.
+
 ## [0.0.2] - 2026-08-27
 
 First functional tool: `maude_program_diagnostics`.
