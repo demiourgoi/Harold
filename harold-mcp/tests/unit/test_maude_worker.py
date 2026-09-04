@@ -1,6 +1,82 @@
-"""Unit tests for the Maude warning parser (no interpreter involved)."""
+"""Unit tests for `harold_mcp.maude.worker` helpers (no interpreter involved).
 
-from harold_mcp.maude.worker import _parse_warnings
+Both the warning parser and the `init_maude` sequence are exercised with the
+`maude` SWIG bindings mocked out: the worker lazy-imports them, so a fake
+module in `sys.modules` is enough and the tests stay hermetic.
+"""
+
+import sys
+import types
+
+import pytest
+
+from harold_mcp.maude import worker as worker_module
+from harold_mcp.maude.worker import WorkerInitError, _parse_warnings
+
+
+class _FakeMaude(types.ModuleType):
+    """Scriptable stand-in for the `maude` SWIG bindings.
+
+    Records calls so tests can assert the worker's init sequence without the
+    real interpreter (which only ever lives in the worker process).
+    """
+
+    def __init__(self, *, init_result: bool = True) -> None:
+        super().__init__("maude")
+        self._init_result = init_result
+        self.init_advise_calls: list[bool] = []
+        self.allow_dir_calls: list[bool] = []
+        self.allow_files_calls: list[bool] = []
+        self.allow_processes_calls: list[bool] = []
+
+    def init(self, advise: bool = True) -> bool:
+        self.init_advise_calls.append(advise)
+        return self._init_result
+
+    def setAllowDir(self, allow: bool) -> None:
+        self.allow_dir_calls.append(allow)
+
+    def setAllowFiles(self, allow: bool) -> None:
+        self.allow_files_calls.append(allow)
+
+    def setAllowProcesses(self, allow: bool) -> None:
+        self.allow_processes_calls.append(allow)
+
+
+def _patch_maude(monkeypatch: pytest.MonkeyPatch, *, init_result: bool = True) -> _FakeMaude:
+    """Make `init_maude`'s lazy `import maude` resolve to a scriptable fake."""
+    fake = _FakeMaude(init_result=init_result)
+    monkeypatch.setitem(sys.modules, "maude", fake)
+    monkeypatch.setattr(worker_module, "_maude_initialized", False)
+    return fake
+
+
+def test_init_maude_disables_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful init calls `maude.init(advise=False)` and locks down IO."""
+    fake = _patch_maude(monkeypatch)
+
+    worker_module.init_maude()
+    worker_module.init_maude()  # already initialized: must be a no-op
+
+    assert fake.init_advise_calls == [False]
+    assert fake.allow_dir_calls == [False]
+    assert fake.allow_files_calls == [False]
+    assert fake.allow_processes_calls == [False]
+    assert worker_module._maude_initialized is True
+
+
+def test_init_maude_failed_init_skips_io_lockdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed `maude.init` raises and never touches the IO guards."""
+    fake = _patch_maude(monkeypatch, init_result=False)
+
+    with pytest.raises(WorkerInitError):
+        worker_module.init_maude()
+
+    assert fake.init_advise_calls == [False]
+    assert fake.allow_dir_calls == []
+    assert fake.allow_files_calls == []
+    assert fake.allow_processes_calls == []
+    assert worker_module._maude_initialized is False
 
 
 def test_quoted_file_format() -> None:
