@@ -2,12 +2,26 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review (2026-09-04, after the cyclopts CLI,
-the Maude IO lockdown, and the docs split into `DEVELOPER_GUIDE.md`). Older resolved issues
-are kept for the record.
+Findings from the consistency and completeness review (2026-09-04, after the shared tool-tag
+vocabulary and the full tool-annotation profile were added). Older resolved issues are kept
+for the record.
 
 ## Changes absorbed into this refresh
 
+- New module `harold_mcp.server.tags` — shared tag vocabulary (`MAUDE`, `PROGRAMMING`,
+  `DIAGNOSTICS`, `INTERPRETER`, `DOCS`, `harold_tags`); documented in `docs/modules.md`
+  and unit-tested in `tests/unit/test_tags.py`.
+- `maude_program_diagnostics` now advertises the full read-only annotation profile
+  (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`,
+  `openWorldHint=False`) plus `tags=harold_tags(DIAGNOSTICS)`; the MCP smoke test asserts
+  the annotations in `tools/list`.
+- Empirical fact recorded: with mcp SDK 1.29 (spec 2025-06-18) tool tags are **not
+  serialized to clients** (the smoke test verified no `tags` key on the wire). Tags remain
+  server-side categorization for visibility control; see remaining issue 6.
+- `CHANGELOG.md` `[0.0.3]` now records the tags and annotations changes.
+- The `.agents/planning/maude-diagnostics-tool-v1/` design docs predate this polish and
+  still show the v1 decorator (`readOnlyHint=True` only); the knowledge base — not the
+  planning docs — is the current source of truth for the tool's metadata.
 - The console-script entry point changed from `harold_mcp.main:run` to
   `harold_mcp.main:app` (cyclopts CLI); all knowledge-base references updated.
 - `worker.init_maude` now disables Maude IO (`setAllowDir/File/Processes(False)`), covered by
@@ -26,7 +40,7 @@ are kept for the record.
 - `greet` tool placeholder — removed in v1 of the diagnostics tool.
 - `server.py` untested — now covered by `tests/integration/test_lifespan.py` and the MCP
   smoke test in `tests/integration/test_diagnostics_integration.py`.
-- Docs rendered only two modules — `docs/modules.md` now lists the five real modules.
+- Docs rendered only two modules — `docs/modules.md` now lists the six real modules.
 - `broken-*.maude` fixtures unused — now exercised by integration tests.
 - Stale `AGENTS.md` Custom Instructions note ("none of the MCP tools described above are
   implemented yet") — removed manually after this review flagged it.
@@ -49,12 +63,18 @@ are kept for the record.
 5. **`scala-issue.md` documents a different codebase.** The new SIGSEGV/throughput analysis
    is about the Scala/Java Maude bindings (a related project), not `harold-mcp`'s Python
    bindings. Useful background for the SIGSEGV story; consider annotating it as such.
+6. **Tool tags don't reach clients yet.** With mcp SDK 1.29 (spec 2025-06-18) FastMCP
+   tags are server-side only — they drive `mcp.enable`/`mcp.disable` but are not in the
+   wire format (the smoke test deliberately does not assert them). Once the SDK/protocol
+   revision serializes tool tags, the vocabulary is already in place (`server/tags.py`),
+   and the smoke test can start asserting `tools[0]["tags"]`.
 
 ## Completeness gaps
 
 1. **Only the diagnostics tool exists.** The planned run-Maude-programs and documentation
    RAG tools are not implemented yet (`_run_task` and the worker op pattern are the
-   extension points).
+   extension points). Their tag constants (`INTERPRETER`, `DOCS`) are already defined in
+   `server/tags.py` and currently unused.
 2. **No timeout integration test.** The timeout mapping is unit-tested; a real hang needs
    a deliberately-stuck worker (`worker.sleep` exists but no slow fixture triggers the
    timeout path end-to-end).

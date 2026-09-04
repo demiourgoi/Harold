@@ -20,7 +20,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 | --- | --- | --- |
 | [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, layout, dependency management, entry point | you need basic facts about the project (language, versions, tooling) |
 | [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker), module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
-| [`components.md`](components.md) | Per-module responsibilities (`main`, `settings`, `server` package, `maude` package, `resources`, `logging`, tests, docs, planning) | you need to know what a specific module does or where to add code |
+| [`components.md`](components.md) | Per-module responsibilities (`main`, `settings`, `server` package incl. the shared tag vocabulary `server/tags.py`, `maude` package, `resources`, `logging`, tests, docs, planning) | you need to know what a specific module does or where to add code |
 | [`interfaces.md`](interfaces.md) | MCP tool surface, console script, env-var config, internal Python API (`MaudeExecutor`, worker ops), import-time side effects | you need the public surface or must call/register a tool |
 | [`data_models.md`](data_models.md) | Tool result models, worker protocol TypedDicts, the `MaudeError` hierarchy, framework types, typing conventions | you need the type landscape or must add a model |
 | [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution, crash recovery, docs, packaging, release | you need to know how to develop, test, or ship |
@@ -31,12 +31,15 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 
 - `architecture.md` (structure) ↔ `components.md` (responsibilities) ↔ `interfaces.md` (surfaces)
 - `codebase_info.md` (facts) ↔ `dependencies.md` (constraints) ↔ `workflows.md` (usage)
-- `data_models.md` documents the types defined in `tools/diagnostics.py` and `maude/executor.py`, whose behavior lives in `components.md`
+- `data_models.md` documents the types defined in `tools/diagnostics.py` and
+  `maude/executor.py` (plus the tag vocabulary in `server/tags.py`), whose behavior lives
+  in `components.md`
 - `review_notes.md` cross-references every file it flags as incomplete.
 
 ## Example queries
 
 - "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server` package (tools live in `server/tools/`, registered via `server/__init__.py`), then `interfaces.md` for the `@mcp.tool` + `Depends` pattern.
+- "How do I tag/annotate a new tool?" → `components.md` → `harold_mcp.server.tags` (build tag sets with `harold_tags(<category>)`); effect/safety metadata goes in `ToolAnnotations`, see `interfaces.md` and `data_models.md`.
 - "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.

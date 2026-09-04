@@ -14,8 +14,13 @@
   - `maude_program_diagnostics(path: str) -> MaudeProgramDiagnosticsResult` — loads the
     Maude source file at `path` into the interpreter (in the worker process) and reports
     every problem, including recoverable warnings. Input schema is exactly `{path: str}`
-    (the executor is injected via `Depends`, excluded from the schema). Annotated
-    `readOnlyHint=True`. Missing/unreadable files raise `MaudeFileNotFoundError` →
+    (the executor is injected via `Depends`, excluded from the schema). Annotated with the
+    full read-only profile — `readOnlyHint=True`, `destructiveHint=False`,
+    `idempotentHint=True`, `openWorldHint=False` (the spec defaults `destructiveHint` to
+    true, so it must be negated explicitly) — and tagged `tags=harold_tags(DIAGNOSTICS)`
+    (`{maude, programming, diagnostics}`; see the tags module below). With mcp SDK 1.29
+    the tags are not serialized to clients — only the annotations reach the wire.
+    Missing/unreadable files raise `MaudeFileNotFoundError` →
     `isError`; worker crashes/timeouts raise `MaudeWorkerCrashedError` /
     `MaudeWorkerTimeoutError` → `isError` (the MCP client retries; the pool is replaced).
     The docstring is the MCP tool description. Loading mutates interpreter state
@@ -64,6 +69,12 @@ Invalid values fail fast at import (pydantic validation).
 - `harold_mcp.server.mcp` / `harold_mcp.server.run` — the shared FastMCP instance and the
   server entry point. Tools register via `@mcp.tool` on the instance imported from
   `harold_mcp.server.server` (never the package `__init__` — cycle-proof).
+- `harold_mcp.server.tags` — the shared tool-tag vocabulary:
+  - Constants: `MAUDE`/`PROGRAMMING` (domain tags), `DIAGNOSTICS`/`INTERPRETER`/`DOCS`
+    (functional categories; the latter two await their planned tools).
+  - `harold_tags(*tags) -> set[str]` — builds a tool's tag set with the domain tags
+    automatically added; pass it to `@mcp.tool(tags=...)`.
+  - Effect/safety metadata stays in `ToolAnnotations`, not tags.
 - `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton.
 - `harold_mcp.maude.MaudeExecutor` — the client wrapper:
   - `start()` / `shutdown()` — pool lifecycle.

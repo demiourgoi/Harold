@@ -29,6 +29,7 @@ graph TB
     serversrv --> maudepkg[maude/__init__.py<br>errors, MaudeExecutor, get_maude_executor]
     tools --> serversrv
     tools --> maudepkg
+    tools --> tags[server/tags.py<br>shared tag vocabulary + harold_tags]
     maudepkg --> executor[maude/executor.py<br>MaudeExecutor client + Settings usage]
     executor --> worker[maude/worker.py<br>worker-side functions]
     executor --> settings[settings.py<br>pydantic-settings]
@@ -77,6 +78,14 @@ graph TB
    `serve` subcommand both call `server.run`; the console script points at `main:app`. The
    `__main__` guard in `main.py` remains required — the `spawn`-context worker re-imports the
    main module.
+9. **Shared tool metadata: tags in one place, annotations for the client.** The tag
+   vocabulary is centralized in `server/tags.py` (`harold_tags(*tags)` always adds the two
+   domain tags `maude` + `programming`; each tool adds one functional-category tag).
+   Effect/safety metadata is deliberately **not** duplicated as tags: it lives in
+   `ToolAnnotations` (the full read-only profile for the diagnostics tool). Empirical: with
+   mcp SDK 1.29 (spec 2025-06-18) tags are **not serialized to clients** — they are
+   server-side categorization for visibility control (`mcp.enable`/`mcp.disable` by tag);
+   annotations do reach clients.
 
 ## Directory organization
 
@@ -88,11 +97,11 @@ graph TB
     root --> agents[.agents/<br>planning + summary]
     src[src/] --> pkg[harold_mcp/]
     pkg --> flat[main.py<br>settings.py<br>logging.py<br>resources.py]
-    pkg --> serverpkg[server/<br>__init__.py, server.py]
+    pkg --> serverpkg[server/<br>__init__.py, server.py, tags.py]
     serverpkg --> tools[tools/<br>__init__.py, diagnostics.py]
     pkg --> maudepkg[maude/<br>__init__.py, executor.py, worker.py]
     pkg --> assets[assets/brand/<br>Harold_logo.png]
-    tests[tests/] --> unit[unit/<br>mocked] --> u[test_settings.py<br>test_maude_worker.py<br>test_maude_executor.py<br>test_diagnostics.py]
+    tests[tests/] --> unit[unit/<br>mocked] --> u[test_settings.py<br>test_maude_worker.py<br>test_maude_executor.py<br>test_diagnostics.py<br>test_tags.py]
     tests --> integration[integration/<br>real Maude + real server]
     integration --> i[test_maude_worker_integration.py<br>test_maude_executor_integration.py<br>test_lifespan.py<br>test_diagnostics_integration.py]
     integration --> fixtures[fixtures/<br>hello, hello2, broken-*, no_new_module]

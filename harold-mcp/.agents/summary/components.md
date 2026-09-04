@@ -35,10 +35,18 @@
     `architecture.md` §5 for why).
   - `_handle_shutdown_signal` — the SIGTERM→`KeyboardInterrupt` bridge.
 - **`tools/__init__.py`** — re-exports `maude_program_diagnostics`.
+- **`tags.py`** — the shared tool-tag vocabulary (see `interfaces.md`): constants
+  `MAUDE`/`PROGRAMMING` (domain), `DIAGNOSTICS`/`INTERPRETER`/`DOCS` (functional
+  categories; the latter two reserved for planned tools), and `harold_tags(*tags)`,
+  which always adds the domain tags. Effect/safety metadata is deliberately not a tag
+  (it belongs in `ToolAnnotations`). With mcp SDK 1.29 tags are server-side only:
+  they drive `mcp.enable`/`mcp.disable` and are not serialized to clients.
 - **`tools/diagnostics.py`** — the pydantic result models (see `data_models.md`) and the
   `maude_program_diagnostics` tool (see `interfaces.md`): file pre-check → executor
   `diagnostics` → tri-state mapping (warnings → LSP ranges; `ok=False` → synthesized
-  whole-file `error`; `success = ok and no warnings`; per-severity counts).
+  whole-file `error`; `success = ok and no warnings`; per-severity counts). Registered
+  with the full read-only annotation profile (`readOnlyHint=True`, `destructiveHint=False`,
+  `idempotentHint=True`, `openWorldHint=False`) and `tags=harold_tags(DIAGNOSTICS)`.
 
 ### `harold_mcp.maude` (package)
 
@@ -85,6 +93,8 @@
 
 - `tests/unit/` (hermetic, mocked):
   - `test_settings.py` — defaults, env overrides, case-insensitivity, invalid values.
+  - `test_tags.py` — the shared vocabulary: `harold_tags` always adds the domain tags,
+    and the tag strings are pinned (they are part of the client-visible interface).
   - `test_maude_worker.py` — `_parse_warnings` (observed formats, ANSI stripping,
     unmatched/advisory lines ignored) and the `init_maude` sequence (success/failure, IO
     lockdown, idempotency) with the `maude` bindings faked via `sys.modules`.
@@ -101,7 +111,9 @@
     retry, two-worker parallelism via slow `sleep` tasks.
   - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-pool drive.
   - `test_diagnostics_integration.py` — the acceptance suite: tool-level fixtures, binary
-    file regression, crash recovery, and the MCP smoke test (real stdio server).
+    file regression, crash recovery, and the MCP smoke test (real stdio server), which
+    asserts the client-visible annotation profile in `tools/list`. Tags are intentionally
+    not asserted on the wire: mcp SDK 1.29 does not serialize them.
 - `tests/integration/fixtures/` — `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
   (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude recovers
   from everything parseable), `no_new_module.maude`.
@@ -120,7 +132,7 @@
 ## Docs
 
 - `docs/` — MkDocs sources; `docs/modules.md` renders `harold_mcp.server.server`,
-  `harold_mcp.server.tools.diagnostics`, `harold_mcp.maude.executor`,
+  `harold_mcp.server.tags`, `harold_mcp.server.tools.diagnostics`, `harold_mcp.maude.executor`,
   `harold_mcp.maude.worker`, `harold_mcp.settings` via mkdocstrings.
 - Root-level docs: `README.md` (installation + MCP client config), `CONTRIBUTING.md`
   (contribution workflow), `DEVELOPER_GUIDE.md` (dev environment + release process),

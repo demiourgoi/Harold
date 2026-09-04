@@ -53,10 +53,21 @@ Defined in `harold_mcp.maude.executor`:
 | `Lifespan` (via `@lifespan`) | `fastmcp.server.lifespan` | `server/server.py` — the lifespan |
 | `App` | `cyclopts` | `main.py` — the `harold-mcp` CLI (default + `serve` subcommand) |
 | `Depends` | `fastmcp.dependencies` | tool + `get_maude_executor` (nested DI) |
-| `ToolAnnotations` | `mcp.types` | tool annotation (`readOnlyHint=True`) |
+| `ToolAnnotations` | `mcp.types` | tool annotations: full read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) — reaches clients over the wire |
+| tags (`set[str]`) | `fastmcp` `@mcp.tool(tags=...)` | `tools/diagnostics.py` via `harold_tags` — server-side categorization only with mcp SDK 1.29 (not serialized to clients) |
 | `Icon` / `Image` | `mcp.types` / `fastmcp.utilities.types` | `resources.py` — server branding |
 | `BaseSettings` / `Field` / `SettingsConfigDict` | `pydantic-settings` / `pydantic` | `settings.py` — env-var config |
 | Maude `Module` / `Term` | `maude` bindings | worker process only |
+
+## Tool-tag vocabulary
+
+Defined in `harold_mcp.server.tags` (plain `str` constants, plus the `harold_tags` helper):
+
+- `maude`, `programming` — domain tags, added to every tool by `harold_tags`.
+- `diagnostics` — the current tool's functional category; `interpreter` and `docs` are
+  reserved for the planned run/RAG tools.
+- Note: tags are server-side only with mcp SDK 1.29 (visibility control via
+  `mcp.enable`/`mcp.disable`); they are not part of the MCP wire format on spec 2025-06-18.
 
 ## Typing conventions
 

@@ -21,7 +21,7 @@
 - **Layout**: `src` layout; the importable package is `src/harold_mcp`
 - **Build backend**: hatchling (`[build-system]` in `pyproject.toml`)
 - **Package name on PyPI**: `harold-mcp` (planned distribution via `uvx`)
-- **Subpackages**: `harold_mcp.server` (FastMCP instance + tools) and `harold_mcp.maude` (worker executor + worker-side code), plus the `harold_mcp.settings` module.
+- **Subpackages**: `harold_mcp.server` (FastMCP instance, shared tag vocabulary, and tools) and `harold_mcp.maude` (worker executor + worker-side code), plus the `harold_mcp.settings` module.
 
 ## Dependency management
 
