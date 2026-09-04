@@ -27,7 +27,7 @@ If AGENTS.md doesn't answer your question, open [`.agents/summary/index.md`](.ag
 
 - **What**: `harold-mcp` is a Python package implementing an MCP (Model Context Protocol) server for AI-assisted Maude programming. Its first real tool is `maude_program_diagnostics`: it loads a Maude source file into the interpreter and reports every problem, including recoverable warnings, as a structured LSP-style result.
 - **Architecture**: two processes. The **MCP server** (FastMCP, threaded) never imports the `maude` SWIG bindings; the **Maude worker** (spawned via `ProcessPoolExecutor`, single-threaded, `initializer=init_maude`) owns the interpreter, captures its stderr (where `Warning:` lines go), and parses them. The split gives stderr isolation for the capture and SIGSEGV containment.
-- **Stack**: Python ≥ 3.14, built with **FastMCP**, the official **MCP SDK** (`mcp`), the **Maude bindings** (`maude`), **pydantic** + **pydantic-settings**. Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
+- **Stack**: Python ≥ 3.14, built with **FastMCP**, the official **MCP SDK** (`mcp`), the **Maude bindings** (`maude`), **pydantic** + **pydantic-settings**, and **cyclopts** (CLI). Dependencies are managed with **uv** (`uv.lock` is committed). Build backend: hatchling.
 - **Configuration**: `HAROLD_MAUDE_WORKERS` (default `1`) and `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` (default `60`), read once at import via `pydantic-settings` (`harold_mcp.settings`).
 
 See: [`.agents/summary/codebase_info.md`](.agents/summary/codebase_info.md), [`.agents/summary/dependencies.md`](.agents/summary/dependencies.md).
@@ -47,7 +47,7 @@ graph TB
     SRV --> TO[tools/diagnostics.py<br>models + maude_program_diagnostics]
     S --> MD[maude/<br>executor.py client<br>worker.py worker side]
     S --> A[assets/brand/<br>Harold_logo.png]
-    R --> C[pyproject.toml<br>Makefile<br>tox.ini<br>mkdocs.yml<br>uv.lock]
+    R --> C[pyproject.toml<br>Makefile<br>tox.ini<br>mkdocs.yml<br>uv.lock<br>README.md<br>CONTRIBUTING.md<br>DEVELOPER_GUIDE.md<br>CHANGELOG.md]
 ```
 
 - New application code goes in `src/harold_mcp`; MCP tools go in `harold_mcp/server/tools/`, registered with `@mcp.tool` on the instance from `harold_mcp.server.server` (registration happens as a side effect of importing the `harold_mcp.server` package).
@@ -58,11 +58,11 @@ graph TB
 
 <!-- tags: entry-points -->
 
-- Console script **`harold-mcp`** → `harold_mcp.main:run` (`src/harold_mcp/main.py`); starts the MCP server over stdio. `main.py`'s `__main__` guard is required (the `spawn`-context worker re-imports the main module).
+- Console script **`harold-mcp`** → `harold_mcp.main:app` (`src/harold_mcp/main.py`), a **cyclopts** CLI: the default command and the `serve` subcommand both start the MCP server over stdio (`--help`/`--version` from cyclopts). `main.py`'s `__main__` guard is required (the `spawn`-context worker re-imports the main module).
 - **`src/harold_mcp/server/server.py`** — the `mcp = FastMCP(..., lifespan=app_lifespan)` instance; the `@lifespan`-decorated `app_lifespan` warms up the worker pool (fail-fast on `MaudeInitError`) and tears it down in `finally`; `run()` installs a SIGTERM→`KeyboardInterrupt` handler and calls `os._exit(0)` after cleanup (FastMCP's stdio transport leaves a non-daemon stdin-reader thread that would hang interpreter shutdown).
 - **`src/harold_mcp/server/tools/diagnostics.py`** — the tool and its pydantic result models (`MaudeProgramDiagnosticsResult` etc.): file pre-check → executor call → tri-state mapping (`success` = no warnings and no errors; `range=None` for whole-file problems).
 - **`src/harold_mcp/maude/executor.py`** — the client: error hierarchy, `MaudeExecutor` (pool lifecycle, warm-up pings, generic `_run_task` with crash/timeout recovery via `kill_workers`), `get_maude_executor(settings=Depends(get_settings))` lazy singleton.
-- **`src/harold_mcp/maude/worker.py`** — worker-side ops (`init_maude`, `ping`, `sleep`, `load_diagnostics` with fd-2 capture + ANSI-stripping warning parser, `_crash`). Imports `maude` **lazily inside functions** so the server process never touches the bindings.
+- **`src/harold_mcp/maude/worker.py`** — worker-side ops (`init_maude`, `ping`, `sleep`, `load_diagnostics` with fd-2 capture + ANSI-stripping warning parser, `_crash`). `init_maude` runs `maude.init(advise=False)` and then disables Maude IO (`setAllowDir/File/Processes(False)`). Imports `maude` **lazily inside functions** so the server process never touches the bindings.
 - **`src/harold_mcp/settings.py`** — `Settings` (pydantic-settings, `HAROLD_` prefix) + `get_settings()`.
 
 See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents/summary/components.md`](.agents/summary/components.md).
@@ -83,6 +83,7 @@ See: [`.agents/summary/interfaces.md`](.agents/summary/interfaces.md), [`.agents
 10. **Docs are generated from docstrings**: MkDocs + mkdocstrings render `src/harold_mcp`. When adding a module, add a `::: harold_mcp.<module>` entry to `docs/modules.md` and keep `make docs-test` green (strict build, fails on warnings).
 11. **The knowledge base is committed**: `.agents/summary/` is version-controlled and trusted by agents. Keep it in sync when architecture or conventions change (re-run codebase-summary); see [`.agents/summary/review_notes.md`](.agents/summary/review_notes.md).
 12. **Empirical Maude facts** (see `.agents/planning/maude-diagnostics-tool-v1/research/maude-bindings.md`): `maude.load` returns `True` for every parseable input (even 12-warning garbage and binary files) — the synthesized `error` path only fires for missing files, which the tool pre-checks away; warnings are colorized with ANSI escapes when stderr is a TTY at init time; capture in binary mode and decode lossily.
+13. **Maude IO is disabled in the worker.** `init_maude` calls `setAllowDir(False)` / `setAllowFiles(False)` / `setAllowProcesses(False)` after a successful init — a program loaded by `maude_program_diagnostics` cannot read/write files or spawn processes inside the worker.
 
 ## Repo-specific commands
 
@@ -100,19 +101,20 @@ All commands are `Makefile` targets that wrap `uv` (repo-specific wrappers, not 
 | `make docs` / `make docs-test` | serve docs / strict docs build |
 | `make build` / `make publish` | build wheel / upload to PyPI |
 
-Setup and IDE-configuration details (Zed, opencode, Cline) and the `HAROLD_*` env-var table live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`.
+Setup and IDE-configuration details (Zed, opencode, Cline) and the `HAROLD_*` env-var table live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`; dev-environment setup and the release process live in `DEVELOPER_GUIDE.md`.
 
 ## Config files agents might miss
 
 <!-- tags: config -->
 
-- **`pyproject.toml`** — single source of tool config: ruff, mypy, **basedpyright** (`reportUnusedCallResult` only, everything else off), pytest, coverage, deptry inputs, console script, dependencies.
+- **`pyproject.toml`** — single source of tool config: ruff, mypy, **basedpyright** (`reportUnusedCallResult` only, everything else off), pytest, coverage, deptry inputs, console script (`harold_mcp.main:app`), dependencies (incl. `maude==1.6.0`, pinned).
+- **`DEVELOPER_GUIDE.md`** — dev-environment setup, recommended agent skills, and the GitHub-release/PyPI release process.
 - **`tox.ini`** — single-version test env (`py314`). The GitHub Actions workflows themselves live at the repository root (`../.github/workflows/` relative to this package directory).
 - **`mkdocs.yml`** — docs site config; nav lists `docs/index.md` and `docs/modules.md`.
 - **`uv.lock`** — committed lockfile; regenerate after dependency changes.
 - **`Makefile`** — the canonical dev command surface (see commands above).
 - **`.agents/summary/`** — committed knowledge base (routing index plus detailed docs). Trust it as an index into the codebase; refresh it after significant changes.
-- **`.agents/planning/`** — committed design/planning docs: `maude-diagnostics-tool-v1/` (the complete PDD cycle for `maude_program_diagnostics`: requirements, research, design, implementation plan) and `sigsegv-under-load/issue.md` (SIGSEGV history that motivated the worker architecture). Consult before implementing planned features.
+- **`.agents/planning/`** — committed design/planning docs: `maude-diagnostics-tool-v1/` (the complete PDD cycle for `maude_program_diagnostics`: requirements, research, design, implementation plan) and `sigsegv-under-load/` (SIGSEGV history that motivated the worker architecture: `issue.md` for the Python bindings, `scala-issue.md` for a related Scala/Java bindings analysis). Consult before implementing planned features.
 
 ## Custom Instructions
 
@@ -134,7 +136,7 @@ Specifically, we want to develop the following tools:
 
 The use case for Harold is to use it with AI-assisted programming tools such as opencode or Cline, together with LLM models that are not sufficiently trained in the Maude language.
 
-> **Note:** The project is in its early stages. Only a basic skeleton exists right now; none of the MCP tools described above are implemented yet.
+> **Note:** The project is in progress. Some of the MCP tools described above might not be implemented yet.
 
 ### Recommendations
 

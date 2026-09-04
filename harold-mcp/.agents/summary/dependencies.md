@@ -6,8 +6,9 @@
 
 | Package | Constraint | Purpose |
 | --- | --- | --- |
+| `cyclopts` | `>=4.23.0` | CLI framework for the `harold-mcp` console command |
 | `fastmcp` | `>=3.4.7` | Framework for building the MCP server (server instance, `@mcp.tool`, `@lifespan`, `Depends`, logging utilities) |
-| `maude` | `>=1.6.0` | Python bindings for the Maude system — imported only inside the worker process |
+| `maude` | `==1.6.0` (pinned) | Python bindings for the Maude system — imported only inside the worker process |
 | `mcp` | `>=1.29.0` | Official MCP SDK — typed primitives (`mcp.types.ToolAnnotations`, `Icon`) and transport support |
 | `pydantic` | `>=2.13.4` | Data models and validation (`Field`) |
 | `pydantic-settings` | `>=2.15.0` | `Settings` from `HAROLD_*` env vars |
@@ -36,6 +37,8 @@
 
 ## Notable constraints
 
+- The `maude` bindings are **pinned exactly** (`==1.6.0`): the wheel bundles the Maude
+  interpreter (built against Maude 3.5.1), so upgrading is a deliberate act.
 - The `maude` bindings provide no type stubs → mypy override `ignore_missing_imports`
   (see `data_models.md`); basedpyright runs with all diagnostics off except
   `reportUnusedCallResult`.

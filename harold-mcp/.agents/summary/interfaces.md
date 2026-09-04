@@ -42,11 +42,13 @@ sequenceDiagram
 
 ### Console script
 
-- **`harold-mcp`** → `harold_mcp.main:run` (declared in `pyproject.toml` `[project.scripts]`).
+- **`harold-mcp`** → `harold_mcp.main:app` (declared in `pyproject.toml` `[project.scripts]`) — a
+  **cyclopts** CLI. The default command and the `serve` subcommand both run the MCP server over
+  stdio; `--help`/`--version` come from cyclopts (no other commands exist yet).
 - On startup the lifespan warms up the worker pool (fail-fast on `MaudeInitError`); on
   SIGTERM the server tears the pool down and exits 0.
-- Intended for installation as a command for MCP clients (Zed, opencode, Cline
-  configuration examples live in `README.md`).
+- Intended for installation via `uvx harold-mcp` and configuration as an MCP server command
+  for clients (Zed, opencode, Cline configuration examples live in `README.md`).
 
 ### Configuration (env vars)
 

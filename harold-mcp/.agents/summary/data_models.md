@@ -51,6 +51,7 @@ Defined in `harold_mcp.maude.executor`:
 | --- | --- | --- |
 | `FastMCP` | `fastmcp` | `server/server.py` — the server instance |
 | `Lifespan` (via `@lifespan`) | `fastmcp.server.lifespan` | `server/server.py` — the lifespan |
+| `App` | `cyclopts` | `main.py` — the `harold-mcp` CLI (default + `serve` subcommand) |
 | `Depends` | `fastmcp.dependencies` | tool + `get_maude_executor` (nested DI) |
 | `ToolAnnotations` | `mcp.types` | tool annotation (`readOnlyHint=True`) |
 | `Icon` / `Image` | `mcp.types` / `fastmcp.utilities.types` | `resources.py` — server branding |

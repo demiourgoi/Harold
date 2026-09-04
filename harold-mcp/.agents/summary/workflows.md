@@ -5,6 +5,8 @@
 ## Development loop
 
 1. `make install` — `uv sync`, creates the environment and refreshes `uv.lock`.
+   (Dev-environment details, IDE recommendations, and the release process live in
+   `DEVELOPER_GUIDE.md`.)
 2. Edit code under `src/harold_mcp` (tests under `tests/`).
 3. `make check` — lockfile consistency (`uv lock --locked`), ruff (lint fails if any
    auto-fix is applied) + ruff format, mypy, **basedpyright** (unused call results), deptry.
@@ -15,6 +17,8 @@
 ## Running the server
 
 - Development: `make run` (or `uv run harold-mcp`) — serves MCP over stdio.
+- Entry points: `uv run harold-mcp --help` lists the cyclopts CLI (default command and
+  `serve`).
 - Startup: lifespan warm-up pings the Maude worker (fail-fast on init failure).
 - Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
   lifespan; workers then exit on their own via the queue pipe).
@@ -70,7 +74,12 @@ flowchart TD
 ## Packaging and release
 
 - `make build` — build the wheel with `pyproject-build`.
-- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`; see `DEVELOPER_GUIDE.md`).
+- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`).
+- Release process (per `DEVELOPER_GUIDE.md`): create a GitHub release with a `*.*.*` tag
+  matching the `pyproject.toml` version without the `.dev0` suffix; the `release-main`
+  workflow patches the version, publishes to PyPI, and deploys the docs. Afterwards, bump
+  the version on `main` (back to a `*.dev0` WIP) and add a `CHANGELOG.md` entry. PyPI
+  versions are immutable — a failed publish means bumping to the next version.
 
 ## Cross-environment testing
 

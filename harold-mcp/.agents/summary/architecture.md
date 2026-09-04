@@ -23,7 +23,7 @@ only the worker and the pool is replaced.
 
 ```mermaid
 graph TB
-    main[main.py<br>run] --> serverpkg[server/__init__.py<br>mcp, run + tool registration]
+    main[main.py<br>cyclopts App: default + serve] --> serverpkg[server/__init__.py<br>mcp, run + tool registration]
     serverpkg --> serversrv[server/server.py<br>FastMCP + lifespan + signals]
     serverpkg --> tools[server/tools/diagnostics.py<br>models + maude_program_diagnostics]
     serversrv --> maudepkg[maude/__init__.py<br>errors, MaudeExecutor, get_maude_executor]
@@ -42,8 +42,10 @@ graph TB
 
 1. **Interpreter only lives in the worker.** The server process never imports `maude`
    (R17): `worker.py` imports it lazily inside functions, so importing the module in the
-   server process is side-effect-free. The worker inherits the server's stdout (the MCP
-   transport) and must never write to it.
+   server process is side-effect-free. `worker.init_maude` runs `maude.init(advise=False)`
+   and then **disables Maude IO** (`setAllowDir/File/Processes(False)`), so programs loaded
+   into the worker cannot read/write files or spawn processes. The worker inherits the
+   server's stdout (the MCP transport) and must never write to it.
 2. **`ProcessPoolExecutor`, spawn context.** `max_workers` from `HAROLD_MAUDE_WORKERS`
    (default 1) serializes calls through one worker; each `submit` returns its own `Future`,
    so concurrent callers never cross-talk. `spawn` (not `fork`/`forkserver`): the server
@@ -71,6 +73,10 @@ graph TB
    (`HAROLD_` prefix): `maude_workers` (default 1), `maude_worker_timeout_secs` (default
    60). `get_maude_executor(settings=Depends(get_settings))` is a lazy, lock-guarded
    singleton — FastMCP nested dependency injection.
+8. **CLI via cyclopts.** `harold_mcp.main` builds a cyclopts `App` whose default command and
+   `serve` subcommand both call `server.run`; the console script points at `main:app`. The
+   `__main__` guard in `main.py` remains required — the `spawn`-context worker re-imports the
+   main module.
 
 ## Directory organization
 
@@ -93,7 +99,7 @@ graph TB
     docs[docs/] --> dmodules[modules.md]
     agents --> planning[planning/<br>maude-diagnostics-tool-v1,<br>sigsegv-under-load]
     agents --> summary[summary/<br>this knowledge base]
-    root --> cfg[pyproject.toml, Makefile,<br>tox.ini, mkdocs.yml, uv.lock]
+    root --> cfg[pyproject.toml, Makefile, tox.ini,<br>mkdocs.yml, uv.lock, README.md,<br>CONTRIBUTING.md, DEVELOPER_GUIDE.md,<br>CHANGELOG.md]
 ```
 
 ## Related documents

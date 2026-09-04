@@ -4,10 +4,10 @@
 
 ## Identity
 
-- **Project**: `harold-mcp` v0.0.1
+- **Project**: `harold-mcp` v0.0.3.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.3]` section)
 - **Author**: Juan Rodriguez (`juanrh@pm.me`)
 - **Repository**: <https://github.com/demiourgoi/harold>
-- **Documentation site**: <https://demiourgoi.github.io> (MkDocs, built from `docs/`)
+- **Documentation site**: <https://demiourgoi.github.io/Harold/> (MkDocs, built from `docs/`)
 - **License**: see `LICENSE`
 
 ## Language and runtime
@@ -30,8 +30,9 @@
 
 ## Runtime dependencies
 
+- `cyclopts>=4.23.0` — CLI framework for the `harold-mcp` console command
 - `fastmcp>=3.4.7` — the framework used to build the MCP server
-- `maude>=1.6.0` — Python bindings for the Maude system (loaded only in the worker process)
+- `maude==1.6.0` — Python bindings for the Maude system, pinned exactly (built against Maude 3.5.1; loaded only in the worker process)
 - `mcp>=1.29.0` — the official MCP Python SDK (types such as `ToolAnnotations`)
 - `pydantic>=2.13.4` — data models and validation
 - `pydantic-settings>=2.15.0` — configuration from `HAROLD_*` env vars
@@ -48,8 +49,9 @@
 
 ## Entry point
 
-- Console script `harold-mcp` → `harold_mcp.main:run` (defined in `pyproject.toml` `[project.scripts]`)
-- Runs an MCP server over stdio, with the Maude interpreter in a dedicated worker process.
+- Console script `harold-mcp` → `harold_mcp.main:app` (defined in `pyproject.toml` `[project.scripts]`)
+- `main.py` builds a **cyclopts** CLI: the default command and the `serve` subcommand both run the MCP server over stdio (`--help`/`--version` come from cyclopts).
+- The Maude interpreter lives in a dedicated worker process.
 
 ## Related documents
 

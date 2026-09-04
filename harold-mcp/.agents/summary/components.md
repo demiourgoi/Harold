@@ -6,10 +6,13 @@
 
 ### `harold_mcp.main`
 
-- **Responsibility**: CLI/stdio entry point for the MCP server.
-- `run() -> None` delegates to `harold_mcp.server.run`. The `if __name__ == "__main__"`
-  guard is required: the `spawn`-context worker re-imports the main module.
-- Exposed as the `harold-mcp` console script.
+- **Responsibility**: CLI/stdio entry point for the MCP server, built with **cyclopts**.
+- `app = App(name="harold-mcp", help=...)` with a `serve` subcommand; both the app default
+  and the `serve` default run `run()`, which delegates to `harold_mcp.server.run`. cyclopts
+  provides `--help`/`--version`.
+- Exposed as the `harold-mcp` console script (`harold_mcp.main:app`). The
+  `if __name__ == "__main__"` guard is required: the `spawn`-context worker re-imports the
+  main module.
 
 ### `harold_mcp.settings`
 
@@ -60,7 +63,8 @@
 - **`worker.py`** — the interpreter side, pickled/spawn-imported by the worker process;
   imports `maude` **lazily inside functions** so the server process never touches the
   bindings (the absolute `import maude` is the third-party package, not this one):
-  - `init_maude()` — idempotent, `maude.init(advise=False)`, raises `WorkerInitError`.
+  - `init_maude()` — idempotent; `maude.init(advise=False)` then disables Maude IO
+    (`setAllowDir/File/Processes(False)`); raises `WorkerInitError`.
   - `ping()` — warm-up no-op. `sleep(seconds) -> int` — test/timeout support.
   - `load_diagnostics(path) -> LoadDiagnosticsResult` — fd-2 capture around `maude.load`
     (binary tempfile, lossy UTF-8 decode, ANSI CSI stripping, `Warning:` regex parsing).
@@ -81,8 +85,9 @@
 
 - `tests/unit/` (hermetic, mocked):
   - `test_settings.py` — defaults, env overrides, case-insensitivity, invalid values.
-  - `test_maude_worker.py` — `_parse_warnings`: observed formats, ANSI stripping,
-    unmatched/advisory lines ignored.
+  - `test_maude_worker.py` — `_parse_warnings` (observed formats, ANSI stripping,
+    unmatched/advisory lines ignored) and the `init_maude` sequence (success/failure, IO
+    lockdown, idempotency) with the `maude` bindings faked via `sys.modules`.
   - `test_maude_executor.py` — fake executors/futures: warm-up (success/fail), broken
     submit, crash/timeout mapping + kill, exception propagation, exactly-once concurrent
     replacement, singleton.
@@ -107,14 +112,19 @@
   `rough-idea.md`, `idea-honing.md` (Q&A + amendments + verified final-testing reminders),
   `research/` (six notes; `logging.md` superseded), `design/detailed-design.md`,
   `implementation/plan.md` (7 steps, checklist ticked), `summary.md`.
-- `sigsegv-under-load/issue.md` — analysis of SIGSEGV issues in the `maude` Python
-  bindings, which motivated the worker-process architecture.
+- `sigsegv-under-load/` — SIGSEGV history that motivated the worker architecture:
+  `issue.md` (the `maude` Python bindings) and `scala-issue.md` (root-cause analysis of
+  SIGSEGV and throughput degradation in the Scala/Java Maude bindings — background
+  material from a related codebase).
 
 ## Docs
 
 - `docs/` — MkDocs sources; `docs/modules.md` renders `harold_mcp.server.server`,
   `harold_mcp.server.tools.diagnostics`, `harold_mcp.maude.executor`,
   `harold_mcp.maude.worker`, `harold_mcp.settings` via mkdocstrings.
+- Root-level docs: `README.md` (installation + MCP client config), `CONTRIBUTING.md`
+  (contribution workflow), `DEVELOPER_GUIDE.md` (dev environment + release process),
+  `CHANGELOG.md` (release notes).
 
 ## Related documents
 

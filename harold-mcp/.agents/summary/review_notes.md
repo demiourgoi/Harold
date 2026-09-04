@@ -2,8 +2,19 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review (2026-08-27, after the
-`maude_program_diagnostics` tool landed). Older resolved issues are kept for the record.
+Findings from the consistency and completeness review (2026-09-04, after the cyclopts CLI,
+the Maude IO lockdown, and the docs split into `DEVELOPER_GUIDE.md`). Older resolved issues
+are kept for the record.
+
+## Changes absorbed into this refresh
+
+- The console-script entry point changed from `harold_mcp.main:run` to
+  `harold_mcp.main:app` (cyclopts CLI); all knowledge-base references updated.
+- `worker.init_maude` now disables Maude IO (`setAllowDir/File/Processes(False)`), covered by
+  new hermetic unit tests in `tests/unit/test_maude_worker.py`.
+- `maude` is pinned to `==1.6.0` and `cyclopts>=4.23.0` was added as a runtime dependency.
+- Dev-environment and release docs moved out of `README.md`/`CONTRIBUTING.md` into the new
+  `DEVELOPER_GUIDE.md`; the `mkdocs.yml` site URL became `https://demiourgoi.github.io/Harold/`.
 
 ## Resolved issues (historical)
 
@@ -17,6 +28,8 @@ Findings from the consistency and completeness review (2026-08-27, after the
   smoke test in `tests/integration/test_diagnostics_integration.py`.
 - Docs rendered only two modules — `docs/modules.md` now lists the five real modules.
 - `broken-*.maude` fixtures unused — now exercised by integration tests.
+- Stale `AGENTS.md` Custom Instructions note ("none of the MCP tools described above are
+  implemented yet") — removed manually after this review flagged it.
 
 ## Remaining issues
 
@@ -33,6 +46,9 @@ Findings from the consistency and completeness review (2026-08-27, after the
    `os._exit(0)` in `server.run()` could be dropped in favor of a normal exit.
 4. **`README.md` env-var table is hand-maintained.** It duplicates the `Settings` defaults;
    keep it in sync when settings change.
+5. **`scala-issue.md` documents a different codebase.** The new SIGSEGV/throughput analysis
+   is about the Scala/Java Maude bindings (a related project), not `harold-mcp`'s Python
+   bindings. Useful background for the SIGSEGV story; consider annotating it as such.
 
 ## Completeness gaps
 
@@ -45,6 +61,8 @@ Findings from the consistency and completeness review (2026-08-27, after the
 3. **Advisory/`<standard input>` hardening is partial.** ANSI stripping, binary input,
    `skipped:` and `unable to locate file:` formats are pinned; multi-line Maude warning
    messages are not yet exercised (none observed).
+4. **The CLI wiring is untested.** `main.py` (cyclopts app, `serve` subcommand, default
+   command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
 
 ## Language-support limitations
 

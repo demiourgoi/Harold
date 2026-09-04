@@ -11,7 +11,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **What stack/dependencies are in play, and what are their constraints?** → `dependencies.md`, `codebase_info.md`
 - **What data structures/types exist?** → `data_models.md`
 - **What are the known gaps or inconsistencies?** → `review_notes.md`
-- **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale)
+- **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale; `scala-issue.md` documents a related SIGSEGV/throughput analysis for the Scala/Java bindings)
 - **What is planned next (run tool, RAG index)?** → `.agents/planning/maude-diagnostics-tool-v1/`
 
 ## Table of contents
