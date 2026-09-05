@@ -1,6 +1,14 @@
 # Changelog
 
+## [0.0.4]
+
 ## [0.0.3]
+
+### Added
+
+- **Developer skill: update-changelog-for-release** — new agent skill that keeps
+  `CHANGELOG.md` in sync with the commits before each release, as documented in
+  `DEVELOPER_GUIDE.md`.
 
 ### Changed
 
@@ -14,6 +22,22 @@
   read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`,
   `openWorldHint=False`) so clients can skip confirmations and treat the tool as safe
   to retry.
+- **Maude IO disabled in the worker** — after initialization the interpreter
+  forbids directory access, file access, and process spawning
+  (`setAllowDir/File/Processes(False)`), so a Maude program loaded by
+  `maude_program_diagnostics` cannot touch the filesystem or spawn processes
+  inside the worker.
+- **cyclopts-based CLI** — the `harold-mcp` console script is now a cyclopts
+  app: the default command and the new `serve` subcommand both start the MCP
+  server over stdio, with `--help`/`--version` support.
+- **Installation via `uvx`** — `README.md` now documents installing and updating
+  the server with `uvx harold-mcp` (including version pinning), and the
+  Zed/opencode/Cline MCP configuration examples use `uvx harold-mcp` as the
+  command.
+- **Developer guide moved to `DEVELOPER_GUIDE.md`** — the developer-focused
+  content (environment setup, agent-skill recommendations, release process)
+  moved out of `README.md` into a dedicated `DEVELOPER_GUIDE.md`.
+- **General fixes** — assorted typos, formatting, and documentation polish.
 
 ## [0.0.2] - 2026-08-27
 

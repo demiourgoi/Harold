@@ -1,6 +1,6 @@
 [project]
 name = "harold-mcp"
-version = "0.0.3.dev0"
+version = "0.0.4.dev0"
 description = "An MCP server for AI-assisted Maude programming."
 authors = [{ name = "Juan Rodriguez", email = "juanrh@pm.me" }]
 readme = "README.md"

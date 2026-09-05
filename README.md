@@ -4,9 +4,9 @@
 
 ## Subprojects
 
-| Subproject | Release | Build status |
+| Subproject | Releases | Build status |
 | --- | --- | --- |
-| [harold-mcp](harold-mcp/) | [![Release](https://img.shields.io/github/v/release/demiourgoi/Harold)](https://github.com/demiourgoi/Harold/releases) | [![Build status](https://github.com/demiourgoi/Harold/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/demiourgoi/Harold/actions/workflows/main.yml) |
+| [harold-mcp](harold-mcp/) | [PyPI releases](https://pypi.org/project/harold-mcp/#history) | [![Build status](https://github.com/demiourgoi/Harold/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/demiourgoi/Harold/actions/workflows/main.yml) |
 
 ## Acknowledgements
 

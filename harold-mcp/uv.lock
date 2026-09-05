@@ -689,7 +689,7 @@ wheels = [
 
 [[package]]
 name = "harold-mcp"
-version = "0.0.3.dev0"
+version = "0.0.4.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },

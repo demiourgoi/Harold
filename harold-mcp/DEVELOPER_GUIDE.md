@@ -62,7 +62,7 @@ One time setup:
 __New release__ process:
 
 1. Update `CHANGELOG.md` for the release. 
-    1. Use the skill `update-changelog-for-release`, and review the output and add any additional comments
+    1. Use the skill `update-changelog-for-release`, and review the output and add any additional comments. Also try to add a single sentence summary for the release at the top of the section.
     2. Bump the version on `pyproject.toml` so the tip of `main` is the code for the next release, still WIP. Also add a new entry to `CHANGELOG.md` for the new version (without the ".dev0" suffix). Note the release overrides the version on `pyproject.toml`.
 2. Create a [new release](https://github.com/demiourgoi/harold/releases/new) on GitHub.
     1. Make sure `make release` passes and CI checks are passing. 
