@@ -29,9 +29,6 @@ retrieval-augmented generation (RAG).
 - Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - Run `uvx harold-mcp --version`
 
-To update run `uvx harold-mcp@latest --version`.   
-If you want to run a specific version, check the release [history in PyPI](https://pypi.org/project/harold-mcp/#history) use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.  
-
 The `maude` dependency bundles the Maude interpreter (built against Maude 3.5.1),
 so there is nothing else to install.
 
@@ -78,6 +75,12 @@ for Cline (useful for manual testing and Maude programming) add the following to
     }
   }
 ```
+
+### Update
+
+To manually update run `uvx --refresh harold-mcp --version`.  
+Alternatively, use `uvx harold-mcp@latest` in your MCP client configuration, to perform an update check on each boot (instead of the manual command above). That implies a longer boot time, but for most IDEs this is negligible, since they spawn MCP servers in the background and don't block the UI on startup. CLI clients may behave differently.  
+If you want to run a specific version, check the release [history in PyPI](https://pypi.org/project/harold-mcp/#history). Use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.  
 
 ### Configuration
 
