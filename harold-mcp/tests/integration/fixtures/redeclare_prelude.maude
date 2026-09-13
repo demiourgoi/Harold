@@ -1,0 +1,3 @@
+fmod REDECLARE is
+    sort Qid .
+endfm

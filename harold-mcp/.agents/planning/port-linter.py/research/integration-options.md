@@ -100,7 +100,9 @@ If lint issues are surfaced, the current model needs (at minimum) semantic decis
 7. **Autofix surface.** If we report suggested fixes (rather than applying them), the model
    needs an optional `fix`/`replacement` field, and a policy for whether anything is written
    to disk. Writing is a **behavioral change** to a `readOnlyHint=True` tool — likely a new
-   tool or an explicit opt-in parameter instead.
+   tool or an explicit opt-in parameter instead. **Resolved (2026-09-13): report-only** —
+   fixes are exposed as an optional response field; the tool never writes to the file. See
+   `../idea-honing.md` Q1.
 8. **Messages.** English, model-actionable, and ideally cite the offending token/character
    (the current messages already do this, in French).
 
@@ -117,7 +119,8 @@ If lint issues are surfaced, the current model needs (at minimum) semantic decis
 4. **Tool shape.** One composite `maude_program_diagnostics`, a separate
    `maude_program_lint`, or both over a shared internal module?
 5. **Autofix.** Report suggested fixes only, apply them, or split into a separate mutating
-   tool with different annotations (`readOnlyHint=False`)?
+   tool with different annotations (`readOnlyHint=False`)? — **Resolved: report-only**
+   (optional fix-suggestions field, tool stays read-only); see `../idea-honing.md` Q1.
 6. **False positives.** How aggressive should the heuristic rules be (rule 6's keyword list is
    deliberately small; over-flagging erodes trust in a diagnostics tool)?
 7. **Language/i18n.** Messages must be English; keep the taxonomy but rewrite messages. Any
