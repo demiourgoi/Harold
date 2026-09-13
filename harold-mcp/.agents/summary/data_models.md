@@ -4,9 +4,9 @@
 
 ## Result models (the tool's output schema)
 
-Defined in `harold_mcp.server.tools.diagnostics` (pydantic `BaseModel`s); FastMCP derives
-the output JSON Schema from the return annotation and emits both `structuredContent` and a
-JSON text block.
+Defined in `harold_mcp.server.tools.diagnostics` (pydantic `BaseModel`s inheriting the
+private `_ResultModel` base — see below); FastMCP derives the output JSON Schema from the
+return annotation and emits both `structuredContent` and a JSON text block.
 
 | Model | Field | Type | Notes |
 | --- | --- | --- | --- |
@@ -22,6 +22,42 @@ JSON text block.
 | | `success` | `bool` | true iff no warnings and no errors |
 | | `summary` | `MaudeDiagnosticsSummary` | |
 | | `diagnostics` | `list[MaudeDiagnostic]` | in parse order |
+
+### Field docs: `_ResultModel` and `use_attribute_docstrings`
+
+All five result models inherit from a private `_ResultModel` base (never `BaseModel`
+directly), which enables pydantic's attribute docstrings:
+
+```python
+class _ResultModel(BaseModel):
+    """Base for the tool result models.
+
+    Attribute docstrings are promoted to JSON Schema field descriptions, so they
+    reach MCP clients through the tool's output schema.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+
+class MaudeDiagnostic(_ResultModel):
+    """A single problem found in a Maude source file."""
+
+    severity: Literal["warning", "error"]
+    """`"warning"` for problems Maude recovers from; `"error"` for unrecoverable load failures."""
+```
+
+- **Effect**: the string literal that follows a field becomes that field's JSON Schema
+  `description`. FastMCP inlines `$ref`/`$defs` when serving, so these descriptions reach
+  MCP clients in the tool's output schema; mkdocstrings also renders them in the API docs.
+  Plain trailing `#` comments (the previous style) reach neither.
+- **Convention**: new result models must inherit `_ResultModel` (the config is inherited)
+  and carry a docstring on the line right after each field. Pydantic extracts attribute
+  docstrings by inspecting the class source, so the module must be imported normally
+  (no source available — e.g. `exec`'d code — means no descriptions).
+- `Field(description=...)`/`Annotated` would work too but are not used here: attribute
+  docstrings keep one copy of each explanation for both docs and schema.
+- The `_ResultModel` name is private, so mkdocstrings (default filters) does not render it,
+  and the base itself never appears in the output schema.
 
 ## Worker protocol types
 

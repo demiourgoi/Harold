@@ -23,8 +23,11 @@
     Missing/unreadable files raise `MaudeFileNotFoundError` →
     `isError`; worker crashes/timeouts raise `MaudeWorkerCrashedError` /
     `MaudeWorkerTimeoutError` → `isError` (the MCP client retries; the pool is replaced).
-    The docstring is the MCP tool description. Loading mutates interpreter state
-    ("last load wins"), documented in the description.
+    Only the free-form text above `Args:` becomes the MCP tool description (FastMCP
+    excludes `Returns`/`Raises`/`Example` sections — noted in a comment in the code), and
+    the result models' attribute docstrings become output-schema field descriptions (see
+    `data_models.md`). Loading mutates interpreter state ("last load wins"), documented in
+    that prose.
 
 ```mermaid
 sequenceDiagram

@@ -168,6 +168,7 @@ UV_CACHE_DIR=/tmp/uv-cache make release
 ### References
 
 - [FastMCP](https://gofastmcp.com/llms.txt)
+  - [Tools](https://gofastmcp.com/v3/servers/tools.md): Expose functions as executable capabilities for your MCP client.
 - Maude programming language:
   - Overview: [wikipedia page on Maude](https://en.wikipedia.org/wiki/Maude_system)
   - Reference. [Maude manual](https://maude.lcc.uma.es/maude-manual/)

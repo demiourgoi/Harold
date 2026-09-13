@@ -47,6 +47,10 @@
   whole-file `error`; `success = ok and no warnings`; per-severity counts). Registered
   with the full read-only annotation profile (`readOnlyHint=True`, `destructiveHint=False`,
   `idempotentHint=True`, `openWorldHint=False`) and `tags=harold_tags(DIAGNOSTICS)`.
+  The models inherit the private `_ResultModel` base
+  (`ConfigDict(use_attribute_docstrings=True)`), so their attribute docstrings reach
+  clients as output-schema field descriptions (see `data_models.md`); a code comment next
+  to the tool records that only the text above `Args:` becomes the MCP description.
 
 ### `harold_mcp.maude` (package)
 
