@@ -158,6 +158,26 @@ what is the mapping, and do we add `info`?
 - Consequence: `severity="error"` no longer means *only* the interpreter's load failure;
   the model field docs, the tool description, and the knowledge base must say so.
 - `MaudeDiagnosticsSummary` gains an `info` count.
+- **Amendment (user, 2026-09-14, after research):** linter rule 1 (non-ASCII character) is
+  demoted to **`info`**. Research (`research/maude-lexical.md` §3) disproved its fatal
+  premise on the pinned Maude 3.5.1: non-ASCII bytes are accepted as identifier characters.
+  Example program — loads clean on Maude 3.5.1, and `red L’ .` reduces to `1`:
+
+  ```maude
+  fmod T is
+      protecting NAT .
+      op L’ : -> Nat .
+      eq L’ = 1 .
+  endfm
+  ```
+
+  Justification: because that program is well formed and fully usable, every rule-1
+  finding is a false positive in the "won't compile" sense, so `error` is excluded by this
+  section's own definition; the finding becomes a normalization advisory ("usually a
+  typographic-punctuation paste from a PDF/word processor"), with the `UNICODE_FIXES`
+  autofix as its payload. Consequence: with the current 7-rule set, the heuristic-linter
+  emits **no `error` diagnostics** — rule 1 and the prelude-sort rule are `info`, rules
+  2–6 are `warning`.
 
 ## Q7 — New heuristic rule: redeclared prelude sorts
 
