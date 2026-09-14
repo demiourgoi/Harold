@@ -293,4 +293,5 @@ theory sorts such as `Elt` in `fth TRIV` are included is a design detail.
    diagnosed file (Q1); `improve-rag/improvement/linter.py` is left untouched (Harold's
    port is independent); messages are English-only, no locale mechanism.
 
-**Answer:** _pending user response._
+**Answer (user, 2026-09-14):** Confirmed as-is — items 1–9 are the definition of done for
+this project.
