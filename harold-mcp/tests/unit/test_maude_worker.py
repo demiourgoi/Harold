@@ -24,12 +24,14 @@ class _FakeMaude(types.ModuleType):
     def __init__(self, *, init_result: bool = True) -> None:
         super().__init__("maude")
         self._init_result = init_result
+        self.init_load_prelude_calls: list[bool] = []
         self.init_advise_calls: list[bool] = []
         self.allow_dir_calls: list[bool] = []
         self.allow_files_calls: list[bool] = []
         self.allow_processes_calls: list[bool] = []
 
-    def init(self, advise: bool = True) -> bool:
+    def init(self, *, loadPrelude: bool = True, advise: bool = True) -> bool:
+        self.init_load_prelude_calls.append(loadPrelude)
         self.init_advise_calls.append(advise)
         return self._init_result
 
@@ -52,12 +54,13 @@ def _patch_maude(monkeypatch: pytest.MonkeyPatch, *, init_result: bool = True) -
 
 
 def test_init_maude_disables_io(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A successful init calls `maude.init(advise=False)` and locks down IO."""
+    """A successful init calls `maude.init(loadPrelude=True, advise=False)` and locks down IO."""
     fake = _patch_maude(monkeypatch)
 
     worker_module.init_maude()
     worker_module.init_maude()  # already initialized: must be a no-op
 
+    assert fake.init_load_prelude_calls == [True]
     assert fake.init_advise_calls == [False]
     assert fake.allow_dir_calls == [False]
     assert fake.allow_files_calls == [False]
@@ -72,6 +75,7 @@ def test_init_maude_failed_init_skips_io_lockdown(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(WorkerInitError):
         worker_module.init_maude()
 
+    assert fake.init_load_prelude_calls == [True]
     assert fake.init_advise_calls == [False]
     assert fake.allow_dir_calls == []
     assert fake.allow_files_calls == []

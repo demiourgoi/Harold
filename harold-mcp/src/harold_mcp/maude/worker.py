@@ -46,16 +46,17 @@ _maude_initialized = False
 def init_maude() -> None:
     """Initialize the Maude interpreter once per worker process.
 
-    Uses `advise=False` to suppress advisories (warnings still print). Raises
-    `WorkerInitError` on failure; the client maps the resulting dead worker to
-    `MaudeInitError`.
+    Uses `loadPrelude=True` (the default, stated explicitly) so the full
+    prelude is available, and `advise=False` to suppress advisories (warnings
+    still print). Raises `WorkerInitError` on failure; the client maps the
+    resulting dead worker to `MaudeInitError`.
     """
     global _maude_initialized
     if _maude_initialized:
         return
     import maude
 
-    if not maude.init(advise=False):
+    if not maude.init(loadPrelude=True, advise=False):
         raise WorkerInitError()
     # Disable IO from Maude
     maude.setAllowDir(False)
