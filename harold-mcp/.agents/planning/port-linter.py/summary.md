@@ -40,10 +40,11 @@ the Maude interpreter and answers with a merged, attributed diagnostic list:
   allow-lists) plus the new `prelude-sort-redeclared` rule backed by a bundled generated
   snapshot (164 prelude sorts, provenance header, theory sorts excluded) and the
   `harold-update-prelude-sorts` cyclopts console script;
-- a diagnostics-layer error vocabulary (`DiagnosticsError` → `DiagnosticProviderError` →
-  `DiagnosticCollectionError`) independent of `MaudeError`, with the Maude worker error
-  kept as the chained cause; if any provider fails, the call fails and no partial results
-  are returned (MCP has no partial-result semantics).
+- a diagnostics-layer error vocabulary (`DiagnosticsError` → `SourceFileNotFoundError` for
+  the tool's input, `DiagnosticProviderError` for a failed provider,
+  `DiagnosticCollectionError` for the aggregation) independent of `MaudeError`, with the
+  Maude worker error kept as the chained cause; if any provider fails, the call fails and
+  no partial results are returned (MCP has no partial-result semantics).
 
 **Plan shape.** Six steps: (1) seam + aggregator + interpreter provider behind the rewired
 tool; (2) heuristic package + code view + rule 1 with fixes; (3) rules 2–4 with the lexical
@@ -78,6 +79,9 @@ gate. Each step writes its tests first, ends wired end-to-end, and has an explic
   a Maude upgrade, `harold-update-prelude-sorts --check` is the signal to regenerate.
 - **`Elt` and other theory sorts** are intentionally not reported (review D6); if users ask
   for theory-sort shadowing warnings, that is a new rule, not a snapshot change.
-- **`MaudeFileNotFoundError`** stays a `MaudeError` while provider failures are
-  `DiagnosticsError`s; the split is deliberate (input validation vs. subsystem failure) but
-  worth revisiting if the tool error vocabulary grows.
+- **Error vocabulary changes reach users**: `MaudeFileNotFoundError` disappears (it is now
+  `harold_mcp.diagnostics.SourceFileNotFoundError`, raised by `SourceFile.from_path`), so
+  the tool's input error is no longer part of the Maude subsystem; a provider failure
+  surfaces as `DiagnosticCollectionError` instead of `MaudeWorkerCrashedError`. Both are
+  documented in the changelog (Step 6) — pre-1.0 API churn, worth a line in `README.md`'s
+  tool entry only if users scripted against the exception types.

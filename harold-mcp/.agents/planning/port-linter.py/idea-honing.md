@@ -334,11 +334,15 @@ its Appendix E with the rationale. D1/D3/D7 amend Q2/Q5/Q9, and D6 narrows Q7.
 Structural decisions taken in the same review:
 
 - **Error layering** — the diagnostics layer has its own error vocabulary
-  (`DiagnosticsError`, `DiagnosticProviderError`, `DiagnosticCollectionError`) and does
-  **not** subclass `MaudeError`: a collection failure is not an interpreter error. The
-  interpreter provider wraps a `MaudeWorkerError` with `raise ... from`, so the Maude
-  vocabulary stops at the provider boundary while the original error stays in the chain.
-  `MaudeError` itself is unchanged.
+  (`DiagnosticsError` with `SourceFileNotFoundError`, `DiagnosticProviderError` and
+  `DiagnosticCollectionError`) and does **not** subclass `MaudeError`: a collection failure
+  is not an interpreter error, and neither is the tool's input file. `MaudeFileNotFoundError`
+  is therefore renamed and moved out of the Maude subsystem into
+  `harold_mcp/diagnostics/provider.py` (`SourceFileNotFoundError`, raised by
+  `SourceFile.from_path`, which also owns the lossy read policy). The interpreter provider
+  wraps a `MaudeWorkerError` with `raise ... from`, so the Maude vocabulary stops at the
+  provider boundary while the original error stays in the chain; `MaudeError` and its
+  remaining subclasses (all interpreter-subsystem failures) are otherwise unchanged.
 - **Package layout** — the heuristic linter gets its own package (`harold_mcp/heuristic/`:
   provider, rules, lexical layer, declarations, generated prelude snapshot, CLI), the
   interpreter provider lives in `harold_mcp/maude/provider.py`, and

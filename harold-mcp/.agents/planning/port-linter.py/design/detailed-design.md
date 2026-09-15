@@ -68,7 +68,7 @@ Consolidated from `../idea-honing.md` (Q1–Q11). Identifiers are local to this 
 | LP2 | **Fix payload.** A diagnostic may carry `fix: {description: str, edits: [{range, new_text}]}`. Only deterministic corrections carry one (today: the 8 Unicode punctuation substitutions). The explanation stays in `message`; `fix.description` is a short restatement. | Q2 |
 | LP3 | **Positions.** Heuristic diagnostics carry 1-based `column` for `range.start` and a populated, **exclusive** `range.end`. Interpreter diagnostics keep `column=null` and `end=null` (Maude reports no columns). `range=null` continues to mean a whole-file problem. | Q2 (extended, D1) |
 | LP4 | **One composite tool.** `maude_program_diagnostics` runs the interpreter provider *and* the heuristic provider in a single call; no separate lint tool. **All** providers are attempted; if **any** provider fails, the whole call fails (`isError`), the successful providers' diagnostics are **not** returned, and the error names every failing provider and its cause (crash vs. timeout). The failure-handling site carries a code comment stating that partial results are deliberately not returned because MCP cannot express "error + content" (spec 2025-06-18; FastMCP surfaces errors by raising). | Q3 |
-| LP5 | **Provider seam.** A `DiagnosticProvider` `Protocol` (read-only `name` property, `diagnose(source) -> list[ProviderDiagnostic]`) with two initial implementations: `interpreter` (in `harold_mcp/maude/`, executor-backed, crosses the worker boundary) and `heuristic-linter` (in `harold_mcp/heuristic/`, pure text, server process, no `maude` import, no worker dependency). Provider failures use a diagnostics-subsystem error hierarchy (`DiagnosticsError`, `DiagnosticProviderError`) that is **independent of `MaudeError`**; a provider that fails for an interpreter reason wraps it with `raise ... from`, so the Maude vocabulary stops at the provider boundary. | Q4 |
+| LP5 | **Provider seam.** A `DiagnosticProvider` `Protocol` (read-only `name` property, `diagnose(source) -> list[ProviderDiagnostic]`) with two initial implementations: `interpreter` (in `harold_mcp/maude/`, executor-backed, crosses the worker boundary) and `heuristic-linter` (in `harold_mcp/heuristic/`, pure text, server process, no `maude` import, no worker dependency). Tool errors live in the diagnostics-subsystem error hierarchy (`DiagnosticsError`): `SourceFileNotFoundError` for the input file and `DiagnosticProviderError` for a failed provider — **independent of `MaudeError`**, which stays the interpreter subsystem's vocabulary; a provider that fails for an interpreter reason wraps it with `raise ... from`. | Q4 |
 | LP6 | **Provenance.** Every diagnostic requires `source` (the provider's stable name — the single source for that string) and `code`. The interpreter provider stamps its single code `compiler`; the heuristic provider stamps one code per rule. | Q5 |
 | LP7 | **Severity.** Vocabulary `info` \| `warning` \| `error`, defined per source (table in §5.3). Heuristic `error` is reserved for findings that *cannot* be false positives (none of today's rules qualifies: rules 1 and 7 are `info`, rules 2–6 are `warning`). `MaudeDiagnosticsSummary` gains `info`. | Q6 + amendment |
 | LP8 | **Success.** `success = true` iff no diagnostic from any source has severity `warning` or `error`. `info`-only results are successful. | Q8 |
@@ -85,10 +85,8 @@ Consolidated from `../idea-honing.md` (Q1–Q11). Identifiers are local to this 
 
 ```mermaid
 flowchart TB
-    P["path"] --> C{"pre-check: is_file and readable?"}
-    C -->|no| E1["MaudeFileNotFoundError (tool error)"]
-    C -->|yes| R["read text (UTF-8, errors=replace)"]
-    R --> SF["SourceFile(path, text)"]
+    P["path"] --> SF["SourceFile.from_path(path): check readable, read UTF-8 lossily"]
+    SF -->|missing or unreadable| E1["SourceFileNotFoundError (tool error)"]
     SF --> A["collect_diagnostics(providers, source)"]
     A --> HP["HeuristicLinterProvider: code view, 7 rules"]
     A --> IP["InterpreterDiagnosticProvider"]
@@ -232,6 +230,7 @@ from harold_mcp.diagnostics.provider import (
     ProviderDiagnostic,
     Severity,
     SourceFile,
+    SourceFileNotFoundError,
 )
 
 # harold_mcp/maude/__init__.py — existing exports plus:
@@ -254,6 +253,14 @@ class SourceFile:
 
     path: str
     text: str
+
+    @classmethod
+    def from_path(cls, path: str) -> SourceFile:
+        """Read a Maude source file for diagnostics.
+
+        Checks the path is a readable file (raising `SourceFileNotFoundError` otherwise),
+        then reads it as UTF-8 with undecodable bytes replaced (the lossy policy of §6).
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +299,20 @@ class DiagnosticsError(RuntimeError):
     """Base error for failures of the diagnostics subsystem."""
 
 
+class DiagnosticsError(RuntimeError):
+    """Base error for failures of the diagnostics subsystem."""
+
+
+class SourceFileNotFoundError(DiagnosticsError):
+    """The Maude source file to diagnose is missing or unreadable."""
+
+    path: str
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        super().__init__(f"Maude program file not found or unreadable: {path!r}")
+
+
 class DiagnosticProviderError(DiagnosticsError):
     """A provider could not produce diagnostics; wraps the underlying failure."""
 
@@ -324,12 +345,15 @@ class DiagnosticProvider(Protocol):
   one-line change in the alias plus the provider itself.
 - Providers stamp `source=self.name` on their diagnostics, so the name string exists once
   per provider and the aggregator needs no side table (§4.2).
-- **Error layering**: `DiagnosticsError` is independent of the `MaudeError` hierarchy. A
-  provider that fails because the interpreter failed raises
+- **Error layering**: the diagnostics subsystem has its own error vocabulary, with no
+  relationship to the `MaudeError` hierarchy. `SourceFileNotFoundError` reports the tool's
+  *input* (`SourceFile.from_path`), `DiagnosticProviderError` reports a provider that could
+  not produce diagnostics, and `DiagnosticCollectionError` (§4.2) reports the failed
+  aggregation. A provider that fails because the interpreter failed raises
   `DiagnosticProviderError(...) from maude_error`, so the Maude vocabulary stops at the
   provider boundary and the automatic exception chain (`__cause__`) keeps the original
-  `MaudeWorkerCrashedError` visible for logs and debugging. `MaudeError` itself is left
-  untouched.
+  `MaudeWorkerCrashedError` visible for logs and debugging. `MaudeError` and its subclasses
+  (all interpreter-subsystem failures) are untouched.
 
 ### 4.2 `harold_mcp/diagnostics/aggregate.py` — run, order, fail loudly
 
@@ -387,7 +411,8 @@ Diagnostics failed: interpreter (Maude worker crashed); heuristic-linter (ValueE
 `DiagnosticCollectionError` is a `DiagnosticsError`, **not** a `MaudeError`: a collection
 failure is a diagnostics-subsystem failure, and the interpreter's own vocabulary reaches
 it only as the chained `__cause__` of the `DiagnosticProviderError` the provider raised.
-`harold_mcp/maude/executor.py` is left untouched.
+`harold_mcp/maude/executor.py` loses `MaudeFileNotFoundError` (it moves to the diagnostics
+layer, §4.1); its remaining contents are untouched.
 
 ### 4.3 `harold_mcp/maude/provider.py` — Maude interpreter provider
 
@@ -666,16 +691,14 @@ flow:
 ```python
 from harold_mcp.diagnostics import SourceFile, collect_diagnostics
 from harold_mcp.heuristic import HeuristicLinterProvider
-from harold_mcp.maude import InterpreterDiagnosticProvider, MaudeFileNotFoundError, MaudeExecutor, get_maude_executor
+from harold_mcp.maude import InterpreterDiagnosticProvider, MaudeExecutor, get_maude_executor
 
 
 def maude_program_diagnostics(
     path: str,
     maude_executor: MaudeExecutor = Depends(get_maude_executor),  # noqa: B008
 ) -> MaudeProgramDiagnosticsResult:
-    if not Path(path).is_file() or not os.access(path, os.R_OK):
-        raise MaudeFileNotFoundError(path)
-    source = SourceFile(path=path, text=_read_source_text(path))
+    source = SourceFile.from_path(path)  # raises SourceFileNotFoundError
     providers: tuple[DiagnosticProvider, ...] = (
         InterpreterDiagnosticProvider(maude_executor),
         HeuristicLinterProvider(),
@@ -684,13 +707,13 @@ def maude_program_diagnostics(
     return _build_result(path, diagnostics)
 ```
 
-- `MaudeFileNotFoundError` stays in `harold_mcp.maude` and unchanged: it is about the
-  *input file*, raised before any provider runs; the diagnostics-subsystem errors (§4.1)
-  are a separate hierarchy.
-
-- `_read_source_text(path)` reads bytes and decodes `utf-8` with `errors="replace"`
-  (the same lossy policy the worker uses for captured stderr), so arbitrary input cannot
-  crash the tool (§6).
+- Input handling lives with the value it produces: `SourceFile.from_path` checks the path is
+  a readable file (raising `SourceFileNotFoundError`, a `DiagnosticsError` — the tool's
+  input is not an interpreter concern) and reads it as bytes decoded `utf-8` with
+  `errors="replace"` (the same lossy policy the worker uses for captured stderr, §6), so
+  arbitrary input cannot crash the tool. The tool therefore does no filesystem work of its
+  own beyond handing `SourceFile.text` to the heuristic provider and `SourceFile.path` to
+  the interpreter provider.
 - `_build_result(path, diagnostics)` builds `MaudeDiagnostic` objects (the adapter:
   `line`/`column`/`end_column` → `MaudeRange`), computes the `info`/`warning`/`error`
   counts and `success = no warning/error diagnostic`. `range=None` stays for `line=None`.
@@ -803,6 +826,7 @@ per-reason exclusion counts.
 | --- | --- |
 | `src/harold_mcp/diagnostics/{provider,aggregate}.py` | New seam package (protocol, value types, errors, aggregation) |
 | `src/harold_mcp/maude/provider.py` | New `InterpreterDiagnosticProvider`; `maude/__init__.py` re-exports it |
+| `src/harold_mcp/maude/executor.py`, `harold_mcp/maude/__init__.py` | `MaudeFileNotFoundError` removed (moved to `harold_mcp/diagnostics/provider.py` as `SourceFileNotFoundError`) and dropped from the package exports; everything else untouched |
 | `src/harold_mcp/heuristic/**` | New heuristic-linter package (provider, rules, lexical layer, declarations, generated snapshot, CLI) |
 | `src/harold_mcp/server/tools/diagnostics.py` | Models gain `source`, `code`, `fix`, `info` severity/count; description rewritten (§5.6) |
 | `docs/modules.md` | Add `::: harold_mcp.diagnostics.{provider,aggregate}`, `::: harold_mcp.maude.provider` and the `harold_mcp.heuristic.*` modules |
@@ -811,7 +835,7 @@ per-reason exclusion counts.
 | `CHANGELOG.md` | New version section with the ported linter, new rule, model changes (breaking schema change: new fields, `info` severity) |
 | `pyproject.toml` | New `harold-update-prelude-sorts` console script; suggested minor bump `0.0.4.dev0` → `0.0.5.dev0` |
 | `.agents/summary/`, `AGENTS.md` | Prompt the user to re-run the codebase-summary skill (new packages, new modules) |
-| `src/harold_mcp/maude/executor.py`, `improve-rag/improvement/linter.py` | Untouched |
+| `src/harold_mcp/maude/executor.py`, `improve-rag/improvement/linter.py` | Untouched except the `MaudeFileNotFoundError` removal noted above |
 
 ## 5. Data Models
 
@@ -1014,7 +1038,7 @@ Args:
 
 | Situation | Behavior |
 | --- | --- |
-| Path missing/unreadable | `MaudeFileNotFoundError` (a `MaudeError`, raised by the tool) before any provider runs (unchanged, v1-R5) |
+| Path missing/unreadable | `SourceFileNotFoundError` (a `DiagnosticsError`, raised by `SourceFile.from_path`) before any provider runs (behavior unchanged from v1-R5; the class moved out of the Maude subsystem) |
 | Unrecoverable parse error in the file | diagnostic (`interpreter`/`compiler`/`error`, `range=null`), not a tool error |
 | Worker crash / timeout during the interpreter provider | the provider raises `DiagnosticProviderError("interpreter", "Maude worker crashed")` **from** the `MaudeWorkerError`, and the aggregator raises `DiagnosticCollectionError` naming `interpreter` and the cause; no partial results; the next call recovers on the recreated pool (v1 behavior preserved) |
 | Unexpected exception in a rule | same aggregate failure path, naming `heuristic-linter` (`ValueError: …`) — a rule bug must not silently degrade the tool |
@@ -1028,11 +1052,12 @@ diagnostics layer's inheritance):
 graph TB
     MAUDE["MaudeError (interpreter subsystem)"] --> CRASH["MaudeWorkerCrashedError"]
     MAUDE --> TIMEOUT["MaudeWorkerTimeoutError"]
-    MAUDE --> FILENF["MaudeFileNotFoundError (input file, raised by the tool)"]
+    MAUDE --> INIT["MaudeInitError"]
     CRASH -->|chained from| PE["DiagnosticProviderError"]
     TIMEOUT -->|chained from| PE
     DE["DiagnosticsError"] --> PE
     DE --> CE["DiagnosticCollectionError"]
+    DE --> SNF["SourceFileNotFoundError (the tool's input file)"]
     PE -->|chained from| CE
 ```
 
@@ -1135,7 +1160,7 @@ with the installation), because CI does not ship a Maude installation file.
 | Prelude list | generated Python module + `dict[str, str]` | JSON/data file; runtime read of the installation; setting for the prelude path | Wheel-safe, type-checked, hermetic, no settings/discovery (LP11, Q10) |
 | Snapshot provenance | source path + SHA-256 + date + version hint | version only | A hash makes "same prelude?" checkable even when version strings are missing (`--check`) |
 | Declaration sharing | one `iter_sort_declarations` for rule 7 *and* the snapshot | separate regexes in rule and script | The rule and the snapshot must agree on what a declaration is; sharing removes a drift class |
-| Error layering | `DiagnosticsError` hierarchy, `MaudeError` untouched, `raise ... from` at the provider boundary | `DiagnosticCollectionError(MaudeError)` | A collection failure is not an interpreter error; chaining keeps the Maude cause for logs while the diagnostics layer stays independent (design review, 2026-09-15) |
+| Error layering | `DiagnosticsError` hierarchy (`SourceFileNotFoundError`, `DiagnosticProviderError`, `DiagnosticCollectionError`), `MaudeError` untouched, `raise ... from` at the provider boundary | `DiagnosticCollectionError(MaudeError)`; keeping `MaudeFileNotFoundError` in the Maude subsystem | A tool's input error and a provider failure are not interpreter errors; chaining keeps the Maude cause for logs while the diagnostics layer stays independent (design review, 2026-09-15) |
 | Package layout | capability packages: `maude/` (unchanged, + its provider), `heuristic/` (new), `diagnostics/` (seam only) | a `domain/{maude,heuristic}` umbrella; everything flat in `diagnostics/` | Each capability owns its directory like `maude/` does, the seam stays provider-agnostic, and the existing interpreter package does not move (design review, 2026-09-15) |
 | Maintenance CLI | cyclopts `App` in `heuristic/prelude_extract.py` + `harold-update-prelude-sorts` console script | a `scripts/*.py` file; a subcommand of `harold-mcp` | Same CLI style as `main.py`, importable by tests, discoverable through `[project.scripts]`, and no un-packaged script directory (design review, 2026-09-15) |
 | Theory sorts | excluded from the snapshot (no `Elt`) | include them (letter of Q7) | User modules are expected to redeclare theory interface sorts when instantiating a theory, so reporting them is noise (D6, amended in review) |
@@ -1239,9 +1264,11 @@ requirements record in `../idea-honing.md` carries the same list.
 Structural decisions taken in the same review (not deviations, but recorded because they
 change the file layout promised by the first draft):
 
-8. **Error layering**: `DiagnosticsError`/`DiagnosticProviderError` in the diagnostics
-   layer; the interpreter provider wraps `MaudeWorkerError` with `raise ... from`;
-   `DiagnosticCollectionError` is **not** a `MaudeError` (§4.1, §4.2, §6).
+8. **Error layering**: `DiagnosticsError`/`SourceFileNotFoundError`/`DiagnosticProviderError`
+   in the diagnostics layer; the interpreter provider wraps `MaudeWorkerError` with
+   `raise ... from`; `DiagnosticCollectionError` is **not** a `MaudeError`, and
+   `MaudeFileNotFoundError` is renamed and moved out of the Maude subsystem (it is the
+   diagnostics tool's input error, not an interpreter error) (§4.1, §4.2, §4.8, §6).
 9. **Package layout**: `maude/` keeps its place and gains `provider.py`; the heuristic
    linter gets its own `heuristic/` package; `diagnostics/` holds only the seam and the
    aggregation (§4.0). No `domain/` umbrella level.
