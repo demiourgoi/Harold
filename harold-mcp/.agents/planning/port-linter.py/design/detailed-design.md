@@ -752,6 +752,7 @@ logic lives in a script file anymore:
 def extract_prelude_sorts(text: str) -> dict[str, str]: ...
 def render_snapshot_module(sorts, *, source_path, source_hash, maude_version, extracted) -> str: ...
 
+
 app = App(name="harold-update-prelude-sorts", help="Regenerate the bundled Maude prelude sort snapshot.")
 
 
