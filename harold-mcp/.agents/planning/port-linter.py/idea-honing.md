@@ -315,3 +315,37 @@ theory sorts such as `Elt` in `fth TRIV` are included is a design detail.
 
 **Answer (user, 2026-09-14):** Confirmed as-is — items 1–9 are the definition of done for
 this project.
+
+## Design-review decisions (2026-09-15)
+
+Recorded while reviewing `design/detailed-design.md`; the design document repeats them in
+its Appendix E with the rationale. D1/D3/D7 amend Q2/Q5/Q9, and D6 narrows Q7.
+
+| ID | Decision | Effect on earlier answers |
+| --- | --- | --- |
+| D1 | Heuristic diagnostics carry `range.start.column` **and** `range.end` for *all* findings, not only fix-carrying ones | amends Q2 |
+| D2 | Rule 1 (`non-ascii-character`) reports one diagnostic per offending character, each with a single-character fix | extends Q2; supersedes the source linter's one-per-line behavior |
+| D3 | Rule 1's code is `non-ascii-character`, not the working name `unicode-punctuation` | amends Q5 |
+| D4 | Ordering: file order, `interpreter` before `heuristic-linter` on a line, whole-file problems last | new |
+| D5 | `code` is an open `str` (values enumerated in the field description and the tool description), unlike the closed `source` `Literal` | settles Q5's typing detail |
+| D6 | Theory sorts are excluded from the prelude snapshot: `Elt` (declared by `fth TRIV`) is **not** reported | narrows Q7 |
+| D7 | Rule 6's keyword allow-list is kept verbatim from the source linter, including the `True`/`False` silencing | amends Q9(b), which asked to revisit it |
+
+Structural decisions taken in the same review:
+
+- **Error layering** — the diagnostics layer has its own error vocabulary
+  (`DiagnosticsError`, `DiagnosticProviderError`, `DiagnosticCollectionError`) and does
+  **not** subclass `MaudeError`: a collection failure is not an interpreter error. The
+  interpreter provider wraps a `MaudeWorkerError` with `raise ... from`, so the Maude
+  vocabulary stops at the provider boundary while the original error stays in the chain.
+  `MaudeError` itself is unchanged.
+- **Package layout** — the heuristic linter gets its own package (`harold_mcp/heuristic/`:
+  provider, rules, lexical layer, declarations, generated prelude snapshot, CLI), the
+  interpreter provider lives in `harold_mcp/maude/provider.py`, and
+  `harold_mcp/diagnostics/` holds only the provider seam and the aggregation. No `domain/`
+  umbrella level: each capability owns its directory, like `maude/` already does, and the
+  heuristic package has no other users, so it does not need to move.
+- **Maintenance CLI** — instead of `scripts/update_prelude_sorts.py`, the snapshot
+  regenerator is a cyclopts app in `harold_mcp/heuristic/prelude_extract.py` (same style as
+  `main.py`, with an `if __name__ == "__main__":` guard) exposed as the
+  `harold-update-prelude-sorts` console script in `[project.scripts]`.

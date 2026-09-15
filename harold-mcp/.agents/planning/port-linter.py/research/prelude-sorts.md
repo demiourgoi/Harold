@@ -131,6 +131,14 @@ A sort name enters the snapshot iff it is declared by a `sort`/`sorts` statement
 
 ## 6. Snapshot + update script requirements (Q10)
 
+> **Superseded by the design review (2026-09-15)** — kept as the research record. The
+> implemented shape is: the snapshot is a generated Python module
+> (`harold_mcp/heuristic/prelude_sorts.py`), the regenerator is a cyclopts CLI in
+> `harold_mcp/heuristic/prelude_extract.py` exposed as the `harold-update-prelude-sorts`
+> console script (no `scripts/` directory), theory sorts (`Elt`) are excluded, and the
+> snapshot is checked against a synthetic prelude plus invariants rather than a bundled
+> copy of `prelude.maude`. See `../design/detailed-design.md` §4.5, §4.9, Appendix E.
+
 - **Snapshot**: a bundled Python constant or data file listing the extracted names, with a
   provenance header (Maude version, source path, extraction date). Generated, never
   hand-edited.

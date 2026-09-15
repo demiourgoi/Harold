@@ -1,15 +1,18 @@
 """Research probe: validate the Q10 prelude-sort extraction algorithm.
 
 Purpose: check that the extraction rules in `research/prelude-sorts.md` §3 are
-implementable as a line-oriented script and produce a sensible snapshot: real
-`sort`/`sorts` declarations inside `fmod`/`fth`/`mod`/`smod` bodies only, with
-view bodies, renaming instantiations, comments, `set` commands and the
+implementable as a line-oriented reader and produce a sensible snapshot: real
+`sort`/`sorts` declarations inside `fmod`/`mod`/`smod` bodies only, with view bodies,
+theory bodies (`fth`/`th`), renaming instantiations, comments, `set` commands and the
 `(sth ... sorts none . ... endsth)` meta-term placeholder excluded.
 
-Validated on 2026-09-15 against Maude 3.5.1 (3234-line prelude): 165 names from 25
+Validated on 2026-09-15 against Maude 3.5.1 (3234-line prelude): 164 names from 24
 modules, no junk. The rules this probe validates are the ones specified in
 `design/detailed-design.md` §4.5 and implemented by
-`scripts/update_prelude_sorts.py`.
+`harold_mcp/heuristic/prelude_extract.py`. Deviation from that implementation: this probe
+masks only comments (`strip_comments`), while the shipped extractor runs the full
+`code_view` (§4.4), which also blanks string literals, quoted identifiers and statement
+labels — immaterial for the pinned prelude, where the two agree on the numbers above.
 
 Run with the installed prelude (default) or any path:
 
@@ -36,6 +39,9 @@ SORT_STMT_RE = re.compile(r"^\s*sorts?\s+(.+?)\.\s*$")
 # `lexical_probe.py`), optionally parameterized.
 SORT_NAME_RE = re.compile(r"^[A-Za-z_$][\w'\-?]*(?:\{[^}]*\})?$")
 COMMENT_MARKERS = ("***", "---")
+# Theory modules declare interface sorts that user modules are expected to redeclare
+# when they instantiate the theory, so they are not "shadowed prelude sorts".
+THEORY_KINDS = frozenset({"fth", "th"})
 # Maude's placeholder in module expressions (`sorts none .` inside `(sth ... endsth)`);
 # never a real sort declaration.
 PLACEHOLDER_NAMES = frozenset({"none", "}"})
@@ -62,6 +68,9 @@ def _collect_statement(
         return
     if module[0] == "view":
         excluded["view body (sort mapping)"] += len(names)
+        return
+    if module[0] in THEORY_KINDS:
+        excluded["theory body (interface sort)"] += len(names)
         return
     if " to " in f" {body.group(1)} ":
         excluded["renaming instantiation (sort mapping)"] += len(names)
@@ -117,7 +126,6 @@ def main() -> None:
         ("Bool", "TRUTH-VALUE"),
         ("Nat", "NAT"),
         ("Zero", "NAT"),
-        ("Elt", "TRIV"),
         ("List{X}", "LIST"),
         ("NeList{X}", "LIST"),
         ("Entry{X,Y}", "MAP"),
@@ -127,8 +135,8 @@ def main() -> None:
     ):
         actual = sorts.get(name)
         print(f"  {name!r}: {actual!r} {'ok' if actual == expected else 'MISMATCH, expected ' + expected!r}")
-    print("\nmust be absent:")
-    for name in ("none", "NatList", "QidList", "NeNatList", "endsth)", "."):
+    print("\nmust be absent (junk, mapping-only names, and theory sorts):")
+    for name in ("none", "NatList", "QidList", "NeNatList", "endsth)", ".", "Elt"):
         print(f"  {name!r}: {'ABSENT (ok)' if name not in sorts else 'PRESENT (bug)'}")
 
     base_names = sorted({name.split("{", 1)[0] for name in sorts})
