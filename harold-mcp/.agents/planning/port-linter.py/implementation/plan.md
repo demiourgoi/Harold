@@ -71,12 +71,12 @@ reports (v1 behavior preserved: same warnings, same synthesized error, same cras
 (interpreter provider), §4.8 (tool/models/adapter), §5.1 (wire models), §6 (errors).
 
 - New `src/harold_mcp/diagnostics/`: `provider.py` (`Severity`, `DiagnosticSource`,
-  `SourceFile` with its `from_path` reader, `FixEdit`, `FixSuggestion`, `ProviderDiagnostic`
-  with its position invariants, `DiagnosticsError`, `SourceFileNotFoundError`,
-  `DiagnosticProviderError`, the `DiagnosticProvider` protocol), `aggregate.py`
-  (`ProviderFailure`, `DiagnosticCollectionError`, `collect_diagnostics` with the LP4
-  comment, the fixed message format and the stable ordering key), `__init__.py` (the
-  surface shown in design §4.0).
+  `SourceFile` — `path: Path` + `text: str`, with its `from_path` reader — `FixEdit`,
+  `FixSuggestion`, `ProviderDiagnostic` with its position invariants, `DiagnosticsError`,
+  `SourceFileNotFoundError`, `DiagnosticProviderError`, the `DiagnosticProvider`
+  protocol), `aggregate.py` (`ProviderFailure`, `DiagnosticCollectionError`,
+  `collect_diagnostics` with the LP4 comment, the fixed message format and the stable
+  ordering key), `__init__.py` (the surface shown in design §4.0).
 - Move the input-file error out of the Maude subsystem: delete `MaudeFileNotFoundError`
   from `src/harold_mcp/maude/executor.py` and from the `harold_mcp/maude/__init__.py`
   exports (it is the diagnostics tool's input error, not an interpreter error; nothing else
@@ -92,6 +92,9 @@ reports (v1 behavior preserved: same warnings, same synthesized error, same cras
   §4.8 (`source = SourceFile.from_path(path)`, `collect_diagnostics`, provider tuple with
   the interpreter provider only). Keep the annotations/tags exactly as they are (LP1) and
   keep the docstring accurate: it now describes one source, its `code`, and the new fields.
+- Use `pathlib` paths in the seam (`SourceFile.path: Path`) and read with
+  `Path.read_text(encoding="utf-8", errors="replace")`; the interpreter provider converts at
+  the boundary (`str(source.path)`) because `maude.load` and the worker take strings.
 - Add the new modules to `docs/modules.md`.
 - Do **not** touch `harold_mcp/maude/executor.py`, `worker.py`, `server.py` or the
   settings (design §4.10: untouched).
@@ -101,9 +104,10 @@ reports (v1 behavior preserved: same warnings, same synthesized error, same cras
 - `tests/unit/test_diagnostics_seam.py` — `ProviderDiagnostic` position invariants raise
   `ValueError`; `DiagnosticsError` is not a `MaudeError`, and `SourceFileNotFoundError`,
   `DiagnosticProviderError` and `DiagnosticCollectionError` are all `DiagnosticsError`s;
-  `SourceFile.from_path` reads a file, raises `SourceFileNotFoundError` for a missing path
-  and an unreadable one (chmod 000, skipped as root), and decodes undecodable bytes
-  lossily; `FixEdit`/`FixSuggestion` shapes.
+  `SourceFile.from_path` returns a `Path`-backed `SourceFile` for a real file, raises
+  `SourceFileNotFoundError` for a missing path, a directory, a non-regular file and an
+  unreadable one (chmod 000, skipped as root), decodes undecodable bytes lossily, and
+  normalizes CRLF to physical `\n` lines; `FixEdit`/`FixSuggestion` shapes.
 - `tests/unit/test_maude_provider.py` — warning mapping (`warning`, `compiler`, line,
   `column=None`), synthesized `error` on `ok=False`, `MaudeWorkerError` becomes a
   `DiagnosticProviderError` whose `__cause__` is the worker error.

@@ -249,17 +249,19 @@ DiagnosticSource = Literal["interpreter", "heuristic-linter"]
 
 @dataclass(frozen=True, slots=True)
 class SourceFile:
-    """One Maude source file: where it is, and its decoded text."""
+    """One Maude source file: where it is, and its text as the rules see it."""
 
-    path: str
+    path: Path
     text: str
 
     @classmethod
-    def from_path(cls, path: str) -> SourceFile:
+    def from_path(cls, path: str | Path) -> SourceFile:
         """Read a Maude source file for diagnostics.
 
-        Checks the path is a readable file (raising `SourceFileNotFoundError` otherwise),
-        then reads it as UTF-8 with undecodable bytes replaced (the lossy policy of §6).
+        Rejects anything that is not a regular file (missing, directory, device, FIFO,
+        broken symlink) before reading, then reads with `Path.read_text(encoding="utf-8",
+        errors="replace")` — lossy for undecodable bytes (§6) and newline-normalizing, so
+        lines are the file's physical lines. Raises `SourceFileNotFoundError`.
         """
 
 
@@ -299,18 +301,14 @@ class DiagnosticsError(RuntimeError):
     """Base error for failures of the diagnostics subsystem."""
 
 
-class DiagnosticsError(RuntimeError):
-    """Base error for failures of the diagnostics subsystem."""
-
-
 class SourceFileNotFoundError(DiagnosticsError):
     """The Maude source file to diagnose is missing or unreadable."""
 
-    path: str
+    path: Path
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
-        super().__init__(f"Maude program file not found or unreadable: {path!r}")
+        super().__init__(f"Maude program file not found or unreadable: {str(path)!r}")
 
 
 class DiagnosticProviderError(DiagnosticsError):
@@ -338,6 +336,20 @@ class DiagnosticProvider(Protocol):
   (`line is None ⇒ column is None`; `end_column` set ⇒ `column` set; columns ≥ 1) and
   raises `ValueError` on violation, so a rule that miscounts columns fails loudly in
   tests instead of producing nonsense positions.
+- **Paths are `pathlib.Path`** everywhere in the diagnostics layer, so the seam speaks the
+  platform path type instead of strings (`.name`, `.suffix`, `.parent` are available to
+  messages and future rules). Two consequences to keep in mind: the interpreter provider
+  converts at the boundary (`self._executor.diagnostics(str(source.path))`, because the
+  worker and `maude.load` take a string), and `Path` normalizes (`./a//b.maude` →
+  `a/b.maude`), which only affects the cosmetic path Maude echoes in its own warning text —
+  the tool still returns the caller's string verbatim in `MaudeProgramDiagnosticsResult.path`
+  (v1 behavior).
+- Reading is `Path.read_text(encoding="utf-8", errors="replace")`: one stdlib call that
+  covers the lossy decode, and universal newlines means CRLF/CR files yield `\n`-separated
+  physical lines, which is what line/column arithmetic and the client's own view assume.
+  `from_path` checks `is_file()` first so a directory, device or FIFO is rejected instead
+  of read (or blocking), and wraps `OSError` from the read itself (permissions, races) in
+  the same `SourceFileNotFoundError`.
 - `column`/`end_column` are provider-native coordinates: the adapter (§4.8) is the only
   place that knows about `MaudePosition`/`MaudeRange`.
 - `DiagnosticSource` and `Severity` are closed `Literal`s shared by the seam and the
@@ -430,7 +442,7 @@ class InterpreterDiagnosticProvider:
 
     def diagnose(self, source: SourceFile) -> list[ProviderDiagnostic]:
         try:
-            result = self._executor.diagnostics(source.path)
+            result = self._executor.diagnostics(str(source.path))
         except MaudeWorkerError as exc:
             # The Maude vocabulary stops here: the diagnostics layer reports a provider
             # failure, and `__cause__` keeps the worker error for logs and debugging.
@@ -452,8 +464,9 @@ class InterpreterDiagnosticProvider:
         return diagnostics
 ```
 
-- Only `source.path` is used; the interpreter loads from disk (the text is not pushed
-  into the interpreter — `maude.load` semantics are path-based).
+- Only `source.path` is used, passed to the worker as `str(...)`; the interpreter loads
+  from disk (the text is not pushed into the interpreter — `maude.load` semantics are
+  path-based).
 - `_HARD_FAILURE_MESSAGE` (the v1 constant) moves here, with the interpreter provider.
 - Worker crash/timeout errors (`MaudeWorkerCrashedError`/`MaudeWorkerTimeoutError`, both
   `MaudeWorkerError`) are translated into `DiagnosticProviderError` here (§4.1), so the
@@ -486,7 +499,7 @@ class CodeLine:
 
 
 def code_view(text: str) -> tuple[CodeLine, ...]:
-    """Split `text` into lines and build the masked `code` view of each."""
+    """Split `text` on "\n" into physical lines and build the masked `code` view of each."""
 ```
 
 Masking rules (all **length-preserving**, so column arithmetic maps 1:1 to the source):
@@ -707,13 +720,12 @@ def maude_program_diagnostics(
     return _build_result(path, diagnostics)
 ```
 
-- Input handling lives with the value it produces: `SourceFile.from_path` checks the path is
-  a readable file (raising `SourceFileNotFoundError`, a `DiagnosticsError` — the tool's
-  input is not an interpreter concern) and reads it as bytes decoded `utf-8` with
-  `errors="replace"` (the same lossy policy the worker uses for captured stderr, §6), so
-  arbitrary input cannot crash the tool. The tool therefore does no filesystem work of its
-  own beyond handing `SourceFile.text` to the heuristic provider and `SourceFile.path` to
-  the interpreter provider.
+- Input handling lives with the value it produces: `SourceFile.from_path` rejects
+  non-regular files and reads with `Path.read_text(encoding="utf-8", errors="replace")`
+  (raising `SourceFileNotFoundError`, a `DiagnosticsError` — the tool's input is not an
+  interpreter concern), so arbitrary input cannot crash the tool and the tool itself does
+  no filesystem work beyond handing `SourceFile.text` to the heuristic provider and
+  `SourceFile.path` (a `Path`) to the interpreter provider (§4.1, §6).
 - `_build_result(path, diagnostics)` builds `MaudeDiagnostic` objects (the adapter:
   `line`/`column`/`end_column` → `MaudeRange`), computes the `info`/`warning`/`error`
   counts and `success = no warning/error diagnostic`. `range=None` stays for `line=None`.
