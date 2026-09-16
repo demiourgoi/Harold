@@ -7,18 +7,18 @@ package never imports the SWIG `maude` bindings.
 from harold_mcp.maude.executor import (
     MaudeError,
     MaudeExecutor,
-    MaudeFileNotFoundError,
     MaudeInitError,
     MaudeWorkerCrashedError,
     MaudeWorkerError,
     MaudeWorkerTimeoutError,
     get_maude_executor,
 )
+from harold_mcp.maude.provider import InterpreterDiagnosticProvider
 
 __all__ = [
+    "InterpreterDiagnosticProvider",
     "MaudeError",
     "MaudeExecutor",
-    "MaudeFileNotFoundError",
     "MaudeInitError",
     "MaudeWorkerCrashedError",
     "MaudeWorkerError",

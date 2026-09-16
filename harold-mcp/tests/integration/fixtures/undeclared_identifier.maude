@@ -1,0 +1,13 @@
+***
+*** Rule 6's positive fixture: `Foo` is used in a statement but never declared as a
+*** variable, operator or sort (Maude reports it too, more tersely).
+***
+
+fmod UNDECLARED is
+    protecting NAT .
+
+    op f : Nat -> Nat .
+    var N : Nat .
+
+    eq f(N) = Foo(N) .
+endfm

@@ -39,12 +39,12 @@ Practical consequences:
 
 ## Progress checklist
 
-- [ ] **Step 1** — Provider seam, aggregation and the interpreter provider behind the tool
-- [ ] **Step 2** — Heuristic package, code view, and rule 1 (`non-ascii-character`) with fixes
-- [ ] **Step 3** — Rules 2–4 (`when-guard`, `dash-comment`, `eq-in-term`) with lexical hardening
-- [ ] **Step 4** — Rules 5–6 (`non-linear-pattern`, `undeclared-identifier`) and the declaration index
-- [ ] **Step 5** — Prelude snapshot, `harold-update-prelude-sorts` CLI, and rule 7 (`prelude-sort-redeclared`)
-- [ ] **Step 6** — Documentation, release metadata and full acceptance run
+- [x] **Step 1** — Provider seam, aggregation and the interpreter provider behind the tool
+- [x] **Step 2** — Heuristic package, code view, and rule 1 (`non-ascii-character`) with fixes
+- [x] **Step 3** — Rules 2–4 (`when-guard`, `dash-comment`, `eq-in-term`) with lexical hardening
+- [x] **Step 4** — Rules 5–6 (`non-linear-pattern`, `undeclared-identifier`) and the declaration index
+- [x] **Step 5** — Prelude snapshot, `harold-update-prelude-sorts` CLI, and rule 7 (`prelude-sort-redeclared`)
+- [x] **Step 6** — Documentation, release metadata and full acceptance run
 
 ## Requirement coverage
 

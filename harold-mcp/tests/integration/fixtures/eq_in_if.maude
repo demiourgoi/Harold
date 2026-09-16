@@ -1,0 +1,14 @@
+***
+*** Rule 4's positive fixture: a single `=` inside an `if … then … else … fi` term
+*** (from the research appendix of .agents/planning/port-linter.py/research/maude-lexical.md).
+***
+
+fmod EQ-IN-IF is
+    protecting NAT .
+    protecting BOOL .
+
+    op f : Nat -> Nat .
+    var N : Nat .
+
+    eq f(N) = if N = 0 then 0 else 1 fi .
+endfm

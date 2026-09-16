@@ -1,0 +1,5 @@
+fmod STRING-WITH-SPECIALS is
+    protecting STRING .
+    op s : -> String .
+    eq s = "when -- = café" .
+endfm

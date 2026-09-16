@@ -13,13 +13,27 @@ Harold MCP tools:
 
 ### Harold MCP Tools
 
-- **`maude_program_diagnostics(path)`** — diagnoses a Maude source file by loading it
-  into the Maude interpreter and reporting every problem it finds, including warnings
-  Maude can recover from. Returns a structured, LSP-style result: a `success` flag (true
-  only when the file loads with no warnings and no errors), per-severity counts, and one
-  diagnostic per problem with a 1-based line range (`range` is `null` for whole-file
-  problems). Use it to check whether a Maude program is well formed, and to get a list of
-  issues to fix.
+- **`maude_program_diagnostics(path)`** — diagnoses a Maude source file with two
+  independent sources, run in a single call:
+  - the **Maude interpreter**, which loads the file and reports every problem Maude
+    finds, including the warnings it recovers from; and
+  - Harold's **heuristic linter**, which checks the file's text for common mistakes:
+    a `when` guard borrowed from Haskell/SML, `--` used as a comment, a single `=` in an
+    `if … then … else … fi` term, non-linear equation patterns, capitalized identifiers
+    that nothing declares, non-ASCII typographic punctuation, and sorts that shadow a
+    prelude sort. Heuristic findings are pattern-based and may be false positives, so
+    they are reported as `warning` (suspicious code) or `info` (observations that do not
+    affect the load).
+
+  Every diagnostic carries `source` and `code` provenance, a `severity` (`info`,
+  `warning` or `error`), a `message`, an LSP-style 1-based `range` (`null` for whole-file
+  problems; heuristic findings include exact, exclusive-end columns), and — when a
+  deterministic correction exists, such as replacing typographic punctuation with ASCII
+  — a report-only `fix` (a description plus applyable edits; the tool never modifies the
+  file). Diagnostics are ordered by position, whole-file problems last. `success` is
+  `true` only when no diagnostic has severity `warning` or `error`, so `info`-only
+  results still count as success. Use it to check whether a Maude program is well formed,
+  and to get a list of issues to fix.
 
 Planned tools: running Maude programs, and a vector index of the Maude documentation for
 retrieval-augmented generation (RAG).

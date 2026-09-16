@@ -1,0 +1,24 @@
+***
+*** Adapted from improve-rag/improvement/tests/rag-gemini-2.5-flash/maudec/maude/repeated.maude
+*** (the Haskell/SML `when` guard on the last equation, rule 2's positive fixture).
+***
+
+fmod REPEATED is
+    protecting FLOAT .
+
+    sort Vector .
+
+    op <_,_> : Float Float -> Vector [ctor] .
+
+    op norm : Vector -> Float .
+    op normalize : Vector -> Vector .
+    op normalizeWithNorm : Float Vector -> Vector .
+
+    vars X Y : Float .
+    var N : Float .
+
+    eq norm(< X, Y >) = sqrt(X * X + Y * Y) .
+    eq normalize(V:Vector) = normalizeWithNorm(norm(V:Vector), V:Vector) .
+    eq normalizeWithNorm(0.0, < X, Y >) = < X, Y > .
+    eq normalizeWithNorm(N, < X, Y >) = < X / N, Y / N > when N =/= 0.0 .
+endfm

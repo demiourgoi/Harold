@@ -1,0 +1,37 @@
+***
+*** Adapted from improve-rag/improvement/tests/rag-gemini-2.5-flash/maudec/maude/simple-list.maude
+*** (the `--` comments, rule 3's positive fixture; the typographic apostrophe of the
+*** original is dropped so this fixture isolates rule 3).
+***
+
+fmod LIST-CONS{X :: TRIV} is
+    protecting NAT .
+    sorts NeList{X} List{X} .
+    subsort NeList{X} < List{X} .
+    op [] : -> List{X} [ctor] .
+    op _:_ : X$Elt List{X} -> NeList{X} [ctor] .
+    op tail : NeList{X} -> List{X} .
+    op head : NeList{X} -> X$Elt .
+    var E : X$Elt .
+    var N : Nat .
+    vars L L2 : List{X} .
+    eq tail(E : L) = L .
+    eq head(E : L) = E .
+    op _++_ : List{X} List{X} -> List{X} .
+    op length : List{X} -> Nat .
+    op reverse : List{X} -> List{X} .
+
+    -- Helper operator for efficient reverse
+    op reverseAux : List{X} List{X} -> List{X} .
+
+    var Acc : List{X} .
+    eq [] ++ L = L .
+    eq (E : L) ++ L2 = E : (L ++ L2) .
+    eq length([]) = 0 .
+    eq length(E : L) = 1 + length(L) .
+
+    -- Efficient reverse implementation
+    eq reverse(L) = reverseAux(L, []) .
+    eq reverseAux([], Acc) = Acc .
+    eq reverseAux(E : L, Acc) = reverseAux(L, E : Acc) .
+endfm

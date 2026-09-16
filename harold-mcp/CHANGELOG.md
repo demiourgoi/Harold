@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.0.5]
+
+Heuristic linter port: `maude_program_diagnostics` now reports the Maude interpreter load
+*and* Harold's heuristic checks in one call, with provenance, precise positions,
+report-only fixes, and an `info` severity for findings that do not affect the load.
+
+### Added
+
+- **Heuristic linter inside `maude_program_diagnostics`** — the tool runs Harold's
+  pattern-based checks on the file's text next to the interpreter load, so no separate
+  lint tool is needed. The rules, ported from `improve-rag/improvement/linter.py` (which
+  is untouched) and hardened against false positives, are `non-ascii-character`,
+  `when-guard`, `dash-comment`, `eq-in-term`, `non-linear-pattern`,
+  `undeclared-identifier` and the new `prelude-sort-redeclared`. Findings never come from
+  inside string literals, quoted identifiers, comments, statement labels or declaration
+  lines, and rule 6's allow-list knows the sorts the prelude declares.
+- **`prelude-sort-redeclared` rule + bundled prelude sort snapshot** —
+  `harold_mcp.heuristic.prelude_sorts` is a generated module listing the 164 sorts the
+  Maude 3.5.1 prelude declares (theory sorts excluded), consumed by the rule and by rule
+  6. The new `harold-update-prelude-sorts <prelude.maude> [--check]` console script
+  regenerates it and verifies the committed data is fresh; see `DEVELOPER_GUIDE.md`.
+- **Diagnostic provider seam** — `harold_mcp.diagnostics` defines the
+  `DiagnosticProvider` protocol, the seam value types (`SourceFile`,
+  `ProviderDiagnostic`, `FixSuggestion`) and the aggregator (`collect_diagnostics`), so
+  future Maude linters and static analyses plug in without touching the tool. The
+  interpreter provider lives in `harold_mcp.maude.provider`; the heuristic linter is its
+  own `harold_mcp.heuristic` package and runs in the server process (it never imports the
+  `maude` bindings).
+
+### Changed
+
+- **Diagnostics schema (breaking for exhaustive clients)** — every diagnostic now carries
+  `source` (`"interpreter"` or `"heuristic-linter"`) and `code` (`"compiler"` for the
+  interpreter, the rule name for heuristic findings), an optional report-only `fix`
+  (description plus applyable edits with exclusive `range.end`), and exact columns for
+  heuristic findings. `severity` gained `"info"` and `summary` gained `info`.
+- **`success` semantics** — `success` is `true` only when no diagnostic has severity
+  `warning` or `error`; `info`-only results (a shadowed prelude sort, non-ASCII
+  punctuation Maude accepts) now count as success. Diagnostics are ordered by file
+  position, with interpreter findings first on a line and whole-file problems last.
+- **Failure semantics** — when any provider fails, the whole call fails with
+  `DiagnosticCollectionError`, which names every failing provider and its cause (a worker
+  crash or timeout is chained from the interpreter provider). Successful providers'
+  findings are never returned alongside the error, because MCP cannot express
+  "error + content".
+- **Tool description** — rewritten to explain both sources, the severity meanings, the
+  `fix` payload and the ordering. The tool keeps its read-only annotation profile
+  (`readOnlyHint`, `destructiveHint=False`, `idempotentHint`, `openWorldHint=False`) and
+  never modifies the diagnosed file.
+
+### Removed
+
+- **`MaudeFileNotFoundError`** — the tool's input-file error is now
+  `harold_mcp.diagnostics.SourceFileNotFoundError`, raised by `SourceFile.from_path`
+  (a missing file is a diagnostics-tool concern, not an interpreter error). `MaudeError`
+  and its remaining subclasses are unchanged.
+
 ## [0.0.4]
 
 ## [0.0.3]

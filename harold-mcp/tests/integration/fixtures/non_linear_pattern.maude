@@ -1,0 +1,24 @@
+***
+*** Adapted from improve-rag/improvement/tests/rag-gemini-2.5-flash/maudec/maude/free-tuples.maude
+*** (rule 5's positive fixture: `B-ignore` appears twice in the third equation's
+*** left-hand side; Maude itself accepts the file silently).
+***
+
+fmod TUPLES is
+    protecting FLOAT .
+
+    sort Foo .
+
+    op f : Float Float -> Foo [ctor] .
+    op g : Float Float Bool -> Foo [ctor] .
+    op h : Float Bool Float Bool -> Foo [ctor] .
+
+    op first : Foo -> Float .
+
+    vars F-val F-ignore : Float .
+    vars B-ignore : Bool .
+
+    eq first(f(F-val, F-ignore)) = F-val .
+    eq first(g(F-val, F-ignore, B-ignore)) = F-val .
+    eq first(h(F-val, B-ignore, F-ignore, B-ignore)) = F-val .
+endfm

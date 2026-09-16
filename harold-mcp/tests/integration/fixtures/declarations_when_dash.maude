@@ -1,0 +1,13 @@
+***
+*** Rules 2-3 negative fixture: `when` and `--` are not reserved, so declaring
+*** operators with those names is legal Maude; declaration lines must not be reported
+*** (probes `when_operator`, `dashdash_operator`).
+***
+
+fmod DECLARATIONS is
+    protecting BOOL .
+    protecting NAT .
+
+    op when : Bool -> Bool .
+    op _--_ : Nat Nat -> Nat .
+endfm

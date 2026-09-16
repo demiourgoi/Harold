@@ -1,0 +1,14 @@
+***
+*** Rules 2-3 negative fixture: `when` and `--` inside quoted identifiers are valid
+*** Maude and must not be reported (probes `quoted_identifier_*`).
+***
+
+fmod QUOTED-ID is
+    protecting QID .
+
+    op q1 : -> Qid .
+    op q2 : -> Qid .
+
+    eq q1 = 'when .
+    eq q2 = '-- .
+endfm

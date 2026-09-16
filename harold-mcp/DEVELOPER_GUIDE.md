@@ -52,6 +52,30 @@ description: Transforms a rough idea into a detailed design document, implementa
 ---
 ```
 
+## Maintaining the prelude sort snapshot
+
+`harold_mcp/heuristic/prelude_sorts.py` is a generated module (not hand-edited) listing
+the sorts the Maude prelude declares. The `prelude-sort-redeclared` rule and rule 6's
+allow-list consume it, so a user program that shadows a prelude sort is reported and the
+built-in sorts have one source of truth.
+
+Regenerate it after upgrading the Maude interpreter the project is built against (see
+the `maude` pin in `pyproject.toml`), or whenever `prelude.maude` changes:
+
+```bash
+# rewrite the snapshot from an installation's prelude
+uv run harold-update-prelude-sorts /path/to/Maude-3.5.1-linux-x86_64/prelude.maude
+
+# verify the committed data still matches a fresh extraction (exit 1 when stale)
+uv run harold-update-prelude-sorts /path/to/Maude-3.5.1-linux-x86_64/prelude.maude --check
+```
+
+The CLI writes the source path, its SHA-256, the Maude version and the extraction date
+into the module header, prints the extraction counts, and refuses to write a snapshot
+with fewer than 50 names (the realistic failure mode is the extraction breaking).
+`--check` compares the **data** only, so the header of the machine that last regenerated
+the snapshot can differ without failing the check.
+
 ## Releasing a new version
 
 One time setup:

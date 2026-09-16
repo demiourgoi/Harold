@@ -1,0 +1,4 @@
+fmod NONASCII-APOSTROPHE is
+    protecting NAT .
+    op L’ : -> Nat .
+endfm

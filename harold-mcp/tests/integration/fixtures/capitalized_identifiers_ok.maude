@@ -1,0 +1,18 @@
+***
+*** Rule 6's negative fixture: a capitalized label, a capitalized operator name and an
+*** inline `X:List{Nat}` annotation are all legal and must not be reported.
+***
+
+fmod CAPITALIZED-OK is
+    protecting NAT .
+    protecting LIST{Nat} .
+
+    op Foo : Nat -> Nat .
+    op f : Nat -> Nat .
+    op g : List{Nat} -> List{Nat} .
+
+    var N : Nat .
+
+    eq [Rewrite] : f(Foo(N)) = Foo(N) .
+    eq g(M:List{Nat}) = M:List{Nat} .
+endfm

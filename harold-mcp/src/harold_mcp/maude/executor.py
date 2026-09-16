@@ -53,16 +53,6 @@ class MaudeWorkerTimeoutError(MaudeWorkerError):
         super().__init__("Maude worker timed out")
 
 
-class MaudeFileNotFoundError(MaudeError):
-    """The input path is missing or unreadable (raised before any worker call)."""
-
-    path: str
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-        super().__init__(f"Maude program file not found or unreadable: {path!r}")
-
-
 ExecutorFactory = Callable[[], ProcessPoolExecutor]
 
 

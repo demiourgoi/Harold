@@ -1,0 +1,10 @@
+***
+*** Rule 7's negative fixture: `Elt` is a theory interface sort (`fth TRIV`), so user
+*** modules are expected to redeclare it and it is not in the snapshot (review D6).
+***
+
+fmod ELT-SORT-DECLARATION is
+    protecting NAT .
+
+    sort Elt .
+endfm

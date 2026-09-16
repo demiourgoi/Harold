@@ -1,6 +1,6 @@
 [project]
 name = "harold-mcp"
-version = "0.0.4.dev0"
+version = "0.0.5.dev0"
 description = "An MCP server for AI-assisted Maude programming."
 authors = [{ name = "Juan Rodriguez", email = "juanrh@pm.me" }]
 readme = "README.md"
@@ -25,6 +25,7 @@ dependencies = [
 
 [project.scripts]
 harold-mcp = "harold_mcp.main:app"
+harold-update-prelude-sorts = "harold_mcp.heuristic.prelude_extract:app"
 
 [project.urls]
 Homepage = "https://demiourgoi.github.io"

@@ -1,6 +1,15 @@
 ::: harold_mcp.server.server
 ::: harold_mcp.server.tags
 ::: harold_mcp.server.tools.diagnostics
+::: harold_mcp.diagnostics.provider
+::: harold_mcp.diagnostics.aggregate
+::: harold_mcp.heuristic.provider
+::: harold_mcp.heuristic.rules
+::: harold_mcp.heuristic.lexical
+::: harold_mcp.heuristic.declarations
+::: harold_mcp.heuristic.prelude_extract
+::: harold_mcp.heuristic.prelude_sorts
 ::: harold_mcp.maude.executor
+::: harold_mcp.maude.provider
 ::: harold_mcp.maude.worker
 ::: harold_mcp.settings
