@@ -47,48 +47,41 @@ The `maude` dependency bundles the Maude interpreter (built against Maude 3.5.1)
 so there is nothing else to install.
 
 Then setup the `harold-mcp` command defined on `pyproject.toml` as an MCP server for your IDE.  
-For example, for Zed add the following to `~/.config/zed/settings.json`:
+Any MCP-compatible client works (including Cline); the Zed and opencode configurations below are the ones we test.  
+For example, for [_Zed IDE_](https://zed.dev/docs/getting-started) add the following to `~/.config/zed/settings.json`:
 
 ```json
   "context_servers": {
     "harold": {
       "enabled": true,
       "remote": false,
-      "command": "uvx harold-mcp",
-      "args": [],
+      "command": "uvx",
+      "args": [
+        "harold-mcp"
+      ],
       "env": {}
     }
   },
   ...
 ```
 
-for opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
+_Note_: with the Zed agent (at least as of Zed 1.20.2) you must use the "Write" profile, as Zed ignores MCP tools in other profiles, even those marked with `readOnlyHint`.  
+Also note Zed requires a reload after changing the MCP config, both for the Zed agent and for ACP agents.
 
-```json
+For [_opencode_](https://opencode.ai) add the following to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
   "mcp" : {
     "harold": {
       "type": "local",
-      "command": ["uvx harold-mcp"],
+      "command": ["uvx", "harold-mcp"],
       "enabled": true,
       "environment": {}
     }
   }
 ```
 
-for Cline (useful for manual testing and Maude programming) add the following to `~/.cline/data/settings/cline_mcp_settings.json`:
-
-
-```json
-  "mcpServers" : {
-    "harold": {
-      "command": "uvx harold-mcp",
-      "args": [],
-      "disabled": false,
-      "autoApprove": [],
-      "env": {}
-    }
-  }
-```
+This works both for the [opencode TUI](https://opencode.ai/docs/tui/), and the [ACP agent for opencode in Zed](https://opencode.ai/docs/acp/#zed).
 
 ### Update
 

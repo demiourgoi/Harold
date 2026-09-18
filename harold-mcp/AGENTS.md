@@ -104,7 +104,7 @@ All commands are `Makefile` targets that wrap `uv` (repo-specific wrappers, not 
 | `make docs` / `make docs-test` | serve docs / strict docs build |
 | `make build` / `make publish` | build wheel / upload to PyPI |
 
-Setup and IDE-configuration details (Zed, opencode, Cline) and the `HAROLD_*` env-var table live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`; dev-environment setup and the release process live in `DEVELOPER_GUIDE.md`.
+Setup and IDE-configuration details (Zed and opencode examples; any MCP-compatible client, such as Cline, works) and the `HAROLD_*` env-var table live in `README.md`; the contribution and PR workflow lives in `CONTRIBUTING.md`; dev-environment setup and the release process live in `DEVELOPER_GUIDE.md`.
 
 ## Config files agents might miss
 

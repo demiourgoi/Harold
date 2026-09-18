@@ -56,7 +56,8 @@ sequenceDiagram
 - On startup the lifespan warms up the worker pool (fail-fast on `MaudeInitError`); on
   SIGTERM the server tears the pool down and exits 0.
 - Intended for installation via `uvx harold-mcp` and configuration as an MCP server command
-  for clients (Zed, opencode, Cline configuration examples live in `README.md`).
+  for clients (the Zed and opencode configurations we test live in `README.md`; any other
+  MCP-compatible client, such as Cline, works too).
 
 ### Configuration (env vars)
 

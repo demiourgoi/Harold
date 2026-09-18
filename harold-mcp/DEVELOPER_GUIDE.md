@@ -7,6 +7,7 @@ contribution workflow lives in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Development environment setup
 
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) and some IDE.  
 Install the environment with
 
 ```bash
@@ -27,12 +28,59 @@ uv run harold-mcp
 uv run harold-mcp --help
 ```
 
-Use the full path to `harold-mcp/.venv/bin/harold-mcp` on opencode or whatever agent harness you want to use, to run it locally. 
+Use the full path to `harold-mcp/.venv/bin/harold-mcp` on opencode or whatever agent harness you want to use, to run it locally. You can configure both the released and dev version, and alternate between them. For example, for Zed add the following to `~/.config/zed/settings.json` (replace `/path/to/Harold` below with the absolute path to your clone; these config files do not expand shell variables):
+
+```json
+  "context_servers": {
+    "harold": {
+      "enabled": false,
+      "remote": false,
+      "command": "uvx",
+      "args": [
+        "harold-mcp"
+      ],
+      "env": {}
+    },
+    "harold-dev": {
+      "enabled": true,
+      "remote": false,
+      "command": "/path/to/Harold/harold-mcp/.venv/bin/harold-mcp",
+      "args": [],
+      "env": {}
+    }
+  },
+  ...
+```
+
+For opencode (useful for automated testing) add the following to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+  "mcp": {
+    "harold": {
+      "type": "local",
+      "command": ["uvx", "harold-mcp"],
+      "enabled": false,
+      "environment": {},
+    },
+    "harold-dev": {
+      "type": "local",
+      "command": ["/path/to/Harold/harold-mcp/.venv/bin/harold-mcp"],
+      "enabled": true,
+      "environment": {},
+    },
+  },
+```
+
+Opening a separate project for `tests/integration/fixtures` is useful for testing, but both Zed and OpenCode interpret the git root as the workspace root. A workaround is creating a symlink in some other directory, and using that directory as the Zed workspace. This works for Zed, and for opencode ACP agent.
+
+```bash
+$ ln -s ~/git/demiourgoi/Harold/harold-mcp/tests/integration/fixtures .
+```
 
 ### Recommendations
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
-- Cline is great for debugging tool behaviour, because it displays the full JSON response from each tool call.
+- _Zed_ is useful for debugging, because it displays the _full JSON response_ from each tool call.
 - Setup the following agent skills:
   - `codebase-summary`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/codebase-summary.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
 

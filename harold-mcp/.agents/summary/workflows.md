@@ -22,8 +22,9 @@
 - Startup: lifespan warm-up pings the Maude worker (fail-fast on init failure).
 - Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
   lifespan; workers then exit on their own via the queue pipe).
-- Connect an MCP client (Zed, opencode, Cline) to the `harold-mcp` command; configuration
-  examples and the `HAROLD_*` env-var table live in `README.md`.
+- Connect an MCP-compatible client (Zed and opencode are the configurations we test; other
+  MCP clients such as Cline work too) to the `harold-mcp` command; configuration examples
+  and the `HAROLD_*` env-var table live in `README.md`.
 
 ## Tool execution flow
 
