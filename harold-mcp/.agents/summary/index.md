@@ -45,7 +45,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "How do I add or refine a linter rule?" → `components.md` → `harold_mcp.heuristic.rules` (`RULES` registry, `RuleFinding`); read the masking rules in `lexical.py` first; `.agents/planning/port-linter.py/design/detailed-design.md` Appendix D lists the known limitations.
 - "How do I refresh the prelude sort list?" → `workflows.md` → Prelude snapshot maintenance; the CLI is documented in `DEVELOPER_GUIDE.md` and `interfaces.md`.
 - "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
-- "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.5]`.
+- "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.4]`.
 - "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.

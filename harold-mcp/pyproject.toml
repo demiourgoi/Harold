@@ -5,7 +5,10 @@ description = "An MCP server for AI-assisted Maude programming."
 authors = [{ name = "Juan Rodriguez", email = "juanrh@pm.me" }]
 readme = "README.md"
 keywords = ['maude', 'mcp', 'python']
-requires-python = ">=3.14"
+# Capped to 3.14.x: maude==1.6.0 ships cp314-only wheels (no abi3), so a newer
+# interpreter would have no wheel to install.
+# Consider relaxing after testing, when the bindings publish one.
+requires-python = ">=3.14,<3.15"
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",

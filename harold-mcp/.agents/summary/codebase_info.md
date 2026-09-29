@@ -4,7 +4,7 @@
 
 ## Identity
 
-- **Project**: `harold-mcp` v0.0.5.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.5]` section documenting the heuristic-linter port)
+- **Project**: `harold-mcp` v0.0.4.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.4]` section documenting the heuristic-linter port)
 - **Author**: Juan Rodriguez (`juanrh@pm.me`)
 - **Repository**: <https://github.com/demiourgoi/harold>
 - **Documentation site**: <https://demiourgoi.github.io/Harold/> (MkDocs, built from `docs/`)
@@ -13,7 +13,7 @@
 ## Language and runtime
 
 - **Language**: Python
-- **Supported versions**: 3.14 (`requires-python = ">=3.14"`)
+- **Supported versions**: 3.14.x only — `requires-python = ">=3.14,<3.15"` (normalized to `==3.14.*` in `uv.lock`), capped because `maude==1.6.0` publishes cp314-only wheels (no abi3), so a 3.15+ interpreter has no wheel to install. `.python-version` pins the dev checkout to 3.14.
 - **Language floor for new code**: Python 3.14 (ruff `target-version = "py314"`)
 
 ## Package layout

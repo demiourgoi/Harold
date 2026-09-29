@@ -43,6 +43,11 @@ retrieval-augmented generation (RAG).
 - Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
 - Run `uvx harold-mcp --version`
 
+Harold requires **Python 3.14**: the `maude` dependency ships CPython 3.14 wheels only, so
+Harold's metadata pins the 3.14 series. If you don't have 3.14 installed, `uvx` downloads it
+automatically (or run `uv python install 3.14`); to select it explicitly — e.g. a specific
+patch release — pass `uvx --python 3.14 harold-mcp`.
+
 The `maude` dependency bundles the Maude interpreter (built against Maude 3.5.1),
 so there is nothing else to install.
 

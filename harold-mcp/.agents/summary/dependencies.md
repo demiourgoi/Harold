@@ -50,7 +50,10 @@ stack.
 - The `maude` bindings provide no type stubs → mypy override `ignore_missing_imports`
   (see `data_models.md`); basedpyright runs with all diagnostics off except
   `reportUnusedCallResult`.
-- Minimum Python is 3.14; lint/format target is `py314` (`pyproject.toml`).
+- Python is capped to the 3.14 series (`requires-python = ">=3.14,<3.15"`, normalized to
+  `==3.14.*` in `uv.lock`): `maude==1.6.0` ships cp314-only wheels (no abi3), so a 3.15+
+  interpreter would have no `maude` wheel and would fall back to a source build. Relax the cap
+  when the bindings publish newer wheels. Lint/format target is `py314`.
 - `ProcessPoolExecutor` uses an explicit `spawn` context (threaded parent; `forkserver`
   needs an AF_UNIX socket); Python 3.14 features in use: `ProcessPoolExecutor.kill_workers()`,
   `BrokenProcessPool` from `concurrent.futures.process`, PEP 758 `except A, B:` syntax.

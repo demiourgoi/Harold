@@ -26,9 +26,9 @@ kept for the record.
   docstring describe the new contract.
 - Error vocabulary: `MaudeFileNotFoundError` removed; the tool's input error is
   `SourceFileNotFoundError` and provider failures surface as `DiagnosticCollectionError`.
-  Recorded in `CHANGELOG.md` `[0.0.5]` (the diagnostics layer is deliberately independent
+  Recorded in `CHANGELOG.md` `[0.0.4]` (the diagnostics layer is deliberately independent
   of `MaudeError`).
-- Release bookkeeping: `pyproject.toml` bumped to `0.0.5.dev0`, `[0.0.5]` changelog
+- Release bookkeeping: `pyproject.toml` bumped to `0.0.4.dev0`, `[0.0.4]` changelog
   section, `harold-update-prelude-sorts` console script, prelude-snapshot procedure in
   `DEVELOPER_GUIDE.md`, and the `update-changelog-for-release` agent skill.
 - New planning record `.agents/planning/port-maude_eval.py/` (research only; paused at
@@ -91,7 +91,7 @@ kept for the record.
    `harold-update-prelude-sorts --check` is the signal after a Maude upgrade. Theory
    sorts are intentionally excluded, so `sort Elt .` is not reported (a theory-sort rule
    would be new work, not a snapshot change).
-9. **Breaking error-vocabulary change for scripting clients.** Pre-0.0.5 callers that
+9. **Breaking error-vocabulary change for scripting clients.** Pre-0.0.4 callers that
    caught `MaudeFileNotFoundError` or `MaudeWorkerCrashedError` at the tool boundary must
    catch `SourceFileNotFoundError` / `DiagnosticCollectionError` instead (the Maude error
    stays reachable as the chained cause). Pre-1.0 API churn, recorded in `CHANGELOG.md`.

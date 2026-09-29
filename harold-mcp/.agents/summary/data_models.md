@@ -135,7 +135,7 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 | `MaudeWorkerCrashedError` | `MaudeWorkerError` | — | broken pool (submit time) or worker death mid-task |
 | `MaudeWorkerTimeoutError` | `MaudeWorkerError` | — | call exceeded the configured timeout |
 
-`MaudeFileNotFoundError` no longer exists (removed in 0.0.5): the tool's input error is
+`MaudeFileNotFoundError` no longer exists (removed in 0.0.4): the tool's input error is
 `SourceFileNotFoundError`, because a missing file is a diagnostics-tool concern, not an
 interpreter error.
 
