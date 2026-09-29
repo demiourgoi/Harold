@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.0.5]
+## [0.0.4]
 
 Heuristic linter port: `maude_program_diagnostics` now reports the Maude interpreter load
 *and* Harold's heuristic checks in one call, with provenance, precise positions,
@@ -56,8 +56,6 @@ report-only fixes, and an `info` severity for findings that do not affect the lo
   `harold_mcp.diagnostics.SourceFileNotFoundError`, raised by `SourceFile.from_path`
   (a missing file is a diagnostics-tool concern, not an interpreter error). `MaudeError`
   and its remaining subclasses are unchanged.
-
-## [0.0.4]
 
 ## [0.0.3]
 
