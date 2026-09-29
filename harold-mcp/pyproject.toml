@@ -85,6 +85,9 @@ testpaths = ["tests"]
 target-version = "py314"
 line-length = 120
 fix = true
+# `.agents/` holds investigation scratch scripts and planning records; they are
+# deliberately exempt from the production lint/format bar.
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 select = [
