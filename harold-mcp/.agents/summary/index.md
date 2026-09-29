@@ -12,34 +12,40 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **What data structures/types exist?** → `data_models.md`
 - **What are the known gaps or inconsistencies?** → `review_notes.md`
 - **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale; `scala-issue.md` documents a related SIGSEGV/throughput analysis for the Scala/Java bindings)
-- **What is planned next (run tool, RAG index)?** → `.agents/planning/maude-diagnostics-tool-v1/`
+- **Why does the tool have two diagnostic sources, and how does the linter work?** → `.agents/planning/port-linter.py/design/detailed-design.md`; condensed record in `.agents/planning/port-linter.py/summary.md`
+- **What is planned next (run tool, RAG index)?** → `.agents/planning/port-maude_eval.py/summary.md` (paused research for term evaluation) and `.agents/planning/maude-diagnostics-tool-v1/`
 
 ## Table of contents
 
 | File | Content | Consult when… |
 | --- | --- | --- |
-| [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, layout, dependency management, entry point | you need basic facts about the project (language, versions, tooling) |
-| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker), module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
-| [`components.md`](components.md) | Per-module responsibilities (`main`, `settings`, `server` package incl. the shared tag vocabulary `server/tags.py`, `maude` package, `resources`, `logging`, tests, docs, planning) | you need to know what a specific module does or where to add code |
-| [`interfaces.md`](interfaces.md) | MCP tool surface, console script, env-var config, internal Python API (`MaudeExecutor`, worker ops), import-time side effects | you need the public surface or must call/register a tool |
-| [`data_models.md`](data_models.md) | Tool result models, worker protocol TypedDicts, the `MaudeError` hierarchy, framework types, typing conventions | you need the type landscape or must add a model |
-| [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution, crash recovery, docs, packaging, release | you need to know how to develop, test, or ship |
-| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role) | you plan to add, upgrade, or reason about a dependency |
+| [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, package layout, dependency management, the two console scripts | you need basic facts about the project (language, versions, tooling) |
+| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker), provider seam and aggregation, heuristic linter placement, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
+| [`components.md`](components.md) | Per-module responsibilities: `main`, `settings`, the `server` package (incl. the tag vocabulary `server/tags.py` and the tool), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, interpreter provider, worker), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
+| [`interfaces.md`](interfaces.md) | MCP tool surface (two providers, `fix` payload, error semantics), both console scripts, env-var config, internal Python API (seam protocol, rules registry, `MaudeExecutor`, worker ops), import-time side effects | you need the public surface or must call/register a tool |
+| [`data_models.md`](data_models.md) | Wire result models, provider-seam value types, linter-internal types, worker protocol TypedDicts, the two error hierarchies, framework types, typing conventions | you need the type landscape or must add a model |
+| [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution and failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
+| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role and the Maude pin/prelude snapshot link) | you plan to add, upgrade, or reason about a dependency |
 | [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations | you hit an inconsistency or want to improve the docs |
 
 ## Relationships between documents
 
 - `architecture.md` (structure) ↔ `components.md` (responsibilities) ↔ `interfaces.md` (surfaces)
 - `codebase_info.md` (facts) ↔ `dependencies.md` (constraints) ↔ `workflows.md` (usage)
-- `data_models.md` documents the types defined in `tools/diagnostics.py` and
-  `maude/executor.py` (plus the tag vocabulary in `server/tags.py`), whose behavior lives
-  in `components.md`
+- `data_models.md` documents the types defined across `server/tools/diagnostics.py` (wire),
+  `diagnostics/` (seam), `heuristic/` (linter internals) and `maude/` (executor + worker),
+  whose behavior lives in `components.md`
 - `review_notes.md` cross-references every file it flags as incomplete.
 
 ## Example queries
 
 - "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server` package (tools live in `server/tools/`, registered via `server/__init__.py`), then `interfaces.md` for the `@mcp.tool` + `Depends` pattern.
 - "How do I tag/annotate a new tool?" → `components.md` → `harold_mcp.server.tags` (build tag sets with `harold_tags(<category>)`); effect/safety metadata goes in `ToolAnnotations`, see `interfaces.md` and `data_models.md`.
+- "How do I add a diagnostics provider (e.g. a new Maude analysis)?" → `components.md` → `harold_mcp.diagnostics` (implement the `DiagnosticProvider` protocol); register it in the tool's provider tuple, `interfaces.md` → tool flow.
+- "How do I add or refine a linter rule?" → `components.md` → `harold_mcp.heuristic.rules` (`RULES` registry, `RuleFinding`); read the masking rules in `lexical.py` first; `.agents/planning/port-linter.py/design/detailed-design.md` Appendix D lists the known limitations.
+- "How do I refresh the prelude sort list?" → `workflows.md` → Prelude snapshot maintenance; the CLI is documented in `DEVELOPER_GUIDE.md` and `interfaces.md`.
+- "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
+- "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.5]`.
 - "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.

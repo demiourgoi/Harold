@@ -23,8 +23,8 @@
 - Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
   lifespan; workers then exit on their own via the queue pipe).
 - Connect an MCP-compatible client (Zed and opencode are the configurations we test; other
-  MCP clients such as Cline work too) to the `harold-mcp` command; configuration examples
-  and the `HAROLD_*` env-var table live in `README.md`.
+  MCP clients work too) to the `harold-mcp` command; configuration examples and the
+  `HAROLD_*` env-var table live in `README.md`.
 
 ## Tool execution flow
 
@@ -36,28 +36,76 @@ flowchart TD
     D --> E[MaudeExecutor.start<br>pool warm-up, fail-fast]
     E --> F[MCP over stdio]
     F --> G[tool call maude_program_diagnostics path]
-    G --> H{file exists and readable}
-    H -->|no| I[MaudeFileNotFoundError isError]
-    H -->|yes| J[MaudeExecutor.diagnostics]
+    G --> H{SourceFile.from_path<br>regular file?}
+    H -->|no| I[SourceFileNotFoundError isError]
+    H -->|yes| J[collect_diagnostics<br>providers in order, interpreter first]
     J --> K[worker load_diagnostics<br>fd-2 capture, parse warnings]
-    K --> L[tri-state mapping to result model]
-    L --> M[structuredContent plus JSON text]
-    F --> N[SIGTERM]
-    N --> O[lifespan finally kills pool]
-    O --> P[os._exit 0]
+    J --> L[heuristic linter in-process<br>mask text, run rule registry]
+    K --> M{any provider failed?}
+    L --> M
+    M -->|yes| N[DiagnosticCollectionError isError<br>names every failure, no partial results]
+    M -->|no| O[merge and order<br>line, provider, column, whole-file last]
+    O --> P[wire mapping: success, summary, diagnostics, fixes]
+    P --> Q[structuredContent plus JSON text]
+    F --> R[SIGTERM]
+    R --> S[lifespan finally kills pool]
+    S --> T[os._exit 0]
 ```
+
+### Failure semantics
+
+- A missing or unreadable input fails **before** any provider runs
+  (`SourceFileNotFoundError`, raised by the tool's pre-check/read).
+- Any provider failure fails the whole call with `DiagnosticCollectionError`: the message
+  names every failing provider and its reason, the first failure is chained
+  (`__cause__`), and the successful providers' findings are discarded (MCP cannot express
+  "error + content", so there are no partial results). A worker crash or timeout appears
+  as the interpreter provider's chained cause.
+- A provider bug that is not a `DiagnosticProviderError` is reported with its exception
+  type, so the message says what actually broke.
+
+### Heuristic linter flow
+
+1. `SourceFile.from_path` reads the text once (lossy UTF-8, newline-normalizing).
+2. `SourceView.from_text` builds the masked code view (comments, string literals, quoted
+   identifiers and statement labels blanked to spaces, length-preserving) plus the
+   file-wide declaration index and sort-declaration list.
+3. The rule registry runs **in order** (that order is also the tie-break for findings that
+   share a position); each rule returns findings with exact 1-based spans.
+4. `HeuristicLinterProvider` stamps each finding with the rule's `code`/`severity` and
+   hands them to the aggregator; fixes are report-only, the file is never modified.
 
 ## Worker crash recovery
 
 ```mermaid
 flowchart TD
     A[worker dies mid-task] --> B[BrokenProcessPool on future]
-    B --> C[MaudeWorkerCrashedError<br>pool replaced eagerly]
-    C --> D[client retries tool call]
-    D --> E[fresh worker serves the call]
-    F[submit on known-broken pool] --> G[replace pool, raise MaudeWorkerCrashedError]
-    G --> D
+    B --> C[MaudeWorkerError<br>pool replaced eagerly]
+    C --> D[provider wraps it in DiagnosticProviderError<br>aggregator raises DiagnosticCollectionError]
+    D --> E[client retries tool call]
+    E --> F[fresh worker serves the call]
+    F2[submit on known-broken pool] --> G[replace pool, raise MaudeWorkerCrashedError]
+    G --> E
 ```
+
+## Prelude snapshot maintenance
+
+- `harold_mcp.heuristic.prelude_sorts` is a **generated** module (first line of the
+  docstring and the header say `do not edit`); `harold-update-prelude-sorts` regenerates it.
+- Regenerate after upgrading the Maude interpreter the project is built against (see the
+  `maude` pin in `pyproject.toml`) or whenever `prelude.maude` changes:
+
+  ```bash
+  uv run harold-update-prelude-sorts /path/to/Maude-3.5.1-linux-x86_64/prelude.maude
+  uv run harold-update-prelude-sorts /path/to/Maude-3.5.1-linux-x86_64/prelude.maude --check
+  ```
+
+- The CLI refuses extractions with fewer than 50 sort names (the realistic failure is the
+  reader breaking), writes byte-stable output, and records provenance (source path,
+  SHA-256, Maude version, date) in the module header. `--check` compares the **data**
+  only, so a different machine's header does not fail it.
+- CI does not ship a Maude installation: the tests assert snapshot invariants (not byte
+  equality with an installation). `DEVELOPER_GUIDE.md` documents the procedure.
 
 ## Documentation workflow
 
@@ -68,19 +116,22 @@ flowchart TD
 ## Planning workflow
 
 - Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`
-  with `rough-idea.md`, `idea-honing.md`, `research/`, `design/`, `implementation/`).
-  Design rationale for existing code is recorded there too (e.g.
-  `sigsegv-under-load/issue.md`). Consult these before implementing a planned feature.
+  and `port-linter.py/` with `rough-idea.md`, `idea-honing.md`, `research/`, `design/`,
+  `implementation/`, `summary.md`). Design rationale for existing code is recorded there
+  too (e.g. `sigsegv-under-load/issue.md`). Consult these before implementing a planned
+  feature; `port-maude_eval.py/` is a research-only record paused at its decision point.
 
 ## Packaging and release
 
 - `make build` — build the wheel with `pyproject-build`.
 - `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`).
-- Release process (per `DEVELOPER_GUIDE.md`): create a GitHub release with a `*.*.*` tag
-  matching the `pyproject.toml` version without the `.dev0` suffix; the `release-main`
-  workflow patches the version, publishes to PyPI, and deploys the docs. Afterwards, bump
-  the version on `main` (back to a `*.dev0` WIP) and add a `CHANGELOG.md` entry. PyPI
-  versions are immutable — a failed publish means bumping to the next version.
+- Release process (per `DEVELOPER_GUIDE.md`): first update `CHANGELOG.md` for the release
+  (the `update-changelog-for-release` skill helps; add a one-sentence release summary at
+  the top of the section) and bump `pyproject.toml` to the next WIP version with a new
+  `CHANGELOG.md` section. Then create a GitHub release with a `*.*.*` tag matching the
+  released version (without `.dev0`); the `release-main` workflow patches the version,
+  publishes to PyPI, and deploys the docs. PyPI versions are immutable — a failed publish
+  means bumping to the next version.
 
 ## Cross-environment testing
 
