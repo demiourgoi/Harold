@@ -1,0 +1,165 @@
+# Implementation plan — fixing the deferred `q .` warning quirk via per-call interpreter isolation
+
+Checklist (tick as each step lands):
+
+- [ ] Step 1: fixtures + failing regression tests (red)
+- [ ] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
+- [ ] Step 3: `HAROLD_MAUDE_WORKERS` default change
+- [ ] Step 4: dependency-warning misattribution fix (worker + provider)
+- [ ] Step 5: path absolutization in `SourceFile.from_path`
+- [ ] Step 6: tool description + README + CHANGELOG
+- [ ] Step 7: maude-bindings bug report artifact
+- [ ] Step 8: full validation + knowledge-base refresh
+
+The plan follows the design in [`../design/detailed-design.md`](../design/detailed-design.md).
+Every step ends with a demoable, working increment; tests are written before or
+alongside the code they cover (red-green-refactor). Commands use the Makefile
+(`UV_CACHE_DIR=/tmp/uv-cache make …` inside a sandbox, per `AGENTS.md`).
+
+---
+
+## Step 1: fixtures + failing regression tests (red)
+
+Objective: pin the bugs as failing tests before any production change.
+
+1. Add fixtures to `tests/integration/fixtures/`:
+   - `quit_command.maude` — `red in NAT : 1 + 2 .` + `quit .`;
+   - `q_with_trailing_text.maude` — `red in NAT : 1 + 2 .`, `q .  foo bar`, and a
+     trailing `fmod` whose commands must never be parsed anywhere;
+   - `dep_q.maude` (`red …` + `q .`) and `loads_dependency_q.maude`
+     (`load dep_q.maude .` + a small fmod);
+   - `dep_clean.maude` (clean module) and `loads_dependency.maude`
+     (`load dep_clean.maude .` + a fmod using it);
+   - `dep_bad.maude` (module with a syntax problem) and `loads_bad_dependency.maude`;
+   - `loads_missing_dependency.maude` (`load missing.maude .` + `including NOPE`).
+2. Write the new integration tests in `tests/integration/test_diagnostics_integration.py`
+   (design §7.2–7.4): the four isolation tests, the race test
+   (`test_parallel_diagnostics_do_not_share_interpreter_state` with the
+   interpreter-clean set extended to the new clean fixtures), and the three dependency
+   tests. The isolation tests run on the shared module-scoped `executor` fixture; the
+   race test uses its own `MaudeExecutor(settings=Settings(maude_workers=2))`.
+3. Run `UV_CACHE_DIR=/tmp/uv-cache make test -k` targeted at the new tests →
+   **red**: isolation tests fail with a spurious `syntax error` on `hello.maude`; the
+   race test fails deterministically; the `loads_bad_dependency` test fails with the
+   misattributed warning. The pre-existing suite (with the `heuristic_executor`
+   workaround) stays green.
+
+Demo: `pytest tests/integration/test_diagnostics_integration.py -k "contaminate or parallel_diagnostics or dependency"` shows exactly the bugs from the planning README failing for the right reasons.
+
+## Step 2: `max_tasks_per_child=1` + test-suite rework (green for isolation/race)
+
+Objective: apply option A and remove the workaround.
+
+1. `src/harold_mcp/maude/executor.py::_default_executor` — add
+   `max_tasks_per_child=1` to the `ProcessPoolExecutor(...)` call; update the class
+   docstring (per-task process recycling; `start()` keeps its fail-fast role but no
+   longer warms anything; session semantics gone).
+2. `tests/integration/test_diagnostics_integration.py` — delete the
+   `heuristic_executor` fixture and its comment; point its users at `executor`.
+3. `tests/integration/test_maude_executor_integration.py` —
+   `test_two_workers_are_used_for_parallel_diagnostics`: measure the per-task init
+   cost first (`time` a `diagnostics("hello.maude")`), then run the two sleeps and
+   assert two distinct pids and `elapsed < init_cost + 1.5` (each sleep now pays
+   spawn+init before its 1 s sleep; the bound still proves parallelism).
+4. Run the full integration suite → the isolation tests, the race test, and the
+   workaround-free heuristic tests are **green**; `test_dependency_warnings_are_attributed_to_the_dependency` stays red (fixed in Step 4).
+
+Demo: `make test` — integration suite green except the one dependency-attribution test; `scratch_race.py`-equivalent test passes with 2 workers.
+
+## Step 3: `HAROLD_MAUDE_WORKERS` default change
+
+Objective: the new default formula.
+
+1. `src/harold_mcp/settings.py` — `_default_maude_workers()` returning
+   `max(1, min(3, (os.cpu_count() or 0) // 2))`; `maude_workers` uses
+   `Field(default_factory=_default_maude_workers, gt=0)`; update the class docstring
+   (formula, transient workers, ≈100 MB/process during bursts).
+2. `tests/unit/test_settings.py` — update `test_defaults` to the formula; add a
+   monkeypatched `os.cpu_count` matrix (12 → 3, 4 → 2, 2 → 1, `None` → 1).
+
+Demo: `pytest tests/unit/test_settings.py` green; `HAROLD_MAUDE_WORKERS` still overrides (existing tests unchanged).
+
+## Step 4: dependency-warning misattribution fix (worker + provider)
+
+Objective: honest attribution of dependency warnings, with the run-diagnostics suggestion.
+
+1. `src/harold_mcp/maude/worker.py` — `WarningDict` gains `file: str`;
+   `_WARNING_RE` gains a filename capture group; `_parse_warnings` fills it
+   (`<standard input>` included).
+2. `src/harold_mcp/maude/provider.py` — attribution rule per design §4.5: own-file and
+   `<standard input>` warnings as today; foreign files become whole-file diagnostics
+   (`line=None`) with
+   `In "{file}", line {line}: {message}. Run maude_program_diagnostics on "{file}" (resolved relative to the diagnosed file's directory) for details.`
+3. Unit tests: `tests/unit/test_maude_worker.py` (filename parsing, including
+   `<standard input>`) and `tests/unit/test_maude_provider.py` (foreign → whole-file +
+   message; own-file unchanged).
+4. `test_dependency_warnings_are_attributed_to_the_dependency` → **green**; assert the
+   message names `dep_bad.maude`, its line, and the run-diagnostics suggestion.
+
+Demo: `pytest tests/integration/test_diagnostics_integration.py` fully green (first time since Step 1).
+
+## Step 5: path absolutization in `SourceFile.from_path`
+
+Objective: relative inputs can no longer break on the worker's fresh-process path resolution.
+
+1. `src/harold_mcp/diagnostics/provider.py` — after the existing checks, store
+   `source_path = source_path.resolve()`; update the `path` docstring ("made absolute").
+   `resolve()` runs **after** `is_file()`, so missing files still raise
+   `SourceFileNotFoundError`.
+2. `tests/unit/test_diagnostics_seam.py` — relative input produces an absolute
+   `SourceFile.path`; missing files still raise.
+3. `src/harold_mcp/server/tools/diagnostics.py` — `MaudeProgramDiagnosticsResult.path`
+   docstring: "The input path, made absolute."
+
+Demo: `pytest tests/unit/test_diagnostics_seam.py` green; a relative-path tool call no longer yields the synthesized load error.
+
+## Step 6: tool description + README + CHANGELOG
+
+Objective: the semantics change and new behavior are documented for clients.
+
+1. `src/harold_mcp/server/tools/diagnostics.py` — rewrite the description prose:
+   fresh interpreter per call (replaces "last load wins"); whole-load semantics
+   (the file plus its `load`/`in` dependencies); dependency problems reported as
+   whole-file diagnostics naming the dependency, with the suggestion to diagnose the
+   dependency separately; keep sources/severity/fix/ordering text.
+2. `tests/integration/test_diagnostics_integration.py::test_mcp_smoke` — extend the
+   description assertions to the new sentences (e.g. "fresh" / "dependency").
+3. `README.md` — env-var table: `HAROLD_MAUDE_WORKERS` default becomes the formula;
+   refresh the tool description paragraph if it duplicates the docstring.
+4. `CHANGELOG.md` — new version section (suggest `0.0.5`): isolation via
+   `max_tasks_per_child=1` + fresh-per-call semantics, new workers default, path
+   absolutization, dependency-warning attribution fix, test-suite rework. Update
+   `pyproject.toml` `version` accordingly (confirm the bump with the user).
+
+Demo: `make check` green; `harold-mcp --help` and the MCP smoke test show the new description.
+
+## Step 7: maude-bindings bug report artifact
+
+Objective: a ready-to-send GitHub issue for the bindings.
+
+1. `.agents/planning/no_new_module_quirk/maude-bindings-issue.md` — title, environment
+   (`maude==1.6.0` / Maude 3.5.1 / Python 3.14.2 / Linux), steps, minimal
+   reproduction, expected vs actual (incl. the executable-residue and relative-path
+   variants), impact, workaround (`max_tasks_per_child=1`), and the pointer that the
+   documented `eof` already stops cleanly (the behavior the `q .` path should have).
+2. `.agents/planning/no_new_module_quirk/repro_minimal.py` — standalone script: two
+   temp files + fd-2 capture around two `maude.load` calls, printing the
+   contamination.
+
+Demo: `uv run python .agents/planning/no_new_module_quirk/repro_minimal.py` shows the
+deferred warning landing in the next load's capture.
+
+## Step 8: full validation + knowledge-base refresh
+
+Objective: everything green and the repo's knowledge base honest.
+
+1. `UV_CACHE_DIR=/tmp/uv-cache make release` (install, check, test, docs-test).
+2. Update `.agents/planning/no_new_module_quirk/README.md` status line (fix
+   implemented; point to this PDD record) and add the scratch scripts' names to the
+   experiment table if useful.
+3. Suggest to the user (per project Custom Instructions): re-run the codebase-summary
+   skill to refresh `.agents/summary/` + `AGENTS.md`; confirm the `0.0.5` version
+   bump and CHANGELOG section; consider the `update-changelog-for-release` skill when
+   actually releasing.
+
+Demo: full CI pass (`make release`) and an up-to-date planning record.

@@ -136,7 +136,11 @@ unchanged; the initializer (`init_maude`) simply runs in every replacement proce
   - `file == source.path.name` or `file == "<standard input>"` → diagnostic as today
     (line + message, attributed to the diagnosed file);
   - any other `file` → whole-file diagnostic (`line=None`) on the diagnosed file with
-    message `In "{file}", line {line}: {message}`.
+    message `In "{file}", line {line}: {message}. Run maude_program_diagnostics on
+    "{file}" (resolved relative to the diagnosed file's directory) for details.` —
+    the closing sentence turns the finding into an actionable next step for the
+    MCP client (dependencies resolve against the diagnosed file's directory, so the
+    agent can reconstruct the path).
 - Rationale and limits: see `research/misattribution.md` (basename comparison; same-
   basename collisions keep today's behavior).
 
@@ -249,7 +253,8 @@ Tests:
 7. `test_dependency_warnings_are_attributed_to_the_dependency` —
    `loads_bad_dependency.maude`: red today (warning misattributed to the main file at
    the dep's line); green after §4.4–4.5: whole-file diagnostic(s) whose message names
-   `dep_bad.maude` and its line.
+   `dep_bad.maude` and its line, and suggests running `maude_program_diagnostics` on
+   the dependency.
 
 ### 7.5 Unit tests
 
