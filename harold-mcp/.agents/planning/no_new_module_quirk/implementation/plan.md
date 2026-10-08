@@ -46,6 +46,37 @@ Objective: pin the bugs as failing tests before any production change.
 
 Demo: `pytest tests/integration/test_diagnostics_integration.py -k "contaminate or parallel_diagnostics or dependency"` shows exactly the bugs from the planning README failing for the right reasons.
 
+### Implementation notes (Step 1)
+
+Done as planned, with three notable details:
+
+- **Test placement moved earlier than the plan implied.** The new tests are inserted right
+  after `test_non_recoverable_program` (before `test_program_without_modules`), not after
+  the heuristic tests. Reason: the red phase runs on a shared warm worker, and
+  `test_program_without_modules` schedules residue that would contaminate the new
+  *pin* tests (clean dependency / missing dependency) that must stay green throughout.
+  With this order every new red failure is self-contained (q-file → clean file in the
+  same test). The race test keeps its own 2-worker pool, so it is position-independent.
+- **New bug found while writing the fixtures (in scope for Step 4).**
+  `loads_bad_dependency.maude` produced only one parsed warning: the raw stderr has
+  `Warning: "dep_bad.maude", line 9 (fmod DEP-BAD) : unexpected end of tokens.` and
+  `_WARNING_RE` requires `):` with no space, so any warning with `) :` is silently
+  dropped. The new misattribution test pins the corrected expectation (2 warnings), so
+  Step 4 must now also relax the regex (`\)\s*:`) — a scope addition to an already
+  touched line, flagged here as a deviation.
+- **Missing-dependency pin-test asserts messages, not Maude's line numbers.** Maude's
+  lazy-compilation line reporting shifts some warnings (the `load` warning points at
+  the line *after* the `load` statement); the test pins the three exact messages and
+  the "positioned, not whole-file" attribution instead of the raw line numbers.
+
+Observed red/green split on the current code: 6 red — the four isolation tests
+(`syntax error` on `hello.maude` in each; the trailing-text case also leaks
+`foo`/`bar`/`NoSuchSort`), the misattribution test (`1 != 2` warnings) and the race
+test (6–7 spurious findings across the clean fixtures) — and 2 green pins (clean and
+missing dependencies). The full integration suite is `6 failed, 36 passed`, i.e. every
+pre-existing test (with the `heuristic_executor` workaround) still passes. New
+scratch records: `scratch_fixture_dump.py`, `scratch_dep_raw.py`, `scratch_dep_raw2.py`.
+
 ## Step 2: `max_tasks_per_child=1` + test-suite rework (green for isolation/race)
 
 Objective: apply option A and remove the workaround.

@@ -1,0 +1,12 @@
+***
+*** Dependency fixture: loads the sibling `dep_bad.maude`, whose module fails to
+*** parse; the dependency's warnings must be attributed to the dependency, not
+*** to this file.
+***
+
+load dep_bad.maude .
+
+fmod LOADS-BAD-DEP is
+    including DEP-BAD .
+    op answer : -> Nat .
+endfm

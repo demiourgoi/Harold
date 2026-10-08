@@ -1,0 +1,8 @@
+***
+*** Isolation fixture: `quit .` (the period-terminated form) is the second
+*** parser-residue trigger next to `q .` (see .agents/planning/no_new_module_quirk/).
+*** The file is a correct program: the `red` runs, the quit ends the script.
+***
+
+red in NAT : 1 + 2 .
+quit .

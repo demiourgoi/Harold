@@ -1,0 +1,12 @@
+***
+*** Dependency fixture: loads a non-existent sibling and imports a missing
+*** module; Maude recovers with warnings attributed to this file, pointing at
+*** the `load`/`including` lines.
+***
+
+load missing.maude .
+
+fmod LOADS-MISSING-DEP is
+    including NOPE .
+    op answer : -> Nat .
+endfm

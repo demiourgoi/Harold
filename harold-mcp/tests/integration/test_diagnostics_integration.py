@@ -9,6 +9,7 @@ import select
 import subprocess
 import sys
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
@@ -95,6 +96,161 @@ def test_non_recoverable_program(executor: MaudeExecutor) -> None:
     assert len(result.diagnostics) == 12
     assert all(d.severity == "warning" for d in result.diagnostics)
     assert all(d.source == "interpreter" and d.code == "compiler" for d in result.diagnostics)
+
+
+def test_no_new_module_does_not_contaminate_next_diagnosis(executor: MaudeExecutor) -> None:
+    """Regression: the deferred `q .` warning must die with the call that produced it.
+
+    Without per-call interpreter isolation, loading the q-file leaves the parser
+    half-parsed; the deferred syntax error surfaces during the *next* load on the
+    same worker, attributed to that file (see .agents/planning/no_new_module_quirk/).
+    """
+    first = _diagnose(executor, "no_new_module.maude")
+    assert first.success is True
+    assert first.diagnostics == []
+
+    second = _diagnose(executor, "hello.maude")
+    assert second.success is True
+    assert second.diagnostics == []
+
+
+def test_quit_command_does_not_contaminate_next_diagnosis(executor: MaudeExecutor) -> None:
+    """Regression: the period-terminated `quit .` leaves the same residue as `q .`."""
+    first = _diagnose(executor, "quit_command.maude")
+    assert first.success is True
+    assert first.diagnostics == []
+
+    second = _diagnose(executor, "hello.maude")
+    assert second.success is True
+    assert second.diagnostics == []
+
+
+def test_content_after_q_is_not_reported(executor: MaudeExecutor) -> None:
+    """Regression: text after `q .` (same line and following lines) is never parsed."""
+    result = _diagnose(executor, "q_with_trailing_text.maude")
+    assert result.success is True
+    assert result.diagnostics == []
+
+    # None of the trailing commands (`foo bar`, NEVERS-PARSED) surface anywhere.
+    next_result = _diagnose(executor, "hello.maude")
+    assert next_result.success is True
+    assert next_result.diagnostics == []
+
+
+def test_dependency_with_q_does_not_contaminate_next_diagnosis(executor: MaudeExecutor) -> None:
+    """Regression: a `q .` inside a loaded dependency must not leak either."""
+    first = _diagnose(executor, "loads_dependency_q.maude")
+    assert first.success is True
+    assert first.diagnostics == []
+
+    second = _diagnose(executor, "hello.maude")
+    assert second.success is True
+    assert second.diagnostics == []
+
+
+def test_load_dependency_is_resolved_against_the_file_directory(executor: MaudeExecutor) -> None:
+    """A sibling `load` dependency is found (resolution is cwd-independent)."""
+    result = _diagnose(executor, "loads_dependency.maude")
+
+    assert result.success is True
+    assert result.diagnostics == []
+
+
+def test_missing_dependency_reports_warnings_at_the_load_lines(executor: MaudeExecutor) -> None:
+    """A missing dependency is a problem *of the diagnosed file*: positioned warnings."""
+    result = _diagnose(executor, "loads_missing_dependency.maude")
+
+    assert result.success is False
+    assert result.summary.warning == 3
+    assert result.summary.error == 0  # Maude recovers; no synthesized hard failure
+    assert _heuristic_diagnostics(result) == []
+    assert [d.message for d in result.diagnostics] == [
+        "unable to locate file: missing.maude",
+        "this module contains one or more errors that could not be patched up and thus it cannot be used or imported.",
+        "module NOPE does not exist.",
+    ]
+    # Every warning is attributed to the diagnosed file (positioned, not whole-file).
+    assert all(d.range is not None for d in result.diagnostics)
+
+
+def test_dependency_warnings_are_attributed_to_the_dependency(executor: MaudeExecutor) -> None:
+    """Warnings from a loaded dependency are honest whole-file diagnostics.
+
+    Maude attrites them to the dependency's own file and line; the tool must not
+    re-attribute them to the diagnosed file, and it points the client at the
+    dependency so the next step is actionable.
+    """
+    result = _diagnose(executor, "loads_bad_dependency.maude")
+
+    assert result.success is False
+    # Both dep warnings — including `unexpected end of tokens.`, whose
+    # `(fmod DEP-BAD) :` spacing used to be dropped by the worker's parser regex.
+    assert result.summary.warning == 2
+    assert result.summary.error == 0
+    assert [d.message for d in result.diagnostics] == [
+        'In "dep_bad.maude", line 9: unexpected end of tokens. Run maude_program_diagnostics on "dep_bad.maude" (resolved relative to the diagnosed file\'s directory) for details.',
+        'In "dep_bad.maude", line 9: no parse for statement. Run maude_program_diagnostics on "dep_bad.maude" (resolved relative to the diagnosed file\'s directory) for details.',
+    ]
+    # Whole-file diagnostics: no fabricated position in the diagnosed file.
+    assert all(d.range is None for d in result.diagnostics)
+    assert all(d.source == "interpreter" and d.code == "compiler" for d in result.diagnostics)
+
+
+# Fixtures whose interpreter load must be silent (checked by the parallel test below).
+INTERPRETER_CLEAN_FIXTURES = frozenset(
+    {
+        "capitalized_identifiers_ok.maude",
+        "declarations_when_dash.maude",
+        "dep_clean.maude",
+        "dep_q.maude",
+        "elt_sort_declaration.maude",
+        "hello.maude",
+        "hello2.maude",
+        "loads_dependency.maude",
+        "loads_dependency_q.maude",
+        "no_new_module.maude",
+        "non_linear_pattern.maude",
+        "nonascii_apostrophe.maude",
+        "q_with_trailing_text.maude",
+        "quit_command.maude",
+        "quoted_id_when_dash.maude",
+        "redeclare_prelude.maude",
+        "string_with_specials.maude",
+    }
+)
+
+
+def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
+    """Regression (reported from an opencode session): concurrent calls must not
+    see each other's interpreter state.
+
+    Without per-call isolation, a `q .` file's deferred warning lands on whichever
+    file the contaminated worker diagnoses next (with several workers, the victim
+    is unpredictable). Every fixture whose interpreter load is silent must stay
+    silent no matter what else runs concurrently.
+    """
+    parallel = MaudeExecutor(settings=Settings(maude_workers=2))
+    parallel.start()
+    try:
+        fixtures = sorted(FIXTURES_DIR.glob("*.maude"))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(
+                pool.map(
+                    lambda fixture: maude_program_diagnostics(str(fixture), maude_executor=parallel),
+                    fixtures,
+                )
+            )
+    finally:
+        parallel.shutdown()
+
+    spurious = [
+        (Path(result.path).name, diagnostic.message)
+        for result in results
+        if Path(result.path).name in INTERPRETER_CLEAN_FIXTURES
+        for diagnostic in result.diagnostics
+        if diagnostic.source == "interpreter"
+    ]
+    assert spurious == []
 
 
 def test_program_without_modules(executor: MaudeExecutor) -> None:

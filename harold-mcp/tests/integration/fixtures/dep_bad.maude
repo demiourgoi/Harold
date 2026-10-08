@@ -1,0 +1,10 @@
+***
+*** Dependency fixture: a dependency with a parse problem (`eq f = s .` is
+*** missing the `is`); Maude recovers, attributing the warnings to this file.
+***
+
+fmod DEP-BAD is
+    pr NAT .
+    op f : -> Nat .
+    eq f = s .
+endfm

@@ -1,0 +1,8 @@
+***
+*** Dependency fixture: a clean sibling module loaded by `loads_dependency.maude`.
+***
+
+fmod DEP-CLEAN is
+    pr NAT .
+    op dep-value : -> Nat .
+endfm

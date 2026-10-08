@@ -1,0 +1,12 @@
+***
+*** Dependency fixture: loads a clean sibling dependency and uses its module
+*** (the common multi-file project layout; `load` resolves against this file's
+*** directory, not the server's working directory).
+***
+
+load dep_clean.maude .
+
+fmod LOADS-DEPENDENCY is
+    including DEP-CLEAN .
+    op answer : -> Nat .
+endfm

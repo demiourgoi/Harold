@@ -1,0 +1,12 @@
+***
+*** Isolation fixture: everything after `q .` (the rest of that line and the
+*** following lines) must never be parsed — neither on this load nor on any
+*** later load. `foo`/`bar` and `NoSuchSort` would produce warnings if parsed.
+***
+
+red in NAT : 1 + 2 .
+q .  foo bar
+
+fmod NEVERS-PARSED is
+    op m : -> NoSuchSort .
+endfm

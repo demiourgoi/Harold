@@ -1,0 +1,8 @@
+***
+*** Isolation fixture: a dependency containing a REPL quit command. Loading it
+*** from another file interrupts that parse; the residue must not outlive the
+*** diagnostics call that loaded it.
+***
+
+red in NAT : 1 + 2 .
+q .

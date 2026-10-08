@@ -1,0 +1,11 @@
+***
+*** Isolation fixture: loads the sibling `dep_q.maude` (which contains a REPL
+*** quit command) and defines a module afterwards.
+***
+
+load dep_q.maude .
+
+fmod LOADS-DEP-Q is
+    pr NAT .
+    op answer : -> Nat .
+endfm
