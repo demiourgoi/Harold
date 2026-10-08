@@ -19,8 +19,14 @@ from typing import TypedDict
 
 
 class WarningDict(TypedDict):
-    """A single parsed Maude warning."""
+    """A single parsed Maude warning.
 
+    `file` is the name Maude printed for the file the warning belongs to — the
+    diagnosed file, a file it loaded via `load`/`in`, or `<standard input>` for
+    some first-line warnings. The provider uses it to attribute the warning.
+    """
+
+    file: str
     line: int | None
     message: str
 
@@ -92,7 +98,10 @@ def sleep_witness(seconds: float) -> tuple[int, float, float]:
     return os.getpid(), start, time.monotonic()
 
 
-_WARNING_RE = re.compile(r"Warning:\s+\S[^:]*,\s+line\s+(\d+)\s*(?:\([^)]*\))?:\s*(.*)")
+# `(fmod X) :` (space before the colon) is a real Maude spelling; requiring `):`
+# used to drop those warnings silently. A message may contain colons, so the
+# message group is greedy and last.
+_WARNING_RE = re.compile(r'Warning:\s+"?([^",]+)"?,\s+line\s+(\d+)\s*(?:\([^)]*\))?\s*:\s*(.*)')
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 
@@ -106,13 +115,16 @@ def _parse_warnings(text: str) -> list[WarningDict]:
 
     ANSI escapes are stripped first: Maude decides at init time whether stderr
     is a TTY and then colorizes its output, so captures can contain CSI
-    sequences around `Warning:` and inside messages.
+    sequences around `Warning:` and inside messages. The embedded file name is
+    kept (`WarningDict.file`) so the provider can attribute warnings Maude
+    raised about other files (dependencies) instead of pinning them on the
+    diagnosed file.
     """
     warnings_out: list[WarningDict] = []
     for line in _strip_ansi(text).splitlines():
         match = _WARNING_RE.match(line)
         if match:
-            warnings_out.append({"line": int(match.group(1)), "message": match.group(2)})
+            warnings_out.append({"file": match.group(1), "line": int(match.group(2)), "message": match.group(3)})
         # Unmatched lines are ignored for v1; hardening is a final-testing item.
     return warnings_out
 

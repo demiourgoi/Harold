@@ -34,7 +34,10 @@ def _source(tmp_path: Path) -> SourceFile:
 
 def test_warnings_map_to_line_only_warning_diagnostics(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    fake = FakeMaudeExecutor({"ok": True, "warnings": [{"line": 2, "message": "missing is keyword."}]})
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "program.maude", "line": 2, "message": "missing is keyword."}],
+    })
 
     diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
 
@@ -53,7 +56,10 @@ def test_warnings_map_to_line_only_warning_diagnostics(tmp_path: Path) -> None:
 
 def test_line_less_warning_has_no_positions(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    fake = FakeMaudeExecutor({"ok": True, "warnings": [{"line": None, "message": "something file-wide"}]})
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "program.maude", "line": None, "message": "something file-wide"}],
+    })
 
     diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
 
@@ -62,9 +68,62 @@ def test_line_less_warning_has_no_positions(tmp_path: Path) -> None:
     assert diagnostics[0].column is None
 
 
+def test_standard_input_warning_is_attributed_to_the_diagnosed_file(tmp_path: Path) -> None:
+    """Some first-line warnings are attributed to `<standard input>`; they belong here."""
+    source = _source(tmp_path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "<standard input>", "line": 1, "message": "skipped unexpected token: fmo"}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].line == 1
+    assert diagnostics[0].message == "skipped unexpected token: fmo"
+
+
+def test_dependency_warning_becomes_a_whole_file_diagnostic(tmp_path: Path) -> None:
+    """A warning Maude attributed to another file names that file; no fabricated position."""
+    source = _source(tmp_path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "dep.maude", "line": 4, "message": "unexpected end of tokens."}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.line is None
+    assert diagnostic.column is None
+    assert diagnostic.severity == "warning"
+    assert diagnostic.message == (
+        'In "dep.maude", line 4: unexpected end of tokens. '
+        'Run maude_program_diagnostics on "dep.maude" (resolved relative to the diagnosed file\'s directory) for details.'
+    )
+
+
+def test_dependency_warning_without_line_omits_the_line(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "dep.maude", "line": None, "message": "something file-wide"}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].line is None
+    assert diagnostics[0].message.startswith('In "dep.maude": something file-wide. Run')
+
+
 def test_hard_failure_adds_a_synthesized_whole_file_error(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    fake = FakeMaudeExecutor({"ok": False, "warnings": [{"line": 1, "message": "skipped unexpected token: fmo"}]})
+    fake = FakeMaudeExecutor({
+        "ok": False,
+        "warnings": [{"file": "program.maude", "line": 1, "message": "skipped unexpected token: fmo"}],
+    })
 
     diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
 

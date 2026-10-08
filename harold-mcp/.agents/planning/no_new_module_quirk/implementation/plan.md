@@ -5,7 +5,7 @@ Checklist (tick as each step lands):
 - [x] Step 1: fixtures + failing regression tests (red)
 - [x] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
 - [x] Step 3: `HAROLD_MAUDE_WORKERS` default change
-- [ ] Step 4: dependency-warning misattribution fix (worker + provider)
+- [x] Step 4: dependency-warning misattribution fix (worker + provider)
 - [ ] Step 5: path absolutization in `SourceFile.from_path`
 - [ ] Step 6: tool description + README + CHANGELOG
 - [ ] Step 7: maude-bindings bug report artifact
@@ -187,6 +187,39 @@ Objective: honest attribution of dependency warnings, with the run-diagnostics s
    message names `dep_bad.maude`, its line, and the run-diagnostics suggestion.
 
 Demo: `pytest tests/integration/test_diagnostics_integration.py` fully green (first time since Step 1).
+
+### Implementation notes (Step 4)
+
+Done, plus the flagged regex scope addition; one extra fix surfaced during verification:
+
+- **Worker**: `WarningDict` gained `file`; `_WARNING_RE` gained the filename capture
+  group and the relaxed colon (`\s*:`) for the `(fmod X) :` spelling (the Step-1 scope
+  addition), with a comment documenting why the message group stays greedy and last.
+- **Provider**: own-file and `<standard input>` warnings keep their line (the latter is
+  Maude's attribution of some first-line/broken-parse warnings, and it is exactly what
+  the tool must map back to the diagnosed file — verified against real data:
+  `broken-non-recoverable.maude` has its first two warnings under
+  `<standard input>`); any other file becomes a whole-file diagnostic with the
+  `In "file", line N: … Run maude_program_diagnostics on "file" (resolved relative to
+  the diagnosed file's directory) for details.` message (attribution rule extracted to
+  `InterpreterDiagnosticProvider._to_diagnostic`).
+- **Extra fix found during verification — message punctuation.** Maude's
+  `no parse for statement` carries no trailing period, so the suggestion ran on
+  (`…statement Run maude_program_diagnostics …`). `_dependency_message` now appends a
+  period when the message lacks final punctuation; both variants are unit-tested.
+- **Tests**: unit tests updated for the `file` field plus new cases
+  (`test_context_fragment_with_space_before_the_colon`;
+  `test_standard_input_warning_is_attributed_to_the_diagnosed_file`;
+  `test_dependency_warning_becomes_a_whole_file_diagnostic`;
+  `test_dependency_warning_without_line_omits_the_line`); worker integration
+  expectations updated with the real `file` values; the tool-level fakes updated so
+  their warnings stay attributed to the diagnosed file.
+
+Verification: `make test-unit` 177 passed; worker integration 5 passed; the full tool
+integration file 27 passed (84.9 s — the race test dominates); lifespan 3 passed;
+`make check` green. The Step-1 red `test_dependency_warnings_are_attributed_to_the_dependency`
+is now green, and the previously dropped `unexpected end of tokens.` warning reaches
+clients.
 
 ## Step 5: path absolutization in `SourceFile.from_path`
 

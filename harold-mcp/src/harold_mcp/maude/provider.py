@@ -16,13 +16,36 @@ from harold_mcp.maude.executor import MaudeExecutor, MaudeWorkerError
 
 _HARD_FAILURE_MESSAGE = "Failed to load Maude program: unrecoverable parse error."
 _CODE = "compiler"
+_STANDARD_INPUT = "<standard input>"
+
+
+def _dependency_message(file: str, line: int | None, message: str) -> str:
+    """Wrap a foreign-file warning as a whole-file diagnostic message.
+
+    The warning belongs to a file the diagnosed file loaded (via `load`/`in`);
+    there is no valid position for it in the diagnosed file, so the message
+    names the real source and points at the tool that can diagnose it
+    (dependencies resolve relative to the diagnosed file's directory). Maude's
+    messages may lack final punctuation (`no parse for statement`), so one is
+    added before the suggestion when needed.
+    """
+    line_info = f", line {line}" if line is not None else ""
+    terminator = "" if message.endswith((".", "!", "?")) else "."
+    return (
+        f'In "{file}"{line_info}: {message}{terminator} '
+        f'Run maude_program_diagnostics on "{file}" (resolved relative to the diagnosed file\'s directory) for details.'
+    )
 
 
 class InterpreterDiagnosticProvider:
     """`DiagnosticProvider` over the Maude interpreter load (v1 behavior).
 
     Reports one `warning` per `Warning:` line Maude printed, and — when the program
-    could not be loaded at all — one synthesized whole-file `error`.
+    could not be loaded at all — one synthesized whole-file `error`. Warnings
+    Maude attributed to the diagnosed file (or to `<standard input>`) keep their
+    line; warnings attributed to another file (a dependency loaded from the
+    diagnosed file) become whole-file diagnostics naming that file, so the tool
+    never fabricates a position in the diagnosed file for them.
     """
 
     name: DiagnosticSource = "interpreter"
@@ -45,13 +68,7 @@ class InterpreterDiagnosticProvider:
             # failure, and `__cause__` keeps the worker error for logs and debugging.
             raise DiagnosticProviderError(self.name, exc.reason) from exc
         diagnostics = [
-            ProviderDiagnostic(
-                source=self.name,
-                severity="warning",
-                code=_CODE,
-                message=warning["message"],
-                line=warning["line"],
-            )
+            self._to_diagnostic(source, file=warning["file"], line=warning["line"], message=warning["message"])
             for warning in result["warnings"]
         ]
         if not result["ok"]:
@@ -59,3 +76,15 @@ class InterpreterDiagnosticProvider:
                 ProviderDiagnostic(source=self.name, severity="error", code=_CODE, message=_HARD_FAILURE_MESSAGE)
             )
         return diagnostics
+
+    def _to_diagnostic(self, source: SourceFile, *, file: str, line: int | None, message: str) -> ProviderDiagnostic:
+        """Map one parsed warning; foreign files become whole-file diagnostics."""
+        if file in (source.path.name, _STANDARD_INPUT):
+            return ProviderDiagnostic(source=self.name, severity="warning", code=_CODE, message=message, line=line)
+        return ProviderDiagnostic(
+            source=self.name,
+            severity="warning",
+            code=_CODE,
+            message=_dependency_message(file, line, message),
+            line=None,
+        )

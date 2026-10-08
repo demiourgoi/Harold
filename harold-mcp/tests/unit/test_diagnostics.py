@@ -71,7 +71,9 @@ def test_clean_program_returns_success(tmp_path: Path) -> None:
 def test_recoverable_warning_marks_failure(tmp_path: Path) -> None:
     path = tmp_path / "broken.maude"
     content = _write(path, "fmod X\nendfm\n")
-    result = _run(content, {"ok": True, "warnings": [{"line": 2, "message": "missing is keyword."}]})
+    result = _run(
+        content, {"ok": True, "warnings": [{"file": "broken.maude", "line": 2, "message": "missing is keyword."}]}
+    )
 
     assert result.success is False
     assert result.summary.info == 0
@@ -95,7 +97,7 @@ def test_hard_failure_adds_synthesized_error(tmp_path: Path) -> None:
     content = _write(path, "garbage\n")
     result = _run(
         content,
-        {"ok": False, "warnings": [{"line": 1, "message": "skipped unexpected token: fmo"}]},
+        {"ok": False, "warnings": [{"file": "broken.maude", "line": 1, "message": "skipped unexpected token: fmo"}]},
     )
 
     assert result.success is False
@@ -126,7 +128,9 @@ def test_hard_failure_without_warnings(tmp_path: Path) -> None:
 def test_warning_without_line_uses_whole_file_range(tmp_path: Path) -> None:
     path = tmp_path / "broken.maude"
     content = _write(path, "x\n")
-    result = _run(content, {"ok": True, "warnings": [{"line": None, "message": "something file-wide"}]})
+    result = _run(
+        content, {"ok": True, "warnings": [{"file": "broken.maude", "line": None, "message": "something file-wide"}]}
+    )
 
     assert result.success is False
     assert len(result.diagnostics) == 1
@@ -277,7 +281,7 @@ def test_heuristic_finding_carries_columns_and_an_applyable_fix(tmp_path: Path) 
 def test_same_line_orders_interpreter_before_heuristic(tmp_path: Path) -> None:
     path = tmp_path / "mixed.maude"
     content = _write(path, f"fmod T is\n    op L{APOSTROPHE} : -> Nat .\nendfm\n")
-    fake = FakeMaudeExecutor({"ok": True, "warnings": [{"line": 2, "message": "some warning."}]})
+    fake = FakeMaudeExecutor({"ok": True, "warnings": [{"file": "mixed.maude", "line": 2, "message": "some warning."}]})
 
     result = maude_program_diagnostics(content, maude_executor=fake)
 

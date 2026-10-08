@@ -40,7 +40,7 @@ def test_clean_program_loads_without_warnings(pool: ProcessPoolExecutor) -> None
 def test_recoverable_program_reports_warning(pool: ProcessPoolExecutor) -> None:
     result = _diagnose(pool, "broken-recoverable.maude")
     assert result["ok"] is True
-    assert result["warnings"] == [{"line": 2, "message": "missing is keyword."}]
+    assert result["warnings"] == [{"file": "broken-recoverable.maude", "line": 2, "message": "missing is keyword."}]
 
 
 def test_non_recoverable_program_reports_all_warnings(pool: ProcessPoolExecutor) -> None:
@@ -49,18 +49,21 @@ def test_non_recoverable_program_reports_all_warnings(pool: ProcessPoolExecutor)
     # Deterministic 12 warnings through the Python bindings (the two `syntax error`
     # lines from the REPL transcript are interactive-parser-only).
     assert result["warnings"] == [
-        {"line": 1, "message": "skipped unexpected token: fmo"},
-        {"line": 1, "message": "skipped unexpected token: HELLO-WORLD"},
-        {"line": 2, "message": "skipped unexpected token: pr"},
-        {"line": 2, "message": "skipped unexpected token: NAT"},
-        {"line": 3, "message": "skipped unexpected token: f"},
-        {"line": 3, "message": "skipped unexpected token: :"},
-        {"line": 3, "message": "skipped unexpected token: ->"},
-        {"line": 3, "message": "skipped unexpected token: Nat"},
-        {"line": 4, "message": "skipped unexpected token: f"},
-        {"line": 4, "message": "skipped unexpected token: ="},
-        {"line": 4, "message": "skipped unexpected token: *"},
-        {"line": 5, "message": "skipped unexpected token: endfm"},
+        # The first two warnings of this badly broken file are attributed to
+        # `<standard input>` by Maude (the provider maps those back to the
+        # diagnosed file).
+        {"file": "<standard input>", "line": 1, "message": "skipped unexpected token: fmo"},
+        {"file": "<standard input>", "line": 1, "message": "skipped unexpected token: HELLO-WORLD"},
+        {"file": "broken-non-recoverable.maude", "line": 2, "message": "skipped unexpected token: pr"},
+        {"file": "broken-non-recoverable.maude", "line": 2, "message": "skipped unexpected token: NAT"},
+        {"file": "broken-non-recoverable.maude", "line": 3, "message": "skipped unexpected token: f"},
+        {"file": "broken-non-recoverable.maude", "line": 3, "message": "skipped unexpected token: :"},
+        {"file": "broken-non-recoverable.maude", "line": 3, "message": "skipped unexpected token: ->"},
+        {"file": "broken-non-recoverable.maude", "line": 3, "message": "skipped unexpected token: Nat"},
+        {"file": "broken-non-recoverable.maude", "line": 4, "message": "skipped unexpected token: f"},
+        {"file": "broken-non-recoverable.maude", "line": 4, "message": "skipped unexpected token: ="},
+        {"file": "broken-non-recoverable.maude", "line": 4, "message": "skipped unexpected token: *"},
+        {"file": "broken-non-recoverable.maude", "line": 5, "message": "skipped unexpected token: endfm"},
     ]
 
 
