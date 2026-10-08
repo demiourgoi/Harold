@@ -44,10 +44,8 @@ not affect per-call latency for serial callers.
   happens, half the machine is fair".
 - 2 or 3: enough for typical single-agent use (an agent issues 1–4 parallel tool
   calls); cheaper peak memory.
-- Recommendation: `max(1, os.cpu_count() // 2)` — honor the user's instinct; the knob
-  exists for constrained machines. A hard cap (e.g. 8) would only matter on very large
-  machines; not needed for the project's target use, but worth a note in the settings
-  docstring.
-
-Caveat: `os.cpu_count()` can return `None`; the default must guard with a floor of 1
-(the `gt=0` validator stays).
+- **Decision (user)**: `max(1, min(3, (os.cpu_count() or 0) // 2))` — half the cores,
+  capped at 3. Rationale: 3 is enough for the typical Harold use case (AI-assisted
+  coding in an IDE, one agent), and the cap keeps old/low-core machines from being
+  overwhelmed. The `gt=0` validator stays; `os.cpu_count() or 0` guards the `None`
+  case (floor of 1 comes from the outer `max`).

@@ -79,3 +79,49 @@ makes the tool's documented "absolute path" contract self-enforcing.
 
 Still a dead end: misbehaves in normal state and segfaults after a pending-state load
 (see the README and `scratch_flush.py`). Not considered further.
+
+### 6. Command-set evaluation (Maude manual, Appendix A)
+
+Source: *Maude manual*, Appendix A "Complete List of Maude Commands"
+(`maude-manualap1.html`, section `x131-316000A`; text extract in
+`manual-commands-appendix.txt`). Scratch script: `scratch_commands.py` (one fresh
+process per candidate; each candidate file is `red ...` + the command + a trailing
+`fmod NEVERX` whose definition proves whether the remainder was parsed).
+
+The system-level commands (A.16) are documented as **not followed by a period**: `cd`,
+`eof`, `in`, `load`, `ll`, `ls`, `popd`, `pushd`, `pwd`, `quit`, `sload`. The classic
+period-terminated `q .` does **not appear in the command list at all** — it is an
+undocumented shorthand (the lexer tokenizes `q` like `quit`, and the period-terminated
+form takes the ordinary command path).
+
+Measured behavior of quit-like commands inside a file:
+
+| Command in file | First load | Next load's stderr | Remainder parsed? |
+| --- | --- | --- | --- |
+| `q .` / `quit .` | ok, silent | deferred `syntax error` at that line | yes — **during the next load** |
+| `quit` (no period) | ok, silent | clean | yes — during the first load (no interrupt) |
+| `q` (no period) | ok, silent | clean | yes — during the first load |
+| `eof` / `eof .` | ok, silent | clean | **no** — cleanly discarded, no residue |
+| `break .`, `abort .`, `resume .`, `step .`, `where .` | ok, silent | clean | yes — during the first load |
+
+Conclusions:
+
+- **The residue trigger class is exactly the period-terminated quit forms** `q .` and
+  `quit .`. The documented `quit` (no period) does not even stop file parsing, and the
+  documented `eof` stops it **cleanly** (discards the remainder, leaves no residue) —
+  `eof` is the sanctioned way to end a file early, and it is what the maude-bindings
+  bug report should point at as the expected behavior for the `q .` path.
+- No other command in the appendix interrupts the parse loop: rewriting/searching/
+  matching/tracing/debugger commands all parse normally inside files (debugger
+  commands without an active debugging session are harmless).
+- File-system commands (`cd`, `ls`, `pushd`, `popd`, `pwd`, `sload`) are additionally
+  neutralized in the worker by `setAllowDir/File/Processes(False)`; they are not part
+  of the residue class.
+- `in`/`load`/`sload` inside files are documented (nested includes supported); the
+  documented bare-name resolution is current directory → `MAUDE_LIB` → executable
+  directory, which matches the empirical rule once Maude's internal current directory
+  is understood to follow the file being read (see `dependencies.md`).
+
+Net: the quirk inventory needed exactly one extension — the trigger class is the
+period-terminated quit pair `q .`/`quit .` (undocumented), with `eof` as the clean
+reference behavior. Everything else in the appendix is irrelevant to the residue bug.

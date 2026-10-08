@@ -1,0 +1,1201 @@
+
+
+A Complete List of Maude Commands
+
+[prev] [prev-tail] [tail] [up]
+
+Appendix A
+Complete List of Maude Commands
+
+In this chapter we use curly bracket pairs, ‘
+{
+’ and ‘
+}
+’, to enclose optional syntax.
+
+A.1 Command line flags
+
+The following command line flags are supported.
+
+-
+
+-help
+
+Displays information on the usage of the Maude command and its line flags.
+
+-
+
+-version
+
+Displays the Maude version number.
+
+-allow-dir
+
+Allow operations on directories.
+
+-allow-files
+
+Allow operations on files.
+
+-allow-processes
+
+Allow running arbitrary executables.
+
+-always-advise
+
+Disables the possibility of turning advisories off.
+
+-ansi-color, -no-ansi-color
+
+By default ANSI escape codes for color and other effects are disabled if the standard output is not a terminal or the TERM environment variable is set to dumb. These flags allow the default behavior to be overridden.
+
+-assoc-unif-depth=number
+
+Sets the depth bound multiplier for associative unification. The default multiplier is 1.
+
+-batch
+
+Disables control-C handling.
+
+-erewrite-loop-mode
+
+Causes Maude to use external object rewriting for loop mode.
+
+-interactive
+
+Pretends to be interactive, and enables control-C handling even though standard output is not a terminal.
+
+-latex-log=filename
+
+Generates a LaTeX log in the given file. See Chapter 20.
+
+-no-advise
+
+Switches off advisories at start up.
+
+-no-banner
+
+Causes Maude not to show the welcome banner at start up.
+
+-no-mixfix
+
+Turns off mixfix printing; useful if Maude is being run by some other program that does not want to deal with the intricacies of mixfix parsing.
+
+-no-prelude
+
+Causes Maude not to read in the standard prelude.
+
+-no-wrap
+
+Disables the automatic line wrapping of output.
+
+-print-to-stderr
+
+Causes the output of the print attribute to be set to stderr rather than stdout.
+
+-random-seed=number
+
+Specifies the natural number number in the range 
+[
+0
+,
+
+2
+
+3
+2
+
+−
+1
+]
+ as the seed for the pseudo-random number generator random in module RANDOM (see Section 8.4). The default seed is 0.
+
+-show-pid
+
+Print process id to stderr before printing banner.
+
+-tecla, -no-tecla
+
+By default Tecla-based command line editing is disabled if the standard output is not a terminal or the TERM environment variable is set to dumb or emacs. These flags allow the default behavior to be overridden.
+
+-trust
+
+Allow all potentially risky capabilities (operations on directories, files, and processes).
+
+-xml-log=file-name(deprecated)
+
+Generates an XML log for selected commands in the given file.
+
+The following options are intended for developer use only.
+
+-debug
+
+Print copious messages about internal state (debug build only).
+
+-early-quit=number
+
+Quit abruptly after the given number of garbage collections. This is intended for developer use only, to assist in profiling long running examples.
+
+A.2 Rewriting commands
+
+reduce 
+{
+in module :
+}
+ term .
+
+Causes the specified term to be reduced using the equations and membership axioms in the given module. reduce may be abbreviated to red. If the in clause is omitted, the current module is assumed. For examples, see Section 4.9.
+
+rewrite 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ term .
+
+Causes the specified term to be rewritten using the rules, equations, and membership axioms in the given module. The default interpreter for rules applies them using a rule-fair top-down (lazy) strategy and stops when the number of rule applications reaches the given bound. No rule will be applied if an equation can be applied. If the in clause is omitted, the current module is assumed. If the upper bound clause is omitted, infinity is assumed. rewrite may be abbreviated to rew. For examples, see Section 5.4.1.
+
+frewrite 
+{
+[ bound 
+{
+,number
+}
+ ]
+}
+ 
+{
+in module :
+}
+ term .
+
+Like the previous command, causes the specified term to be rewritten using the rules, equations, and membership axioms in the given module. But now the default interpreter for rules applies them using a rule- and position-fair strategy and stops when the number of rule applications reaches the given bound. This strategy causes multiple passes over the term, with at most number rule rewrites taking place at each position. If the in clause is omitted, the current module is assumed. If the upper bound clause is omitted, infinity is assumed. If the number of rewrites per position is omitted, 1 is assumed. frewrite may be abbreviated to frew. For examples, see Section 5.4.2. 
+
+Unlike rewrite, which uses a leftmost outermost strategy for applying rules and reduces the whole term with equations after each successful rule rewrite, frewrite attempts to be position fair by making a number of depth-first traversals of the term. On each traversal, each position that existed at the start of the traversal is entitled to at most 
+
+n
+u
+m
+b
+e
+r
+
+ rule rewrites when its turn comes around. After a rule rewrite succeeds, only the subterm that was rewritten is reduced with equations in order to avoid destroying positions that have not yet had their turn for the current traversal. Traversals are made until 
+
+b
+o
+u
+n
+d
+
+ rule rewrites have been made, or until no more rewrites are possible. When operators have the assoc or iter attributes, term depth and positions are relative to the flattened or compact form of the term, respectively. Thus, fair rewriting treats a whole stack of an iter operator as a single position for the purposes of position fairness. 
+
+The are a couple of caveats with frewrite:
+
+If position-fair rewriting stops in mid traversal, then the sort of the (incompletely reduced) result has not yet been calculated and is printed as (sort not calculated).
+
+Position-fair rewriting is not substitution fair; this is particularly apparent if you have a multiset of messages and objects, as in Section 6.3.
+
+erewrite 
+{
+[ bound 
+{
+,number
+}
+ ]
+}
+ 
+{
+in module :
+}
+ term .
+
+Works like the frewrite command and in addition it allows messages to be exchanged with external objects that do not reside in the configuration. It is abbreviated to erew.
+
+continue 
+{
+number
+}
+ .
+
+Attempts to continue rewriting the result of the last rewriting command using the rules, equations, and membership axioms, stopping if the upper bound on the number of rule applications is reached. This command is only usable if the current module has not changed since the last rewriting command, and the last rewriting command was not reduce. If no upper bound clause is given, infinity is assumed. In the case where the last rewriting command was frewrite, the number given to the continue command increases the bound on the number of traversals, leaving the number of rewrites per position unchanged. In particular, considerable extra information about the current traversal is saved by the frewrite command so that, for example, 
+
+frewrite [n, k] t . 
+continue m .
+       
+
+produces the same final answer as 
+
+frewrite [s, k] t .
+       
+
+when s = n + m. For an erewrite command, the same state information is preserved as for frewrite, but in this case nothing can be guaranteed, due to the interaction with the external environment.
+
+loop 
+{
+in module :
+}
+ term .
+
+This command is used to initialize the read-eval-print loop in a module importing LOOP-MODE (see Section 18.4). The specified term is rewritten as far as possible using the rules, equations, and membership axioms in the given module. If the result has a loop constructor symbol at the top, then it becomes the current state of the loop; also, the list of quoted identifiers in the output position of the loop constructor is printed as a sequence of identifiers.
+
+( identifier* )
+
+This command is used to input a list of identifiers to the loop in a module importing LOOP-MODE (see Section 18.4). If the current module has not changed since the last rewriting command, the result of previous rewrites has a loop constructor symbol at the top, and the last rewriting command was not reduce then:
+
+1.
+
+the sequence of identifiers in the parentheses is converted into a list of quoted identifiers and is placed under the input position of the loop constructor;
+
+2.
+
+a nil list of quoted identifiers is placed under the output position of the loop constructor;
+
+3.
+
+the new term is rewritten as far as possible using the rules, equations, and membership axioms in the module to which the term belongs; and
+
+4.
+
+if the new result has a loop constructor symbol at the top, the list of quoted identifiers in the output position of the loop constructor is printed as a sequence of identifiers.
+
+set clear rules on . / set clear rules off .
+
+Normally, each rewrite or frewrite command and each loop mode invocation resets the rule state for each symbol. For most symbols the rule state consists of the next rule to be executed in a round-robin scheme but for counter symbols the rule state consists of the next number to rewrite to. Setting clear rules to off means the rule state will not be reset between commands.
+
+A.3 Matching commands
+
+Matching commands are used to directly invoke the rewriting engine’s term pattern matcher. They can be useful for figuring out exactly what subjects can be matched by a complex pattern.
+
+match 
+{
+[ number ]
+}
+ 
+{
+in module :
+}
+ pattern <=? subject-term 
+{
+such that condition
+}
+ .
+
+Performs straightforward matching in the given module. This kind of matching is used by the engine for applying membership axioms. The result is a list of at most number matching substitutions such that the subject term matches the pattern and the substitution satisfies the optional condition (whose syntactic form is the same as the one of conditions for conditional equations and memberships; see Section 4.3). If the upper bound clause is omitted, infinity is assumed. For examples, see Section 4.9.
+
+xmatch 
+{
+[ number ]
+}
+ 
+{
+in module :
+}
+ pattern <=? subject-term 
+{
+such that condition
+}
+ .
+
+Works similarly to the previous command, except that it performs matching with extension for those theories that need it (those including the assoc or iter attributes). If the subject term (after theory normalization) has a symbol 
+f
+ from an extension theory on top, only a piece of the top theory layer with 
+f
+ on top need be matched. This kind of matching is used by the engine for applying equations and rules in order to accurately simulate equivalence class rewriting. The result is a list of all matches satisfying the given condition. If only part of the subject was matched, that part is given. For examples, see Sections 4.8 and 4.9.
+
+A.4 Searching commands
+
+search 
+{
+[ bound 
+{
+,depth
+}
+ ]
+}
+ 
+{
+in module :
+}
+ subject searchtype pattern 
+{
+such that condition
+}
+ .
+
+Performs a breadth-first search for rewrite proofs starting at subject to a final state that matches pattern and satisfies an optional condition (whose syntactic form is the same as the one of conditions for conditional equations and memberships; see Section 4.3). Possible values for searchtype are
+
+=>1
+one step proof
+
+=>+
+one or more steps proof
+
+=>*
+zero or more steps proof
+
+=>!
+only canonical final states, that cannot be further rewritten,
+
+are allowed as solutions
+
+=>#
+states having multiple distinct successors
+
+The optional bound argument provides an upper bound in the number of solutions to be found; if it is omitted, infinity is assumed. 
+
+The optional depth argument indicates the maximum depth of the search. If it is omitted, infinity is assumed. It is also possible to give a depth bound without giving a bound on the number of solutions returned by requesting a search of the form search [,m] .... 
+
+The search type =>1 is an abbreviation of the search type =>+ with the depth bound set to 1. 
+
+As usual, if the in clause is omitted, the current module is assumed. 
+
+For examples, see Section 5.4.3.
+
+show search graph .
+
+Displays the search graph generated by the last search.
+
+show path number .
+
+Displays the path to a given state, identified by the number, in a search graph.
+
+show path labels number .
+
+Works like the command above, but only shows labels of applied rules instead of the full path.
+
+show path states number .
+
+Works like the commands above, but only shows the states in the path and not the rules.
+
+A.5 Strategic rewriting commands
+
+srewrite 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ subject using strategyexpr .
+
+Causes the specified term to be rewritten according to the given strategy in the given module. The command performs an exhaustive fair search for all the strategy solutions, unless the optional bound on the number of solutions is specified. If the in clause is omitted, the current module is assumed. srewrite may be abbreviated to srew. 
+
+For examples, see Section 10.1.
+
+dsrewrite 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ subject using strategyexpr .
+
+Like the previous command, but solutions are searched depth-first. dsrewrite may be abbreviated to dsrew. 
+
+For more details, see Section 10.4.
+
+A.6 Unification, variants, and narrowing commands
+
+{
+irredundant
+}
+ unify 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ term
+
+1
+
+ =? term’
+
+1
+
+ 
+{
+ /\ … /\ term
+
+k
+
+ =? term’
+
+k
+
+ 
+}
+ .
+
+Computes a complete set of order-sorted unifiers modulo the (supported) equational axioms in the given module for the provided unification problem. If the cardinality of the set of unifiers is greater than the specified bound, the unifiers beyond that bound are omitted. The module can be any module or theory declared in the current Maude session; as usual, if the in clause is omitted, the current module is used. If the keyword irredundant is used, a minimal set of unifiers is returned. 
+
+For examples, see Section 13.4.
+
+{
+filtered
+}
+ variant unify 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ term
+
+1
+
+ =? term’
+
+1
+
+ 
+{
+ /\ … /\ term
+
+k
+
+ =? term’
+
+k
+
+ 
+}
+ 
+{
+such that term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+ irreducible
+}
+.
+
+Computes a complete set of order-sorted unifiers modulo the equations declared with the variant attribute (which must satisfy the finite variant property) plus the (supported) equational axioms in the given module for the provided unification problem. It may be necessary to satisfy an optional irreducibility condition on extra terms term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+. If the cardinality of the set of unifiers is greater than the specified bound, the unifiers beyond that bound are omitted. The module can be any module or theory declared in the current Maude session; as usual, if the in clause is omitted, the current module is used. If the keyword filtered is used, a minimal set of unifiers is returned. 
+
+For more details, see Section 14.9.
+
+variant match 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ term
+
+1
+
+ 
+<
+=
+?
+ term’
+
+1
+
+ 
+{
+ /\ … /\ term
+
+k
+
+ 
+<
+=
+?
+ term’
+
+k
+
+ 
+}
+ 
+{
+such that term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+ irreducible
+}
+ .
+
+Computes a complete set of order-sorted matches modulo the equations declared with the variant attribute (which must satisfy the finite variant property) plus the (supported) equational axioms in the given module for the provided matching problem. It may be necessary to satisfy an optional irreducibility condition on extra terms term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+. If the cardinality of the set of matchers is greater than the specified bound, the matchers beyond that bound are omitted. The module can be any module or theory declared in the current Maude session; as usual, if the in clause is omitted, the current module is used. 
+
+For more details, see Section 14.13.
+
+get 
+{
+irredundant
+}
+ variants 
+{
+[ bound ]
+}
+ 
+{
+in module :
+}
+ term 
+{
+such that term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+ irreducible
+}
+ .
+
+ 
+
+Compute incrementally a set of most general variants of the given term in the (supported) equational theory of the given module, where the equations of interest must be declared with the variant attribute. The keyword irredundant is useful for theories that do have the finite variant property, since it will provide the set of most general variants of the given term. If the cardinality of the set of variants is greater than the specified bound, the variants beyond that bound are omitted. It may be necessary to satisfy an optional irreducibility condition on extra terms term”
+
+1
+
+, 
+…
+, term”
+
+n
+
+. The module can be any module or theory declared in the current Maude session; as usual, if the in clause is omitted, the current module is used. 
+
+For examples and more details, see Section 14.4.
+
+{
+{narrowingopts}
+}
+ vu-narrow 
+{
+{variantopts}
+}
+ 
+{
+[ bound 
+{
+,depth
+}
+ ]
+}
+ 
+{
+in module :
+}
+ pattern1 searchtype pattern2 .
+
+Performs a breadth-first narrowing search using variant-based unification starting at an initial state pattern1 (a term with variables) to a final state (a term with variables, possibly shared with the initial term) that unifies pattern2. The optional narrowingopts is a comma-separated list of at least one of the options fold, vfold, and path. If {fold} or {vfold} are added at the beginning, a folding narrowing search is used instead, taking into account only axioms or both axioms and variant equations (see Section 15.6.3). If path is added, path information is stored to allow using the commands show path and show path states. 
+
+Possible values for searchtype are (but their meaning differ from that of the search command of Section 5.4.3)
+
+=>1
+one step proof
+
+=>+
+one or more steps proof
+
+=>*
+zero or more steps proof
+
+=>!
+only canonical final states, that cannot be further narrowed,
+
+are allowed as solutions
+
+The optional bound argument provides an upper bound in the number of solutions to be found; if it is omitted, infinity is assumed. 
+
+The optional depth argument indicates the maximum depth of the search. If it is omitted, infinity is assumed. It is also possible to give a depth bound without giving a bound on the number of solutions returned by requesting a search of the form vu-narrow [,m] .... 
+
+The search type =>1 is an abbreviation of the search type =>+ with the depth bound set to 1. 
+
+The optional variantopts is a comma-separated list of at least one of the options filter and delay for variant unification (see Section 15.6.1). 
+
+As usual, if the in clause is omitted, the current module is assumed. 
+
+For examples, see Section 15.6.
+
+fvu-narrow 
+{
+[ bound 
+{
+,depth
+}
+ ]
+}
+ 
+{
+in module :
+}
+ pattern1 searchtype pattern2 .
+
+Performs a breadth-first folding narrowing search. It is a synonym of {fold} vu-narrow.
+
+show frontier states .
+
+Displays the frontier (open leaves) of the narrowing-based reachability graph.
+
+show most general states .
+
+Outputs those states that have not been folded in the generated narrowing-based reachability graph.
+
+A.7 SMT commands
+
+check 
+{
+in module :
+}
+ term .
+
+Cause the connected SMT solver to be queried with the specified term, containing only constants and operator from the smt.maude signatures. If the in clause is omitted, the current module is assumed. 
+
+For examples and more details, see Section 16.
+
+A.8 Tracing commands
+
+Tracing produces detailed information about each rewrite performed and each conditional rewrite attempted. Since this typically results in an unmanageably huge volume of output, there are commands to control what is actually displayed.
+
+set trace on . / set trace off .
+
+These commands turn tracing on and off. If tracing is turned on, all trace information will be generated internally, even if none of it is displayed, thus considerably slowing the speed of interpretation.
+
+set trace body on . / set trace body off .
+
+Determines whether the “start of rewrite” line (i.e., the one beginning with *’s) and the body of the equation/rule/membership/strategy definition being used are printed; if turned off, just the label and the substitution are printed. By setting both body and rewrite to off (see previous command), these options reduce a trace to a list of labels much like that produced by the show path labels number command.
+
+set trace builtin on . / set trace builtin off .
+
+Determines whether trace information for built-in operator symbols is printed.
+
+set trace condition on . / set trace condition off .
+
+Determines whether the evaluations of conditions are traced.
+
+set trace eq on . / set trace eq off .
+
+Determines whether equation applications are printed.
+
+set trace mb on . / set trace mb off .
+
+Determines whether membership axiom applications are printed.
+
+set trace rewrite on . / set trace rewrite off .
+
+Determines whether the redex and its replacement are printed.
+
+set trace rl on . / set trace rl off .
+
+Determines whether rule applications are printed.
+
+set trace sd on . / set trace sd off .
+
+Determines whether strategy definition applications are printed.
+
+set trace select on . / set trace select off .
+
+Determines whether only trace information for selected operator symbols is printed (rather than all symbols). See the trace select/deselect symbols . command.
+
+set trace substitution on . / set trace substitution off .
+
+Determines whether the substitution is printed.
+
+set trace whole on . / set trace whole off .
+
+Determines whether the whole term is printed before and after a rewrite. Regarding strategy definitions, it determines whether the subject term is printed in each trace.
+
+trace exclude modules . / trace include modules .
+
+Controls which modules are traced. Examples:
+
+trace exclude META-LEVEL . 
+trace include MY-MOD1 MY-MOD2 .
+       
+
+trace select symbols . / trace deselect symbols .
+
+Selects/deselects operator symbols and labels from the current module for tracing with the select option. Examples:
+
+trace select foo bar baz . 
+trace deselect baz .
+       
+
+A.9 Print attribute commands
+
+In print attribute mode, when a statement is executed, the items in its print attribute are printed, with variables taking their value in the current substitution.
+
+set print attribute newline on . / set print attribute newline off .
+
+These commands determine whether a newline is printed following the items of a print attribute. By default a newline is printed (even if there are no items).
+
+set print attribute on . / set print attribute off .
+
+These commands turn print attribute mode on and off. It is off by default.
+
+Note that print attribute mode is like trace mode, break mode, and profile mode in that in this mode all execution takes the slow path. This is true even if no print attributes are encountered. 
+
+A.10 Print option commands
+
+set print color on . / set print color off .
+
+Controls if reduction status coloring is used. Default is off.
+
+set print combine vars on . / set print combine vars off .
+
+Controls whether whether each variable alias is printed on its own line or whether variable aliases with the same sort are combined in a single declaration. Default is off.
+
+set print conceal on . / set print conceal off .
+
+Controls if argument hiding is used. If on, the hiding will happen both in terms in statements and in terms resulting from the execution of some command. It affects both to the terminal and to the LaTeX log if being generated. Default is off. See the print conceal/reveal symbols . command.
+
+print conceal symbols . / print reveal symbols .
+
+Controls which operators have their arguments hidden.
+
+set print constants with sorts on . / set print constants with sorts off .
+
+Controls whether constants 
+c
+ of sort 
+s
+ are printed as (
+c
+).
+s
+ even if desambiguation is not strictly needed. With on, all constants are qualified, even if not strictly necessary; with off, only constants that require disambiguation are qualified. Default is off.
+
+set print flattened on . / set print flattened off .
+
+Controls whether arguments under operators with the associative attribute are printed in flattened form or not. Default is on.
+
+set print format on . / set print format off .
+
+Controls if format attributes are obeyed. Default is on.
+
+set print graph on . / set print graph off .
+
+If on, terms that are internally represented by graphs (currently, result terms together with terms being reduced and terms in substitutions during tracing) are printed as graph representations rather than as terms, together with the number of operator symbols in the full term. This can be useful in some pathological cases where the size of the term is exponential on the size of the graph. Default is off.
+
+set print hooks on . / set print hooks off .
+
+Controls whether the contents of the special attribute in Section 4.4.10 are printed or replaced by an ellipsis (special (...)). Default is on.
+
+set print label attribute on . / set print label attribute off .
+
+Controls whether statement labels are printed as statement attributes (like eq a = b [label aMap] .) or as old style prefixes (eq [aMap] : a = b .). Default is off.
+
+set print latex on . / set print latex off .
+
+Controls whether latex attributes are used for generating LaTeX for terms. Default is on.
+
+set print mixfix on . / set print mixfix off .
+
+Controls whether operators with mixfix syntax are printed in either mixfix or prefix form. User-defined syntax is supported for pretty-printing, even though it is not currently supported for parsing. It is sometimes advantageous to have uniform prefix notation for output; for example, if the output is going to be postprocessed by some other tool. Default is on.
+
+set print number on . / set print number off .
+
+Controls if special output convention for natural numbers is used. Default is on.
+
+set print rational on . / set print rational off .
+
+Controls if special output convention for rational numbers is used. Default is on.
+
+set print with aliases on . / set print with aliases off .
+
+Controls if variables aliases are used. Default is on.
+
+set print with parentheses on . / set print with parentheses off .
+
+If on, mixfix terms are printed with additional parentheses to make grouping explicit. Default is off.
+
+A.11 Show option commands
+
+set show advisories on . / set show advisories off .
+
+Determines whether advisories are displayed. Default is on.
+
+set show breakdown on . / set show breakdown off .
+
+Determines whether a breakdown of rewrites is displayed. Default is off.
+
+set show command on . / set show command off .
+
+Determines whether the full form of certain commands is printed before they are executed. Default is on.
+
+set show gc on . / set show gc off .
+
+Determines whether information on garbage collection is given. This is intended to assist in profiling long running examples. Default is off.
+
+set show loop stats on . / set show loop stats off .
+
+As above but for loop mode.
+
+set show loop timing on . / set show loop timing off .
+
+As above but for loop mode.
+
+set show resources on . / set show resources off .
+
+Determines whether a summary of the resources used by the Maude process is shown at a normal exit, and at every garbage collect if set show gc on is set. Default is off.
+
+set show stats on . / set show stats off .
+
+Determines whether the number of rewrites is printed with the results of the reduce, rewrite, and continue commands in Appendix A.2. Default is on.
+
+set show timing on . / set show timing off .
+
+Determines whether the cpu and real time used during rewriting is printed with the results of the reduce, rewrite, and continue commands in Appendix A.2. Default is on.
+
+A.12 Show commands
+
+show all 
+{
+module
+}
+ .
+
+Prints out a flattened representation of the given module (or of the current module if none is given).
+
+show components 
+{
+module
+}
+ .
+
+Lists the connected components (kinds) of the poset of sorts for the given module (or for the current module if none is given).
+
+show desugared 
+{
+module
+}
+ .
+
+Prints out a desugared representation of the given module (or of the current module if none is given). Like the show all commands, these show the module after analysis with syntactic sugar removed (i.e., object-oriented syntax is removed), and statements that fail mixfix parsing are also removed. Like the show module commands, the imports are shown explicitly rather than showing a flat module.
+
+show eqs 
+{
+module
+}
+ .
+
+Lists the equations in the given module (or in the current module if none is given).
+
+show mbs 
+{
+module
+}
+ .
+
+Lists the membership axioms in the given module (or in the current module if none is given).
+
+show module 
+{
+module
+}
+ .
+
+Prints out a representation of the given module (or of the current module if none is given). The representation of the module shown with this command corresponds to the one given by the user, before any internal processing. For example, an object oriented module will be shown using the object-oriented syntax, not the result of transforming it into a system module as the show desugared and show all commands.
+
+show modules .
+
+Lists the names of all the modules that are currently in the module database maintained by the system.
+
+show ops 
+{
+module
+}
+ .
+
+Lists the operators in the given module (or in the current module if none is given).
+
+show processed view 
+{
+view
+}
+ .
+
+Prints out the processed representation of the given view (or of the last view entered into the system if none is given). It is analogous to show desugared but for views instead of modules.
+
+show rls 
+{
+module
+}
+ .
+
+Lists the rules in the given module (or in the current module if none is given).
+
+show sds 
+{
+module
+}
+ .
+
+Lists the strategy definitions in the given module (or in the current module if none is given).
+
+show sorts 
+{
+module
+}
+ .
+
+Prints out a representation of the sort and subsort information for the given module (or for the current module if none is given).
+
+show strats 
+{
+module
+}
+ .
+
+Lists the strategies in the given module (or in the current module if none is given).
+
+show summary 
+{
+module
+}
+ .
+
+Shows a summary of statistics for the context free grammar and term rewriting system generated for the given module (or for the current module if none is given).
+
+show vars 
+{
+module
+}
+ .
+
+Lists the variables in the given module (or in the current module if none is given).
+
+show view 
+{
+view
+}
+ .
+
+Prints out the given view (or of the last view entered into the system if none is given).
+
+show views .
+
+Lists the names of all the views that are currently in the view database maintained by the system.
+
+A.13 Profiler commands
+
+set clear profile on . / set clear profile off .
+
+Controls whether profile is clear before each command. Default is on.
+
+set profile on . / set profile off .
+
+Turns profiling on and off. Default is off.
+
+show profile 
+{
+module
+}
+ .
+
+Shows current profile for the given module (or in the current module if none is given). It shows both percentages and absolute rewrite counts.
+
+A.14 Debugger commands
+
+set break on . / set break off .
+
+Controls whether break points are obeyed. See the break select/deselect symbols . command.
+
+break select symbols . / break deselect symbols .
+
+Selects/deselects operator symbols and labels from the current module for break points with the select option. Examples: 
+
+break select foo bar baz . 
+break deselect baz .
+       
+
+abort .
+
+ Only usable from the debugger. Exits the debugger and abandons the current rewriting activity.
+
+resume .
+
+ Only usable from the debugger. Exits the debugger and resumes the current rewriting activity.
+
+step .
+
+ Only usable from the debugger. Performs a single step of the current rewriting activity with tracing switched on.
+
+where .
+
+ Only usable from the debugger. Prints the stack of pending rewrite tasks together with explanations of how they arose.
+
+Moreover, any command that involves the execution of rewriting or narrowing steps can be prefixed by the debug word to drop into the debugger before the first step takes place. These commands are reduce, rewrite, frewrite, erewrite, continue (in Section A.2), search (in Section A.4), srewrite, dsrewrite (in Section A.5), variant unify, variant match, get variants, vu-narrow and fvu-narrow (in Section A.6). 
+
+A.15 Miscellaneous commands
+
+do clear memo 
+{
+ module 
+}
+ .
+
+Clear the memoization tables of the given module (or of the current module if none is given).
+
+parse 
+{
+in module :
+}
+ term .
+
+Causes the specified term to be parsed using the signature of the given module. If the in clause is omitted, the current module is assumed.
+
+select module .
+
+Selects a named module to be the current module. All commands that require a module refer to the current module, unless a module is explicitly given. The current module is usually the last module entered or used; for example, after the command show module AMODULE, the AMODULE module becomes the current module.
+
+set clear memo on . / set clear memo off .
+
+Controls whether the memoization tables are cleared before each command.
+
+set clear module caches on . / set clear module caches off .
+
+Controls whether things such as meta-module and meta-op caches are cleared when a module loses focus. Default is on.
+
+set extend module on . / set extend module off .
+
+Adds or removes the named module from the set of modules that are automatically imported in extending mode in every module.
+
+set generate-by module on . / set generate-by module off .
+
+Adds or removes the named module from the set of modules that are automatically imported in generated-by mode in every module.
+
+set include module on . / set include module off .
+
+Adds or removes the named module from the set of modules that are automatically imported in including mode in every module.
+
+set oo include module on . / set oo include module off .
+
+Adds or removes the named module from the set of modules that are automatically imported in including mode in object-oriented modules.
+
+set protect module on . / set protect module off .
+
+Adds or removes the named module from the set of modules that are automatically imported in protecting mode in every module.
+
+set verbose on . / set verbose off .
+
+Controls display of extra information, depending on command. Default is off.
+
+A.16 System level commands
+
+These commands control system level activities. Unlike all the above commands they are not followed by a period.
+
+cd directory-name
+
+Changes the working directory to directory-name.
+
+eof
+
+Causes the interpreter to respond as if it had reached the end of file.
+
+in file-name
+
+Causes a specified file to be included at this point. For files specified by a bare file name, it checks (with .maude, .fm, .obj extensions) if the filename is in one of these locations: (a) the current directory; (b) the directories in the MAUDE_LIB environment variable, and (c) the directory containing the executable. Otherwise, the full file name must be given, together with a full path name if the file is not in the current working directory. The in command may be nested, i.e., the included file may contain in commands. Example: 
+
+in ../Examples/foo.maude
+       
+
+Notice that compilation of operator declarations and statements is done lazily, so that the module is not necessarily fully compiled when included. This implies that some warnings and advisories will only show up when a reduction actually takes place in the module. This also holds for a module that is entered by writing it in the prompt instead of a file.
+
+load file-name
+
+Performs the same job as in but does not produce detailed output as modules are entered. Example: 
+
+load ../Examples/foo.maude
+       
+
+ls 
+{
+flags
+}
+ 
+{
+directories
+}
+
+Runs the UNIX ls command to list the files in the specified directories or working directory if none specified. The allowable flags depend on your local implementation of ls. Example: 
+
+ls -lF /usr/bin/usr/local
+       
+
+ll
+
+Runs the common UNIX abbreviation ll (for ls -l).
+
+popd
+
+Changes the working directory to that which is on the top of the directory stack and pops the directory stack.
+
+pushd directory-name
+
+Saves the current working directory on a stack and then changes the working directory to directory-name.
+
+pwd
+
+Prints the path of the working directory.
+
+quit
+
+Causes the interpreter to exit.
+
+sload file-name
+
+Performs the same job as load but loads the named file only if it has changed (determined by the file system’s modify time) since it was last read (via in, load, sload or command line argument).1 Example: 
+
+sload ../Examples/foo.maude
+       
+
+            
+
+[prev] [prev-tail] [front] [up]
+
