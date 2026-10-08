@@ -21,6 +21,16 @@ test: ## Test the code with pytest
 	@echo "🚀 Testing code: Running pytest"
 	@uv run python -m pytest --cov --cov-config=pyproject.toml --cov-report=xml
 
+.PHONY: test-unit
+test-unit: ## Run the unit tests only (fast; no Maude interpreter)
+	@echo "🚀 Testing code: Running unit tests"
+	@uv run python -m pytest tests/unit
+
+.PHONY: test-integration
+test-integration: ## Run the integration tests only (spawns the real Maude interpreter; slower)
+	@echo "🚀 Testing code: Running integration tests"
+	@uv run python -m pytest tests/integration
+
 
 .PHONY: run
 run: ## Run the server

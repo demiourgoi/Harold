@@ -38,22 +38,6 @@ def executor() -> Iterator[MaudeExecutor]:
         executor.shutdown()
 
 
-@pytest.fixture(scope="module")
-def heuristic_executor() -> Iterator[MaudeExecutor]:
-    """A dedicated worker for the fixtures the heuristic provider is asserted on.
-
-    Loading `no_new_module.maude` leaves a deferred `q .` syntax error in the Maude
-    bindings, which is flushed (and attributed to that file) during the *next* load.
-    These tests therefore do not share the worker that loads it.
-    """
-    executor = MaudeExecutor(settings=Settings(maude_workers=1))
-    executor.start()
-    try:
-        yield executor
-    finally:
-        executor.shutdown()
-
-
 def _diagnose(executor: MaudeExecutor, fixture_name: str) -> MaudeProgramDiagnosticsResult:
     return maude_program_diagnostics(str(FIXTURES_DIR / fixture_name), maude_executor=executor)
 
@@ -197,27 +181,25 @@ def test_dependency_warnings_are_attributed_to_the_dependency(executor: MaudeExe
 
 
 # Fixtures whose interpreter load must be silent (checked by the parallel test below).
-INTERPRETER_CLEAN_FIXTURES = frozenset(
-    {
-        "capitalized_identifiers_ok.maude",
-        "declarations_when_dash.maude",
-        "dep_clean.maude",
-        "dep_q.maude",
-        "elt_sort_declaration.maude",
-        "hello.maude",
-        "hello2.maude",
-        "loads_dependency.maude",
-        "loads_dependency_q.maude",
-        "no_new_module.maude",
-        "non_linear_pattern.maude",
-        "nonascii_apostrophe.maude",
-        "q_with_trailing_text.maude",
-        "quit_command.maude",
-        "quoted_id_when_dash.maude",
-        "redeclare_prelude.maude",
-        "string_with_specials.maude",
-    }
-)
+INTERPRETER_CLEAN_FIXTURES = frozenset({
+    "capitalized_identifiers_ok.maude",
+    "declarations_when_dash.maude",
+    "dep_clean.maude",
+    "dep_q.maude",
+    "elt_sort_declaration.maude",
+    "hello.maude",
+    "hello2.maude",
+    "loads_dependency.maude",
+    "loads_dependency_q.maude",
+    "no_new_module.maude",
+    "non_linear_pattern.maude",
+    "nonascii_apostrophe.maude",
+    "q_with_trailing_text.maude",
+    "quit_command.maude",
+    "quoted_id_when_dash.maude",
+    "redeclare_prelude.maude",
+    "string_with_specials.maude",
+})
 
 
 def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
@@ -259,9 +241,9 @@ def test_program_without_modules(executor: MaudeExecutor) -> None:
     assert result.diagnostics == []
 
 
-def test_non_ascii_apostrophe_reports_info_with_a_fix(heuristic_executor: MaudeExecutor) -> None:
+def test_non_ascii_apostrophe_reports_info_with_a_fix(executor: MaudeExecutor) -> None:
     """Rule 1 positive: the interpreter is silent, the heuristic fixes a typographic paste."""
-    result = _diagnose(heuristic_executor, "nonascii_apostrophe.maude")
+    result = _diagnose(executor, "nonascii_apostrophe.maude")
 
     assert result.success is True  # info-only results succeed (LP8)
     assert result.summary.info == 1
@@ -282,9 +264,9 @@ def test_non_ascii_apostrophe_reports_info_with_a_fix(heuristic_executor: MaudeE
     assert edit.new_text == "'"  # applying it turns the file into ASCII
 
 
-def test_string_with_specials_is_clean(heuristic_executor: MaudeExecutor) -> None:
+def test_string_with_specials_is_clean(executor: MaudeExecutor) -> None:
     """Rules 1-4 must not fire inside a string literal (`when`, `--`, `=` and `café` are literal text)."""
-    result = _diagnose(heuristic_executor, "string_with_specials.maude")
+    result = _diagnose(executor, "string_with_specials.maude")
 
     assert result.success is True
     assert result.diagnostics == []
@@ -304,9 +286,9 @@ def _span(diagnostic: MaudeDiagnostic) -> tuple[int, int | None, int | None]:
     return (diagnostic.range.start.line, diagnostic.range.start.column, end.column if end is not None else None)
 
 
-def test_when_guard_is_reported_alongside_the_interpreter_warnings(heuristic_executor: MaudeExecutor) -> None:
+def test_when_guard_is_reported_alongside_the_interpreter_warnings(executor: MaudeExecutor) -> None:
     """Rule 2 positive: the Haskell/SML guard the interpreter reports as `bad token when`."""
-    result = _diagnose(heuristic_executor, "when_guard.maude")
+    result = _diagnose(executor, "when_guard.maude")
 
     assert result.success is False
     heuristic = _heuristic_diagnostics(result)
@@ -316,13 +298,13 @@ def test_when_guard_is_reported_alongside_the_interpreter_warnings(heuristic_exe
     assert _interpreter_diagnostics(result)  # Maude reports the same line as a bad token
 
 
-def test_dash_comment_is_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_dash_comment_is_reported(executor: MaudeExecutor) -> None:
     """Rule 3 positive: `--` is not a comment delimiter in Maude.
 
     The fixture also redeclares the prelude's `NeList{X}`/`List{X}` sorts, so it carries
     `prelude-sort-redeclared` findings too — hence the per-code assertions.
     """
-    result = _diagnose(heuristic_executor, "dash_comment.maude")
+    result = _diagnose(executor, "dash_comment.maude")
 
     assert result.success is False
     dash_comments = [diagnostic for diagnostic in _heuristic_diagnostics(result) if diagnostic.code == "dash-comment"]
@@ -331,9 +313,9 @@ def test_dash_comment_is_reported(heuristic_executor: MaudeExecutor) -> None:
     assert _interpreter_diagnostics(result)
 
 
-def test_eq_in_if_term_is_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_eq_in_if_term_is_reported(executor: MaudeExecutor) -> None:
     """Rule 4 positive: a single `=` inside `if … then` is a real parse error."""
-    result = _diagnose(heuristic_executor, "eq_in_if.maude")
+    result = _diagnose(executor, "eq_in_if.maude")
 
     assert result.success is False
     heuristic = _heuristic_diagnostics(result)
@@ -342,25 +324,25 @@ def test_eq_in_if_term_is_reported(heuristic_executor: MaudeExecutor) -> None:
     assert _interpreter_diagnostics(result)
 
 
-def test_quoted_identifiers_are_not_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_quoted_identifiers_are_not_reported(executor: MaudeExecutor) -> None:
     """Rules 2-3 negative: `'when` and `'--` are valid quoted identifiers."""
-    result = _diagnose(heuristic_executor, "quoted_id_when_dash.maude")
+    result = _diagnose(executor, "quoted_id_when_dash.maude")
 
     assert result.success is True
     assert result.diagnostics == []
 
 
-def test_declaration_lines_are_not_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_declaration_lines_are_not_reported(executor: MaudeExecutor) -> None:
     """Rules 2-3 negative: `op when`/`op _--_` are legal declarations (probes D and E)."""
-    result = _diagnose(heuristic_executor, "declarations_when_dash.maude")
+    result = _diagnose(executor, "declarations_when_dash.maude")
 
     assert result.success is True
     assert result.diagnostics == []
 
 
-def test_non_linear_pattern_is_reported_while_the_interpreter_is_silent(heuristic_executor: MaudeExecutor) -> None:
+def test_non_linear_pattern_is_reported_while_the_interpreter_is_silent(executor: MaudeExecutor) -> None:
     """Rule 5 positive: the heuristic finds a problem Maude accepts (free-tuples.maude)."""
-    result = _diagnose(heuristic_executor, "non_linear_pattern.maude")
+    result = _diagnose(executor, "non_linear_pattern.maude")
 
     assert result.success is False  # the heuristic warning alone makes the result fail
     assert _interpreter_diagnostics(result) == []
@@ -371,9 +353,9 @@ def test_non_linear_pattern_is_reported_while_the_interpreter_is_silent(heuristi
     assert "`B-ignore` appears 2 times" in heuristic[0].message
 
 
-def test_undeclared_identifier_is_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_undeclared_identifier_is_reported(executor: MaudeExecutor) -> None:
     """Rule 6 positive: `Foo` is neither a declared variable, operator nor sort."""
-    result = _diagnose(heuristic_executor, "undeclared_identifier.maude")
+    result = _diagnose(executor, "undeclared_identifier.maude")
 
     assert result.success is False
     heuristic = _heuristic_diagnostics(result)
@@ -382,17 +364,17 @@ def test_undeclared_identifier_is_reported(heuristic_executor: MaudeExecutor) ->
     assert _interpreter_diagnostics(result)
 
 
-def test_capitalized_labels_operators_and_annotations_are_not_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_capitalized_labels_operators_and_annotations_are_not_reported(executor: MaudeExecutor) -> None:
     """Rule 6 negative: a label, a capitalized operator and `X:List{Nat}` are all legal."""
-    result = _diagnose(heuristic_executor, "capitalized_identifiers_ok.maude")
+    result = _diagnose(executor, "capitalized_identifiers_ok.maude")
 
     assert result.success is True
     assert result.diagnostics == []
 
 
-def test_redeclared_prelude_sort_is_reported_as_info(heuristic_executor: MaudeExecutor) -> None:
+def test_redeclared_prelude_sort_is_reported_as_info(executor: MaudeExecutor) -> None:
     """Rule 7 positive: `sort Qid .` shadows a prelude sort; the load itself is fine."""
-    result = _diagnose(heuristic_executor, "redeclare_prelude.maude")
+    result = _diagnose(executor, "redeclare_prelude.maude")
 
     assert result.success is True  # info-only findings do not fail the result (LP8)
     assert result.summary.info == 1
@@ -407,9 +389,9 @@ def test_redeclared_prelude_sort_is_reported_as_info(heuristic_executor: MaudeEx
     assert diagnostic.fix is None
 
 
-def test_elt_sort_declaration_is_not_reported(heuristic_executor: MaudeExecutor) -> None:
+def test_elt_sort_declaration_is_not_reported(executor: MaudeExecutor) -> None:
     """Rule 7 negative: theory interface sorts are excluded from the snapshot (review D6)."""
-    result = _diagnose(heuristic_executor, "elt_sort_declaration.maude")
+    result = _diagnose(executor, "elt_sort_declaration.maude")
 
     assert result.success is True
     assert result.diagnostics == []
@@ -428,17 +410,6 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
     assert all(d.source == "interpreter" for d in result.diagnostics)
     # The lossy decode's U+FFFD never becomes a rule-1 finding.
     assert not [d for d in result.diagnostics if d.code == "non-ascii-character"]
-
-
-def test_tool_with_parallel_workers() -> None:
-    parallel = MaudeExecutor(settings=Settings(maude_workers=2))
-    parallel.start()
-    try:
-        result = _diagnose(parallel, "broken-recoverable.maude")
-        assert result.success is False
-        assert result.summary.warning == 1
-    finally:
-        parallel.shutdown()
 
 
 def test_tool_reports_crash_and_recovers() -> None:

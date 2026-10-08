@@ -63,9 +63,11 @@ class MaudeExecutor(Logging):
     """Client for the Maude worker process pool, with crash/timeout recovery.
 
     Wraps a `ProcessPoolExecutor` (spawn context, `initializer=worker.init_maude`)
-    with `max_workers` from `Settings`. `max_workers=1` serializes calls through
-    the single worker; each `submit` returns its own `Future`, so concurrent
-    callers can never receive each other's results.
+    with `max_workers` from `Settings`. Each task runs in a **fresh process**
+    (`max_tasks_per_child=1`), so nothing survives across tasks: the interpreter is
+    fresh per call and parser state (for example residue left by a top-level `q .`
+    in a loaded file) can never leak into a later call. `max_workers` only bounds
+    how many fresh interpreters may run concurrently.
 
     The pool is replaced when a worker dies (`BrokenProcessPool`) or a call
     times out; the failed call itself is never retried (diagnostics is
@@ -104,6 +106,9 @@ class MaudeExecutor(Logging):
             max_workers=self._settings.maude_workers,
             mp_context=multiprocessing.get_context("spawn"),
             initializer=worker.init_maude,
+            # One task per process: every call gets a fresh interpreter, so parser
+            # state cannot leak from one diagnosed file into the next.
+            max_tasks_per_child=1,
         )
 
     def _reset_executor(
@@ -136,7 +141,8 @@ class MaudeExecutor(Logging):
         Submits one `worker.ping` per worker (forcing spawn + `init_maude` in
         each) and awaits them with the configured timeout. Raises
         `MaudeInitError` on failure, discarding the failed pool so a later call
-        can retry lazily.
+        can retry lazily. With one task per process the pings are recycled right
+        away: this is a fail-fast initialization check, not a warm-up.
         """
         self._reset_executor()
         with self._executor_lock:

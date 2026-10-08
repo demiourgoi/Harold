@@ -79,6 +79,19 @@ def sleep(seconds: float) -> int:
     return os.getpid()
 
 
+def sleep_witness(seconds: float) -> tuple[int, float, float]:
+    """Test support: sleep and report the worker's pid plus its monotonic interval.
+
+    `time.monotonic()` is system-wide (CLOCK_MONOTONIC on Linux), so callers can
+    assert that two tasks' intervals overlap — proving the pool ran them
+    concurrently — without relying on wall-clock budgets (each task now pays
+    spawn + init in its own process, see `max_tasks_per_child=1`).
+    """
+    start = time.monotonic()
+    time.sleep(seconds)
+    return os.getpid(), start, time.monotonic()
+
+
 _WARNING_RE = re.compile(r"Warning:\s+\S[^:]*,\s+line\s+(\d+)\s*(?:\([^)]*\))?:\s*(.*)")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 

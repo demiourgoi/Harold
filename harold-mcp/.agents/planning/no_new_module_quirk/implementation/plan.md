@@ -2,8 +2,8 @@
 
 Checklist (tick as each step lands):
 
-- [ ] Step 1: fixtures + failing regression tests (red)
-- [ ] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
+- [x] Step 1: fixtures + failing regression tests (red)
+- [x] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
 - [ ] Step 3: `HAROLD_MAUDE_WORKERS` default change
 - [ ] Step 4: dependency-warning misattribution fix (worker + provider)
 - [ ] Step 5: path absolutization in `SourceFile.from_path`
@@ -96,6 +96,47 @@ Objective: apply option A and remove the workaround.
    workaround-free heuristic tests are **green**; `test_dependency_warnings_are_attributed_to_the_dependency` stays red (fixed in Step 4).
 
 Demo: `make test` — integration suite green except the one dependency-attribution test; `scratch_race.py`-equivalent test passes with 2 workers.
+
+### Implementation notes (Step 2)
+
+Done as planned for the isolation fix and the workaround removal, with two deviations:
+
+- **`max_tasks_per_child=1` and docstrings**: `_default_executor` now recycles the
+  worker after every task; the class and `start()` docstrings state that calls are
+  hermetic (fresh interpreter per call) and that the warm-up pings are a fail-fast
+  check rather than a warm-up. `heuristic_executor` is gone; all heuristic tests share
+  `executor`.
+- **Deviation — two-workers test uses interval witnesses, not a wall-clock budget.**
+  The planned "measure the init cost, assert `elapsed < init_cost + 1.5`" is unsound
+  with recycling: the pool eagerly keeps pre-initialized replacement processes, so a
+  measured init cost is not what a task actually pays (it can measure ≈0, making the
+  budget too tight for the two sleep tasks). Instead, `worker.sleep_witness(seconds)`
+  (new test-support helper next to `sleep`) returns the pid plus the task's monotonic
+  start/end; the test asserts two distinct pids and that the two intervals overlap
+  (`max(starts) < min(ends)`). Deterministic, and independent of spawn+init jitter.
+- **Deviation (per user request during verification) — suite trim + Makefile targets.**
+  No integration test was converted to a unit test; only coverage overlaps *between
+  integration tests* were removed:
+  - `tests/integration/test_maude_executor_integration.py` shrank to its unique
+    coverage (real concurrent execution across workers). Removed: the four fixture
+    round-trips (the same fixtures are asserted with exact raw shapes at the worker
+    level in `test_maude_worker_integration.py` and end to end at the tool level) and
+    the crash test (duplicated verbatim by `test_tool_reports_crash_and_recovers`,
+    which additionally asserts the chained error vocabulary). The module docstring
+    points at where the coverage lives.
+  - Removed `test_tool_with_parallel_workers`: the race test exercises concurrent tool
+    calls on a 2-worker pool with per-file result routing, and `test_recoverable_program`
+    asserts the same fixture's result.
+  - `Makefile`: new `test-unit` (fast, no Maude interpreter) and `test-integration`
+    targets for quick iteration; `make test` keeps the full coverage flags.
+
+Verification: the user's manual full-suite run before the trim was `1 failed, 213
+passed in 76.28s` — the single failure is the Step-4 red
+(`test_dependency_warnings_are_attributed_to_the_dependency`, `1 != 2` warnings), so
+Step 2's goal is met (all four isolation tests, the race test and the pre-existing
+suite are green). After the trim: `make test-unit` 172 passed (1.6 s), the reworked
+two-workers test passed (6.5 s), and the tool file collects 27 tests. A full-suite
+re-verification happens at Step 8.
 
 ## Step 3: `HAROLD_MAUDE_WORKERS` default change
 
