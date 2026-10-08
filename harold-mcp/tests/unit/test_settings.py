@@ -1,5 +1,7 @@
 """Unit tests for the application configuration (`HAROLD_*` env vars)."""
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,8 +17,16 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_defaults() -> None:
     resolved = Settings()
-    assert resolved.maude_workers == 1
+    assert resolved.maude_workers == max(1, min(3, (os.cpu_count() or 0) // 2))
     assert resolved.maude_worker_timeout_secs == 60
+
+
+def test_workers_default_scales_with_cpu_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Half the logical CPUs, capped at 3, floored at 1 (`cpu_count` can be None)."""
+    cases: list[tuple[int | None, int]] = [(12, 3), (8, 3), (4, 2), (2, 1), (1, 1), (None, 1)]
+    for cpus, expected in cases:
+        monkeypatch.setattr(os, "cpu_count", lambda cpus=cpus: cpus)
+        assert Settings().maude_workers == expected, f"cpu_count={cpus}"
 
 
 def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

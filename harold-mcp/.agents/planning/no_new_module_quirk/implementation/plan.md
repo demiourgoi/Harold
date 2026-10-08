@@ -4,7 +4,7 @@ Checklist (tick as each step lands):
 
 - [x] Step 1: fixtures + failing regression tests (red)
 - [x] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
-- [ ] Step 3: `HAROLD_MAUDE_WORKERS` default change
+- [x] Step 3: `HAROLD_MAUDE_WORKERS` default change
 - [ ] Step 4: dependency-warning misattribution fix (worker + provider)
 - [ ] Step 5: path absolutization in `SourceFile.from_path`
 - [ ] Step 6: tool description + README + CHANGELOG
@@ -150,6 +150,24 @@ Objective: the new default formula.
    monkeypatched `os.cpu_count` matrix (12 → 3, 4 → 2, 2 → 1, `None` → 1).
 
 Demo: `pytest tests/unit/test_settings.py` green; `HAROLD_MAUDE_WORKERS` still overrides (existing tests unchanged).
+
+### Implementation notes (Step 3)
+
+Done exactly as planned, no deviations:
+
+- `src/harold_mcp/settings.py`: `_default_maude_workers()` returns
+  `max(1, min(3, (os.cpu_count() or 0) // 2))`; `maude_workers` uses
+  `Field(default_factory=..., gt=0)` (env override and validation unchanged); class
+  docstring notes the formula and that the cap bounds concurrent per-call interpreters
+  (≈100 MB each), not warm workers.
+- `tests/unit/test_settings.py`: `test_defaults` now asserts the formula against the
+  live `os.cpu_count()` (env-independence), and the new
+  `test_workers_default_scales_with_cpu_count` pins the matrix via a monkeypatched
+  `os.cpu_count`: 12→3, 8→3, 4→2, 2→1, 1→1, `None`→1.
+
+Verification: `make test-unit` 173 passed (1.9 s); `make check` fully green (ruff,
+lockfile, mypy, basedpyright, deptry). README/CHANGELOG references to the old default
+are updated in Step 6.
 
 ## Step 4: dependency-warning misattribution fix (worker + provider)
 
