@@ -11,7 +11,7 @@ record originally recommended: later research showed the residue is *executable
 commands* from the interrupted file, which a flush would run (defining modules, running
 reductions) rather than discard, and it also leaves relative-path resolution pinned to
 the previous file's directory. The executed plan — steps, red-green tests, tool
-semantics, and the ready-to-send maude-bindings issue proposal — lives in
+semantics, and the maude-bindings issue proposal (filed upstream) — lives in
 [`implementation/plan.md`](implementation/plan.md); the extended findings are in
 [`research/quirk-inventory.md`](research/quirk-inventory.md). The
 `heuristic_executor` workaround in the integration tests was removed, as this document
@@ -349,7 +349,7 @@ All scripts run from the `harold-mcp` root with the project environment, e.g.
 | `scratch_fixture_dump.py`, `scratch_files.py`, `scratch_dep_raw.py`, `scratch_dep_raw2.py` | Parsed/raw captures used to write the red tests precisely. |
 | `repro_minimal.py` + `repro/` | Standalone issue reproduction with the real `.maude` inputs: `q .`/`quit .` contaminate the next load, `eof` does not. |
 | `scratch_issue_snippet.py` | Runs the issue's inline snippet verbatim to confirm its stated output. |
-| `maude-bindings-issue.md` | Ready-to-send GitHub issue proposal for the maude-bindings repository. |
+| `maude-bindings-issue.md` | The GitHub issue for the maude-bindings repository (filed upstream). |
 
 ## References
 
@@ -372,5 +372,5 @@ All scripts run from the `harold-mcp` root with the project environment, e.g.
   (steps, red-green tests, measurements, and the tool/CLI semantics changes),
   [`design/detailed-design.md`](design/detailed-design.md), and
   [`research/`](research/) in this directory.
-- Ready-to-send maude-bindings issue: [`maude-bindings-issue.md`](maude-bindings-issue.md)
+- Maude-bindings issue (filed upstream): [`maude-bindings-issue.md`](maude-bindings-issue.md)
   with [`repro_minimal.py`](repro_minimal.py) + [`repro/`](repro/).

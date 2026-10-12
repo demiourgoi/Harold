@@ -1,6 +1,6 @@
 # GitHub issue proposal — maude-bindings
 
-Status: **draft, ready to send** (no code changes required in Harold to file it).
+Status: **filed upstream** (no code changes were required in Harold to file it).
 Target repository: <https://github.com/fadoss/maude-bindings>.
 The minimal reproduction lives next to this file: [`repro_minimal.py`](./repro_minimal.py)
 (run it with the bindings installed; no other dependency).

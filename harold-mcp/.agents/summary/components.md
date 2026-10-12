@@ -353,8 +353,8 @@ replacing it (findings are heuristics and may be false positives).
   (implemented): `rough-idea.md`, `idea-honing.md`, `research/` (quirk inventory, race
   reproduction, dependencies, misattribution, isolation cost), `design/detailed-design.md`
   (option A: `max_tasks_per_child=1`), `implementation/plan.md` (8 steps, checklist
-  ticked, deviations recorded), `summary.md`, and the ready-to-send
-  `maude-bindings-issue.md` with its standalone `repro_minimal.py` + `repro/` `.maude`
+  ticked, deviations recorded), `summary.md`, and the `maude-bindings-issue.md` bug
+  report (filed upstream) with its standalone `repro_minimal.py` + `repro/` `.maude`
   inputs.
 - `sigsegv-under-load/` — SIGSEGV history that motivated the worker architecture:
   `issue.md` (the `maude` Python bindings) and `scala-issue.md` (root-cause analysis of

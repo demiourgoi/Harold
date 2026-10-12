@@ -216,13 +216,13 @@ def maude_program_diagnostics(
       Maude recovers from, and `"error"` for the single whole-file error synthesized when
       the file cannot be loaded at all. `range.start.line` is the 1-based line Maude
       reports; `column` is `null`, because Maude reports no columns.
-          - Each call is hermetic: the file is loaded into a fresh Maude interpreter process, and
-        no state (loaded modules, parser state) carries over from previous calls.
-          - The interpreter checks the whole load: the file plus anything it pulls in with
-        `load`/`in` commands. Problems Maude attributes to the file itself are reported at
-        their line; problems found in a dependency are reported as whole-file diagnostics
-        (`range` is `null`) whose message names the dependency file and points at this tool,
-        so the dependency can be diagnosed on its own.
+      - Each call is hermetic: the file is loaded into a fresh Maude interpreter process,
+        and no state (loaded modules, parser state) carries over from previous calls.
+      - The interpreter checks the whole load: the file plus anything it pulls in with
+        `load`/`in` commands. Problems Maude attributes to the file itself are reported
+        at their line; problems found in a dependency are reported as whole-file
+        diagnostics (`range` is `null`) whose message names the dependency file and
+        points at this tool, so the dependency can be diagnosed on its own.
     - `"heuristic-linter"`: pattern-based checks for common mistakes, with `code` naming
       the rule (`non-ascii-character`, `when-guard`, `dash-comment`, `eq-in-term`,
       `non-linear-pattern`, `undeclared-identifier`, `prelude-sort-redeclared`). They are

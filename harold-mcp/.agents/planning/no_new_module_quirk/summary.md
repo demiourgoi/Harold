@@ -27,7 +27,7 @@ implementation plan are ready for execution.
 - [`implementation/plan.md`](./implementation/plan.md) — the 8-step TDD plan with its checklist and
   per-step implementation notes (including the deviations that were flagged along the way).
 - [`maude-bindings-issue.md`](./maude-bindings-issue.md) + [`repro_minimal.py`](./repro_minimal.py) +
-  [`repro/`](./repro/) — the ready-to-send GitHub issue proposal for the bindings, with the
+  [`repro/`](./repro/) — the GitHub issue for the bindings (filed upstream), with the
   standalone reproduction and its real `.maude` inputs.
 - [`summary.md`](./summary.md) — this file.
 - Scratch scripts in this directory (`scratch_*.py`) — the experiments behind the research notes.
@@ -53,12 +53,13 @@ hermetic per-call interpreters (`max_tasks_per_child=1`), the new
 absolutization, honest dependency-warning attribution with a run-diagnostics
 suggestion, the reworked integration suite (isolation/race/dependency regression
 tests; no more `heuristic_executor` workaround), the parallel `make test-integration`
-workflow (pytest-xdist, `-n auto`; CI stays sequential), and the ready-to-send
-maude-bindings issue proposal.
+workflow (pytest-xdist, `-n auto`; CI stays sequential), and the maude-bindings issue
+proposal (since filed upstream).
 
 Remaining, project-level (outside this PDD):
-1. Re-run the codebase-summary skill to refresh `.agents/summary/` and `AGENTS.md` after
-   the architecture/convention changes (per the project Custom Instructions).
-2. File the maude-bindings issue when convenient.
-3. At release time, use the `update-changelog-for-release` skill — the 0.0.4 entries are
+1. At release time, use the `update-changelog-for-release` skill — the 0.0.4 entries are
    already in `CHANGELOG.md`.
+
+Project-level follow-ups completed after the PDD: the codebase-summary refresh of
+`.agents/summary/` + `AGENTS.md` (2026-10-12), and filing the maude-bindings issue with
+the prepared report.

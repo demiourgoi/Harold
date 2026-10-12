@@ -41,11 +41,12 @@ for the record.
   and prelude availability per recycled worker; it already reflects the per-call
   recycling.
 - **New planning record** — `.agents/planning/no_new_module_quirk/` is a complete PDD
-  cycle with a ready-to-send `maude-bindings-issue.md` proposal (filing it is pending).
+  cycle with the `maude-bindings-issue.md` bug report (filed upstream).
 - Inconsistencies resolved: `AGENTS.md`'s workers default, executor semantics and tool
-  description were refreshed; `README.md`'s env table and tool bullet now document the
-  hermetic/whole-load semantics; `CHANGELOG.md` `[0.0.4]` records the fix (no separate
-  `0.0.5` section — `0.0.4.dev0` is the WIP release).
+  description were refreshed; the tool description's sub-bullet indentation was
+  normalized (found during this review, fixed); `README.md`'s env table and tool bullet
+  now document the hermetic/whole-load semantics; `CHANGELOG.md` `[0.0.4]` records the
+  fix (no separate `0.0.5` section — `0.0.4.dev0` is the WIP release).
 
 ## Changes absorbed into the previous refresh (2026-09-29)
 
@@ -135,10 +136,6 @@ for the record.
    caught `MaudeFileNotFoundError` or `MaudeWorkerCrashedError` at the tool boundary must
    catch `SourceFileNotFoundError` / `DiagnosticCollectionError` instead (the Maude error
    stays reachable as the chained cause). Pre-1.0 API churn, recorded in `CHANGELOG.md`.
-10. **Minor: the tool docstring's hermetic/whole-load sub-bullets have inconsistent
-    indentation** (the two sub-bullets are indented deeper than their parent bullet and
-    their continuation lines are shallower), so the served MCP description renders them
-    slightly off; cosmetic, no behavioral impact.
 
 ## Completeness gaps
 
