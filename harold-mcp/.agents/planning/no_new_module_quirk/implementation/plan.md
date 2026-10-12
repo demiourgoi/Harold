@@ -7,8 +7,8 @@ Checklist (tick as each step lands):
 - [x] Step 3: `HAROLD_MAUDE_WORKERS` default change
 - [x] Step 4: dependency-warning misattribution fix (worker + provider)
 - [x] Step 5: path absolutization in `SourceFile.from_path`
-- [ ] Step 6: tool description + README + CHANGELOG
-- [ ] Step 7: maude-bindings bug report artifact
+- [x] Step 6: tool description + README + CHANGELOG
+- [x] Step 7: maude-bindings bug report artifact
 - [ ] Step 8: full validation + knowledge-base refresh
 
 The plan follows the design in [`../design/detailed-design.md`](../design/detailed-design.md).
@@ -325,6 +325,39 @@ Objective: a ready-to-send GitHub issue for the bindings.
 
 Demo: `uv run python .agents/planning/no_new_module_quirk/repro_minimal.py` shows the
 deferred warning landing in the next load's capture.
+
+### Implementation notes (Step 7)
+
+Done; nothing to send yet (the issue is ready to file, but sending it is the user's
+call):
+
+- [`repro_minimal.py`](../repro_minimal.py): standalone script (no harold imports) with
+  three scenarios — `q .`, `quit .`, `eof` — each loading the trigger file and then a
+  clean file twice, capturing fd 2 per call. Output is deterministic across
+  environments: Maude's stdout (`red` output) is silenced and ANSI escapes are stripped
+  (Maude colorizes stderr when it is a TTY). Verified by running it.
+- [`maude-bindings-issue.md`](../maude-bindings-issue.md): the ready-to-send issue —
+  environment, summary, minimal reproduction (inline snippet, run verbatim and its
+  stated output confirmed via `scratch_issue_snippet.py`), expected vs actual, four
+  additional observations (pending statements execute on the next load; relative paths
+  pinned to the previous file's directory; `maude.input` segfaults while pending; the
+  deferred warning keeps the old file/line), the `maude_wrappers.cc` loop pointer, a
+  suggested fix (make the `q .` path behave like the documented `eof`, or expose a
+  parser reset), and the one-load-per-process workaround.
+- Accuracy note: an earlier draft claimed the manual's transcripts use `q .`; that is
+  wrong (Appendix A documents only period-less `quit`), so the issue states instead that
+  the REPL accepts `q .` (trailing text ignored) while the command list does not
+  document it.
+
+Verification: both scripts run green; the inline snippet's output matches the issue
+verbatim except for caption alignment.
+
+**Refinement (user review): real Maude files instead of dynamic generation.** The
+reproduction no longer writes its `.maude` inputs with `write_text`: the four inputs are
+real files in `repro/` (`q.maude`, `quit.maude`, `eof.maude`, `clean.maude`), loaded by
+path from `repro_minimal.py` — much easier for a human to read in the issue or on disk.
+The issue now inlines each file's contents and a snippet that loads them; the snippet was
+re-verified verbatim via `scratch_issue_snippet.py` (same output as before).
 
 ## Step 8: full validation + knowledge-base refresh
 

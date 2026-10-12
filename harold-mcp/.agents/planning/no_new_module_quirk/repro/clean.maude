@@ -1,0 +1,4 @@
+fmod CLEAN is
+    pr NAT .
+    op m : -> Nat .
+endfm
