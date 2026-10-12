@@ -5,6 +5,9 @@
 Heuristic linter port: `maude_program_diagnostics` now reports the Maude interpreter load
 *and* Harold's heuristic checks in one call, with provenance, precise positions,
 report-only fixes, and an `info` severity for findings that do not affect the load.
+Calls are hermetic — each loads the file into a fresh Maude interpreter — so parser
+state cannot leak across calls, and interpreter findings are attributed to the file they
+belong to.
 
 ### Added
 
@@ -28,6 +31,21 @@ report-only fixes, and an `info` severity for findings that do not affect the lo
   interpreter provider lives in `harold_mcp.maude.provider`; the heuristic linter is its
   own `harold_mcp.heuristic` package and runs in the server process (it never imports the
   `maude` bindings).
+- **Hermetic diagnostics calls (fresh interpreter per call)** — the worker pool recycles
+  its processes after every call (`max_tasks_per_child=1`), fixing the deferred-`q .`
+  parser-residue bug (`.agents/planning/no_new_module_quirk/`): a file containing a
+  top-level `q .`/`quit .` used to leave the parser half-parsed, silently contaminating
+  the *next* call with a misattributed `syntax error` (or, for relative paths, a bogus
+  hard failure). Loading is now order-independent and concurrent calls cannot share
+  interpreter state.
+- **Honest dependency attribution** — when Maude reports a warning for a file the
+  diagnosed file pulled in (`load`/`in`), the tool reports it as a whole-file diagnostic
+  whose message names the dependency and suggests running `maude_program_diagnostics` on
+  it; warnings spelled with `(fmod X) :` (space before the colon), previously dropped
+  silently, are now kept.
+- **Developer workflow** — `make test-unit` (hermetic, ~2 s) and `make test-integration`
+  (parallel via pytest-xdist, `-n auto`) targets for quick iteration; `make test` stays
+  the authoritative sequential run used by CI and `make release`.
 
 ### Changed
 
@@ -40,13 +58,22 @@ report-only fixes, and an `info` severity for findings that do not affect the lo
   `warning` or `error`; `info`-only results (a shadowed prelude sort, non-ASCII
   punctuation Maude accepts) now count as success. Diagnostics are ordered by file
   position, with interpreter findings first on a line and whole-file problems last.
+- **Fresh interpreter per call (breaking for session state)** — the "last load wins"
+  session behavior is gone: modules loaded by a previous call are no longer visible, and
+  relative input paths (resolved against the server's working directory, echoed back
+  absolute) always work.
+- **`HAROLD_MAUDE_WORKERS` default** — now half the logical CPUs, capped at 3
+  (`max(1, min(3, cpu_count // 2))`); it bounds how many fresh interpreters may spawn
+  concurrently (~100 MB each), not how many stay warm. The environment variable still
+  overrides it.
 - **Failure semantics** — when any provider fails, the whole call fails with
   `DiagnosticCollectionError`, which names every failing provider and its cause (a worker
   crash or timeout is chained from the interpreter provider). Successful providers'
   findings are never returned alongside the error, because MCP cannot express
   "error + content".
 - **Tool description** — rewritten to explain both sources, the severity meanings, the
-  `fix` payload and the ordering. The tool keeps its read-only annotation profile
+  `fix` payload, the ordering, the fresh-interpreter-per-call semantics and the
+  whole-load/dependency behavior. The tool keeps its read-only annotation profile
   (`readOnlyHint`, `destructiveHint=False`, `idempotentHint`, `openWorldHint=False`) and
   never modifies the diagnosed file.
 

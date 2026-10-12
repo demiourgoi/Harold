@@ -505,6 +505,8 @@ def test_mcp_smoke() -> None:
         assert '"interpreter"' in description
         assert '"heuristic-linter"' in description
         assert "prelude-sort-redeclared" in description
+        assert "fresh Maude interpreter" in description  # hermetic per-call semantics
+        assert "dependency" in description  # whole-load attribution
 
         # Client-visible annotations: the read-only/idempotent/closed-world profile
         # (note `destructiveHint` defaults to true and must be negated explicitly).

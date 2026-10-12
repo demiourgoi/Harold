@@ -35,6 +35,12 @@ Harold MCP tools:
   results still count as success. Use it to check whether a Maude program is well formed,
   and to get a list of issues to fix.
 
+  Each call is hermetic: the file is loaded into a fresh Maude interpreter, with no state
+  carried over from previous calls. The interpreter checks the whole load — the file
+  plus anything it pulls in with `load`/`in` — and problems found in a dependency are
+  reported as whole-file diagnostics whose message names the dependency file and
+  suggests diagnosing it on its own.
+
 Planned tools: running Maude programs, and a vector index of the Maude documentation for
 retrieval-augmented generation (RAG).
 
@@ -100,7 +106,7 @@ The server is configured through environment variables set in the MCP server con
 
 | Env var | Meaning | Default |
 | --- | --- | --- |
-| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Diagnostics run in parallel across workers; more workers use more memory (each creates its own Maude interpreter). | `1` |
+| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Workers are recycled after every call (each call gets a fresh interpreter), so this caps how many diagnostics can run concurrently, not how many interpreters stay warm. | half the logical CPUs, capped at 3 |
 | `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Seconds to wait for each worker call before failing it as timed out. | `60` |
 | `MAUDE_LIB` | Inherited by the Maude bindings, not read by Harold itself: colon-separated directories where Maude searches for `prelude.maude` (and for library files loaded with `in`/`load`). Only needed to override the prelude bundled with the `maude` wheel. | unset (the bundled prelude is used) |
 

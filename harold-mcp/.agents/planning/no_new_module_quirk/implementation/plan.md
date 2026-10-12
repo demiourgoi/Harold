@@ -284,6 +284,32 @@ Objective: the semantics change and new behavior are documented for clients.
 
 Demo: `make check` green; `harold-mcp --help` and the MCP smoke test show the new description.
 
+### Implementation notes (Step 6)
+
+Done, with one process deviation on the version bump:
+
+- **Tool description** (`server/tools/diagnostics.py`): the "last load wins" sentence is
+  replaced by two paragraphs — hermetic calls (fresh interpreter per call, no state
+  carries over) and whole-load semantics (file + `load`/`in` dependencies; dependency
+  problems are whole-file diagnostics naming the dependency and pointing at the tool).
+  `test_mcp_smoke` now asserts `fresh Maude interpreter` and `dependency` in the served
+  description.
+- **README**: the tool bullet gained the hermetic/whole-load paragraph; the env table's
+  `HAROLD_MAUDE_WORKERS` row now documents the transient-worker semantics and the new
+  default (half the logical CPUs, capped at 3).
+- **CHANGELOG**: entries added to the existing unreleased `## [0.0.4]` section (intro
+  sentence + Added: hermetic calls, honest dependency attribution, developer workflow;
+  Changed: fresh-interpreter semantics, workers default, tool description).
+- **Deviation — no version bump / no new 0.0.5 section.** The plan said to suggest
+  `0.0.5`; `DEVELOPER_GUIDE.md` ("Releasing a new version") says the tip of `main`
+  accumulates the next release's changes in its section, and the user confirmed the last
+  release is `0.0.3`, so `0.0.4` (`0.0.4.dev0`) is the WIP release and this fix belongs
+  in its section. The 0.0.5 bump happens at release time per the guide. Flagged for the
+  user to override if they prefer the split.
+
+Verification: `make check` green; `make test-unit` 178 passed; `test_mcp_smoke` passed
+(3.7 s) with the new description assertions.
+
 ## Step 7: maude-bindings bug report artifact
 
 Objective: a ready-to-send GitHub issue for the bindings.
