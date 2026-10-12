@@ -147,6 +147,8 @@ You must ignore files with extension `.md.html` that appear next to a `.md` file
 
 You must always favor read-only tools like `grep` or `find_path` over shell commands that require user approval.
 
+You MUST NEVER try to use `git` to add files or make commits. You can suggest the user to commit a file, but do NOT try to do it yourself. You SHOULD only use read-only `git` commands.
+
 ### Project goals
 
 Harold is an MCP (Model Context Protocol) server with tools for programming with the Maude specification and verification language.
