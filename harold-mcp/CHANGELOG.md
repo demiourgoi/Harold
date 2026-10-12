@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.5]
+
 ## [0.0.4]
 
 Heuristic linter port: `maude_program_diagnostics` now reports the Maude interpreter load
@@ -73,9 +75,19 @@ belong to.
   "error + content".
 - **Tool description** — rewritten to explain both sources, the severity meanings, the
   `fix` payload, the ordering, the fresh-interpreter-per-call semantics and the
-  whole-load/dependency behavior. The tool keeps its read-only annotation profile
-  (`readOnlyHint`, `destructiveHint=False`, `idempotentHint`, `openWorldHint=False`) and
-  never modifies the diagnosed file.
+  whole-load/dependency behavior, and the result models document every field, so those
+  descriptions reach clients through the tool's output schema. The tool keeps its
+  read-only annotation profile (`readOnlyHint`, `destructiveHint=False`, `idempotentHint`,
+  `openWorldHint=False`) and never modifies the diagnosed file.
+- **License** — switched from Apache 2.0 to the GNU General Public License v2; the
+  repository and package `LICENSE` files were updated together.
+- **Python version support** — capped to the 3.14 series: `requires-python` is now
+  `>=3.14,<3.15` (was `>=3.14`), because `maude` 1.6.0 ships cp314-only wheels, so a
+  newer interpreter would have no wheel to install. `README.md` explains that `uvx`
+  downloads 3.14 automatically when needed, or can be pointed at it explicitly, and
+  `.python-version` pins the development interpreter.
+- **General fixes** — assorted typos, formatting, documentation polish, and internal
+  housekeeping.
 
 ### Removed
 
