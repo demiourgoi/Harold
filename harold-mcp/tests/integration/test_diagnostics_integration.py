@@ -52,6 +52,19 @@ def test_clean_program(executor: MaudeExecutor) -> None:
     assert result.diagnostics == []
 
 
+def test_relative_path_input_is_resolved_before_the_worker(
+    executor: MaudeExecutor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative `path` is absolutized by the seam: the worker's cwd is not the client's."""
+    monkeypatch.chdir(FIXTURES_DIR)
+
+    result = maude_program_diagnostics("hello.maude", maude_executor=executor)
+
+    assert result.path == str(FIXTURES_DIR / "hello.maude")
+    assert result.success is True
+    assert result.diagnostics == []
+
+
 def test_recoverable_program(executor: MaudeExecutor) -> None:
     result = _diagnose(executor, "broken-recoverable.maude")
     assert result.success is False

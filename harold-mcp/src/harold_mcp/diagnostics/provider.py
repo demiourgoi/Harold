@@ -22,9 +22,10 @@ class SourceFile:
     """One Maude source file: where it is, and its text as the rules see it.
 
     `path` is the platform path type (`.name`, `.suffix`, `.parent` are available to
-    messages and rules); `text` is the file's content read for the text-based
-    providers. The interpreter provider ignores `text` and loads from `path`, like the
-    Maude CLI.
+    messages and rules) and is always **absolute** (`from_path` resolves it, so the
+    interpreter provider can load it from a worker process regardless of its working
+    directory); `text` is the file's content read for the text-based providers. The
+    interpreter provider ignores `text` and loads from `path`, like the Maude CLI.
     """
 
     path: Path
@@ -35,7 +36,9 @@ class SourceFile:
         """Read a Maude source file for diagnostics.
 
         Rejects anything that is not a regular file (missing, directory, device, FIFO,
-        broken symlink) before reading, then reads with
+        broken symlink) before reading, then stores `Path.resolve()` of the path (the
+        tool reports absolute paths, and the worker's relative resolution is not the
+        client's — see `.agents/planning/no_new_module_quirk/`) and reads it with
         `Path.read_text(encoding="utf-8", errors="replace")` — lossy for undecodable
         bytes, and newline-normalizing, so lines are the file's physical lines.
 
@@ -46,6 +49,7 @@ class SourceFile:
         source_path = Path(path)
         if not source_path.is_file():
             raise SourceFileNotFoundError(source_path)
+        source_path = source_path.resolve()
         try:
             text = source_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:  # permissions, races, unreadable device

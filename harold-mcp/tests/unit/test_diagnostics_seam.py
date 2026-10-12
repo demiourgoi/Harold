@@ -101,6 +101,18 @@ def test_source_file_from_path_accepts_a_string(tmp_path: Path) -> None:
     assert source.path == path
 
 
+def test_source_file_from_path_resolves_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stored path is absolute, so the worker can load it from any cwd."""
+    path = tmp_path / "hello.maude"
+    _ = path.write_text("fmod HELLO is endfm\n")
+    monkeypatch.chdir(tmp_path)
+
+    source = SourceFile.from_path("hello.maude")
+
+    assert source.path.is_absolute()
+    assert source.path == path.resolve()
+
+
 def test_source_file_from_path_rejects_a_missing_path(tmp_path: Path) -> None:
     with pytest.raises(SourceFileNotFoundError, match="does-not-exist"):
         _ = SourceFile.from_path(tmp_path / "does-not-exist.maude")

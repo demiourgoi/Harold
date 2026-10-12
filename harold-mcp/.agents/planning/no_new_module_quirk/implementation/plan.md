@@ -6,7 +6,7 @@ Checklist (tick as each step lands):
 - [x] Step 2: `max_tasks_per_child=1` + test-suite rework (isolation/race green)
 - [x] Step 3: `HAROLD_MAUDE_WORKERS` default change
 - [x] Step 4: dependency-warning misattribution fix (worker + provider)
-- [ ] Step 5: path absolutization in `SourceFile.from_path`
+- [x] Step 5: path absolutization in `SourceFile.from_path`
 - [ ] Step 6: tool description + README + CHANGELOG
 - [ ] Step 7: maude-bindings bug report artifact
 - [ ] Step 8: full validation + knowledge-base refresh
@@ -235,6 +235,34 @@ Objective: relative inputs can no longer break on the worker's fresh-process pat
    docstring: "The input path, made absolute."
 
 Demo: `pytest tests/unit/test_diagnostics_seam.py` green; a relative-path tool call no longer yields the synthesized load error.
+
+### Implementation notes (Step 5)
+
+Done as planned, with one contract fix surfaced by the new integration test:
+
+- `SourceFile.from_path` stores `Path.resolve()` **after** the `is_file()` pre-check
+  (missing/directory/FIFO/unreadable inputs still raise `SourceFileNotFoundError` with
+  the path as given); the seam and `from_path` docstrings now state the path is always
+  absolute.
+- `MaudeProgramDiagnosticsResult.path` docstring → "The input file path, made
+  absolute"; the tool docstring's `Args:` line updated (relative paths are resolved
+  against the server's working directory).
+- **Contract fix**: the tool previously echoed the raw input (`_build_result(path, …)`);
+  it now reports `str(source.path)`, i.e. the resolved absolute path, matching the
+  documented "made absolute" contract. Found by the new test, not by inspection.
+- Tests: new unit test `test_source_file_from_path_resolves_relative_paths` and a new
+  integration test `test_relative_path_input_is_resolved_before_the_worker`
+  (1 extra Maude call) that pins the end-to-end behavior — a fresh worker cannot
+  resolve relative paths, so this is the regression guard for the isolation change.
+
+Verification: `make test-unit` 178 passed; the selected tool integration tests
+(relative path + clean program + without modules) green; `make check` green.
+
+---
+
+> **Addition outside the original plan (user request, after Step 5):** add
+> `pytest-xdist`, make `make test-integration` parallel with auto-detected worker
+> count, and verify stability. Recorded in the section at the end of this file.
 
 ## Step 6: tool description + README + CHANGELOG
 

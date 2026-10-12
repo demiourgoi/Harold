@@ -121,7 +121,7 @@ class MaudeProgramDiagnosticsResult(_ResultModel):
     """Result of diagnosing a Maude source file."""
 
     path: str
-    """The input path, echoed back as given."""
+    """The input file path, made absolute (`Path.resolve()`)."""
 
     success: bool
     """`true` only when no diagnostic has severity `"warning"` or `"error"` (`"info"`-only results succeed)."""
@@ -237,7 +237,8 @@ def maude_program_diagnostics(
     Maude CLI.
 
     Args:
-        path: Absolute path to the Maude source file to diagnose (typically `.maude`).
+        path: Path to the Maude source file to diagnose (typically `.maude`); relative
+            paths are resolved against the server's working directory.
     """
     source = SourceFile.from_path(path)  # raises SourceFileNotFoundError
     providers: tuple[DiagnosticProvider, ...] = (
@@ -245,4 +246,4 @@ def maude_program_diagnostics(
         HeuristicLinterProvider(),
     )
     diagnostics = collect_diagnostics(providers, source)  # raises DiagnosticCollectionError
-    return _build_result(path, diagnostics)
+    return _build_result(str(source.path), diagnostics)
