@@ -314,3 +314,59 @@ Objective: everything green and the repo's knowledge base honest.
    actually releasing.
 
 Demo: full CI pass (`make release`) and an up-to-date planning record.
+
+---
+
+## Addendum: parallel integration tests (`pytest-xdist`, user request after Step 5)
+
+Objective: make the integration suite fast enough for quick iteration without touching
+CI semantics (`make test` stays sequential — it is what `main.yml` and `make release`
+run).
+
+What changed:
+
+- `pytest-xdist>=3.8` in the dev dependency group (user ran `uv add`; resolved
+  `xdist 3.8.0` on `pytest 9.1.1`, verified by running the parallel target).
+- `make test-integration` runs `pytest tests/integration -n auto`; the Makefile comment
+  documents `PYTEST_XDIST_AUTO_NUM_WORKERS=<n>` as the cap for shared machines. `-n
+  auto` is affinity/cgroup-aware on Python 3.13+, so CI runners (4 vCPUs) and wide
+  workstations both get a sensible default.
+- The race test now submits with **4** concurrent workers instead of 2: it is a single
+  test (nothing else can parallelize it) and was the suite's serial tail; four in-flight
+  calls cut it substantially. Full fixture sweep retained.
+- `AGENTS.md` (Custom Instructions) now lists `test-unit` / `test-integration` and why
+  they exist, so agents iterate with the split targets but finish with `make test`.
+
+Measurements on the dev laptop (15 W i5-1245U, 2P+8E — close to a worst case: the CPU
+saturates under parallel spawn storms, so this is a lower bound):
+
+| Run | Wall time |
+| --- | --- |
+| tool integration file, sequential | ~85 s |
+| tool integration file, `-n auto`, race 2/2 | 60.7 s |
+| tool integration file, `-n auto`, race 4/4 | 50.6 s |
+| full integration suite, `-n 4` | 57.0 s |
+| full integration suite, `-n auto`, race 4/4 | 53.1 s / 53.8 s (two consecutive green runs) |
+
+`-n 4` ≈ `-n auto` here (the machine saturates either way); on wide, fast machines the
+suite should scale several-fold (the work is independent per-test Maude spawns).
+
+### Flakes found and fixed (both exactly the class the xdist plan warned about)
+
+1. `test_mcp_smoke`: `subprocess.TimeoutExpired` on the SIGTERM wait under load. The
+   teardown now falls back to `proc.kill()` when the graceful exit exceeds 15 s — the
+   test asserts the MCP protocol exchange, not shutdown latency (the lifespan teardown
+   is covered by `test_lifespan`).
+2. `test_two_workers_are_used_for_parallel_diagnostics`: the Step-2 interval-overlap
+   witness turned out **not** to be schedule-independent under xdist — pool
+   scheduling lag can leave the two tasks serialized so their intervals never overlap
+   (observed once). Replaced with a file-marker rendezvous (`worker.rendezvous_pid`):
+   each task completes only once a peer task signals the same directory, so completion
+   proves concurrent execution on two processes and serialization becomes a timeout
+   failure. `sleep_witness` was removed. (A `multiprocessing.Manager().Barrier(2)` was
+   tried first and rejected: the Manager needs a local socket, which the agent sandbox
+   forbids, and the test-support helper would have added a process for no benefit.)
+
+Verification: `make check` green; `make test-unit` 178 passed; two consecutive full
+parallel integration runs green. The sequential full run is re-verified in Step 8
+(`make release`).

@@ -26,10 +26,13 @@ test-unit: ## Run the unit tests only (fast; no Maude interpreter)
 	@echo "🚀 Testing code: Running unit tests"
 	@uv run python -m pytest tests/unit
 
+# `-n auto` adapts to the machine (affinity-aware on Python 3.13+), so this works on
+# the local dev box and on smaller CI runners. Cap it on shared machines with
+# PYTEST_XDIST_AUTO_NUM_WORKERS=<n>. `make test` stays sequential for CI/release.
 .PHONY: test-integration
-test-integration: ## Run the integration tests only (spawns the real Maude interpreter; slower)
-	@echo "🚀 Testing code: Running integration tests"
-	@uv run python -m pytest tests/integration
+test-integration: ## Run the integration tests only, in parallel (spawns the real Maude interpreter; slower than unit)
+	@echo "🚀 Testing code: Running integration tests (pytest-xdist, -n auto)"
+	@uv run python -m pytest tests/integration -n auto
 
 
 .PHONY: run

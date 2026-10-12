@@ -15,6 +15,7 @@ import os
 import re
 import tempfile
 import time
+from pathlib import Path
 from typing import TypedDict
 
 
@@ -85,17 +86,25 @@ def sleep(seconds: float) -> int:
     return os.getpid()
 
 
-def sleep_witness(seconds: float) -> tuple[int, float, float]:
-    """Test support: sleep and report the worker's pid plus its monotonic interval.
+def rendezvous_pid(directory: str, timeout: float = 30.0) -> int:
+    """Test support: wait for a peer task to signal the same directory, then report the pid.
 
-    `time.monotonic()` is system-wide (CLOCK_MONOTONIC on Linux), so callers can
-    assert that two tasks' intervals overlap — proving the pool ran them
-    concurrently — without relying on wall-clock budgets (each task now pays
-    spawn + init in its own process, see `max_tasks_per_child=1`).
+    Each task creates its own marker file (`<pid>.rendezvous`) and polls until a
+    peer's marker appears, so a task can only complete once another task is running
+    concurrently (possibly on a different process). A pool that serializes the tasks
+    makes the first one time out and raise. This is schedule-independent, unlike
+    wall-clock or interval-overlap budgets (each task pays spawn + init in its own
+    process, see `max_tasks_per_child=1`).
     """
-    start = time.monotonic()
-    time.sleep(seconds)
-    return os.getpid(), start, time.monotonic()
+    marker_dir = Path(directory)
+    marker = marker_dir / f"{os.getpid()}.rendezvous"
+    marker.touch()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(peer != marker for peer in marker_dir.glob("*.rendezvous")):
+            return os.getpid()
+        time.sleep(0.02)
+    raise TimeoutError(f"no peer task arrived in {directory!r} within {timeout}s")  # noqa: TRY003 - test support
 
 
 # `(fmod X) :` (space before the colon) is a real Maude spelling; requiring `):`

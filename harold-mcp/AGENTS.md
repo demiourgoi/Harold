@@ -177,9 +177,21 @@ Agents running in sandboxed environments may lack write access to the user's
 
 ```sh
 UV_CACHE_DIR=/tmp/uv-cache make check
-UV_CACHE_DIR=/tmp/uv-cache make test
+UV_CACHE_DIR=/tmp/uv-cache make test             # full suite, sequential (what CI and `make release` run)
+UV_CACHE_DIR=/tmp/uv-cache make test-unit        # fast unit tests only: no Maude interpreter (~2s)
+UV_CACHE_DIR=/tmp/uv-cache make test-integration # integration tests in parallel (pytest-xdist, -n auto)
 UV_CACHE_DIR=/tmp/uv-cache make release
 ```
+
+`make test-unit` and `make test-integration` exist for quick iteration and targeted
+debugging: use them while developing (the unit split is hermetic and takes ~2 s; the
+integration split spawns the real Maude interpreter, where every diagnostics call pays
+~1 s of process spawn + prelude init because workers are recycled per call, hence the
+parallel default). `-n auto` detects the machine's CPUs, so the same target works on
+development workstations and on smaller CI runners; cap it on shared machines with
+`PYTEST_XDIST_AUTO_NUM_WORKERS=<n>`. `make test` stays sequential and complete — it is
+the authoritative run (coverage, CI, releases) — so run it before finishing a task,
+not only the split targets.
 
 (This is harmless in normal environments too, but there it is not needed.)
 

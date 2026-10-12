@@ -222,13 +222,16 @@ def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
     Without per-call isolation, a `q .` file's deferred warning lands on whichever
     file the contaminated worker diagnoses next (with several workers, the victim
     is unpredictable). Every fixture whose interpreter load is silent must stay
-    silent no matter what else runs concurrently.
+    silent no matter what else runs concurrently. Four workers keep this single
+    test from being the suite's serial tail (each call pays a full interpreter
+    spawn).
     """
-    parallel = MaudeExecutor(settings=Settings(maude_workers=2))
+    concurrent = 4
+    parallel = MaudeExecutor(settings=Settings(maude_workers=concurrent))
     parallel.start()
     try:
         fixtures = sorted(FIXTURES_DIR.glob("*.maude"))
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=concurrent) as pool:
             results = list(
                 pool.map(
                     lambda fixture: maude_program_diagnostics(str(fixture), maude_executor=parallel),
@@ -576,4 +579,11 @@ def test_mcp_smoke() -> None:
         assert diagnostic["range"]["start"] == {"line": 2, "column": 10}
     finally:
         proc.terminate()
-        proc.wait(timeout=15)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            # Under heavy parallel load (pytest-xdist) the graceful SIGTERM path can
+            # be slow; this smoke test asserts the MCP protocol exchange, not the
+            # shutdown latency (the lifespan teardown is covered by test_lifespan).
+            proc.kill()
+            proc.wait(timeout=15)

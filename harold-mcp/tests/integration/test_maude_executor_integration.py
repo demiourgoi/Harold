@@ -8,25 +8,22 @@ recovery is covered end to end by `test_tool_reports_crash_and_recovers` (which 
 asserts the chained error vocabulary).
 """
 
+from pathlib import Path
+
 from harold_mcp.maude import MaudeExecutor, worker
 from harold_mcp.settings import Settings
 
 
-def test_two_workers_are_used_for_parallel_diagnostics() -> None:
+def test_two_workers_are_used_for_parallel_diagnostics(tmp_path: Path) -> None:
     parallel = MaudeExecutor(settings=Settings(maude_workers=2))
     parallel.start()
     try:
-        # Each task sleeps 1s and reports its pid plus its monotonic start/end.
-        # Overlapping intervals prove two workers ran the tasks concurrently (a
-        # single worker would serialize them); distinct pids prove different
-        # processes. The intervals exclude spawn+init, which each task pays per
-        # process now (`max_tasks_per_child=1`), so no wall-clock budget is needed.
-        futures = [parallel.submit(worker.sleep_witness, 1.0) for _ in range(2)]
-        witnesses = [future.result(timeout=60) for future in futures]
-        pids = {pid for pid, _, _ in witnesses}
+        # Both tasks complete only once a peer task is running concurrently (marker
+        # rendezvous), so completion proves the pool used two processes; a pool that
+        # serializes them makes the first task time out and fail. Independent of pool
+        # scheduling lag, unlike wall-clock or interval-overlap budgets.
+        futures = [parallel.submit(worker.rendezvous_pid, str(tmp_path)) for _ in range(2)]
+        pids = {future.result(timeout=45) for future in futures}
         assert len(pids) == 2
-        starts = [start for _, start, _ in witnesses]
-        ends = [end for _, _, end in witnesses]
-        assert max(starts) < min(ends)  # the two tasks overlapped in time
     finally:
         parallel.shutdown()
