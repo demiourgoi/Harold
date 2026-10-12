@@ -24,7 +24,11 @@ implementation plan are ready for execution.
     Maude manual Appendix A for reference.
 - [`design/detailed-design.md`](./design/detailed-design.md) — the full design (components, data
   models, error handling, testing strategy, appendices).
-- [`implementation/plan.md`](./implementation/plan.md) — 8-step TDD plan with a checklist.
+- [`implementation/plan.md`](./implementation/plan.md) — the 8-step TDD plan with its checklist and
+  per-step implementation notes (including the deviations that were flagged along the way).
+- [`maude-bindings-issue.md`](./maude-bindings-issue.md) + [`repro_minimal.py`](./repro_minimal.py) +
+  [`repro/`](./repro/) — the ready-to-send GitHub issue proposal for the bindings, with the
+  standalone reproduction and its real `.maude` inputs.
 - [`summary.md`](./summary.md) — this file.
 - Scratch scripts in this directory (`scratch_*.py`) — the experiments behind the research notes.
 
@@ -41,8 +45,20 @@ absolutized in `SourceFile.from_path`; dependency warnings are attributed honest
 scenarios, the parallel-diagnostics race, and file dependencies; and a ready-to-send
 GitHub issue proposal for maude-bindings is produced.
 
-## Next steps
+## Outcome (2026-10-12)
 
-1. Review the design and plan; adjust if anything looks off.
-2. Start executing [`implementation/plan.md`](./implementation/plan.md) from Step 1
-   (fixtures + red tests).
+All eight steps are complete and `make release` passes (run by the user). Highlights:
+hermetic per-call interpreters (`max_tasks_per_child=1`), the new
+`HAROLD_MAUDE_WORKERS` default (`max(1, min(3, cpu//2))`), relative-path
+absolutization, honest dependency-warning attribution with a run-diagnostics
+suggestion, the reworked integration suite (isolation/race/dependency regression
+tests; no more `heuristic_executor` workaround), the parallel `make test-integration`
+workflow (pytest-xdist, `-n auto`; CI stays sequential), and the ready-to-send
+maude-bindings issue proposal.
+
+Remaining, project-level (outside this PDD):
+1. Re-run the codebase-summary skill to refresh `.agents/summary/` and `AGENTS.md` after
+   the architecture/convention changes (per the project Custom Instructions).
+2. File the maude-bindings issue when convenient.
+3. At release time, use the `update-changelog-for-release` skill — the 0.0.4 entries are
+   already in `CHANGELOG.md`.

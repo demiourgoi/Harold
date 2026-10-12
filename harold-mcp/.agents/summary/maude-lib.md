@@ -88,8 +88,8 @@ Yes, always. `harold_mcp.maude.worker.init_maude` is the worker-pool initializer
   process and the initializer (hence the prelude load) runs again per call; crash/timeout
   pool replacement re-runs it too.
 - Fail-fast: a broken install (prelude not found) makes `init_maude` raise `WorkerInitError`,
-  which surfaces as `MaudeInitError` during the lifespan warm-up — the server refuses to
-  start rather than silently running without a prelude.
+  which surfaces as `MaudeInitError` during the lifespan's initialization check — the
+  server refuses to start rather than silently running without a prelude.
 - Capture scope: the fd-2 capture in `load_diagnostics` wraps only
   `maude.load(<diagnosed file>)`; anything the prelude prints while loading at init is
   outside the diagnostics result.

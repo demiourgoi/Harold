@@ -25,7 +25,7 @@ return annotation and emits both `structuredContent` and a JSON text block.
 | | `message` | `str` | free text, with the explanation/fix hint for linter findings |
 | | `fix` | `MaudeFix \| None` | report-only correction; the tool never applies it |
 | `MaudeDiagnosticsSummary` | `info` / `warning` / `error` | `int` | per-severity counts |
-| `MaudeProgramDiagnosticsResult` | `path` | `str` | echo of the input path as given |
+| `MaudeProgramDiagnosticsResult` | `path` | `str` | the input path, made absolute (`Path.resolve()`) |
 | | `success` | `bool` | true iff no `warning` and no `error` (info-only succeeds) |
 | | `summary` | `MaudeDiagnosticsSummary` | |
 | | `diagnostics` | `list[MaudeDiagnostic]` | file order: line, provider, column; whole-file last |
@@ -76,7 +76,7 @@ types; the tool adapts them to the wire models):
 | --- | --- | --- |
 | `Severity` | `Literal` alias | `"info" \| "warning" \| "error"` |
 | `DiagnosticSource` | `Literal` alias | `"interpreter" \| "heuristic-linter"` |
-| `SourceFile` | frozen slotted dataclass | `path: Path`, `text: str`; `from_path()` rejects non-regular files, reads `utf-8`/`errors="replace"` (lossy, newline-normalizing) |
+| `SourceFile` | frozen slotted dataclass | `path: Path` (always absolute — `from_path()` resolves), `text: str`; `from_path()` rejects non-regular files, reads `utf-8`/`errors="replace"` (lossy, newline-normalizing) |
 | `FixEdit` | frozen slotted dataclass | `line`, `start_column`, exclusive `end_column`, `new_text` |
 | `FixSuggestion` | frozen slotted dataclass | `description: str`, `edits: tuple[FixEdit, ...]` |
 | `ProviderDiagnostic` | frozen slotted dataclass | `source`, `severity`, `code`, `message`, optional `line`/`column`/`end_column` (1-based), optional `fix`; `__post_init__` enforces position invariants |
@@ -106,7 +106,10 @@ Defined in `harold_mcp.heuristic` (plain dataclasses, no framework types):
 
 Defined in `harold_mcp.maude.worker` (TypedDicts; plain dicts cross the process boundary):
 
-- `WarningDict` — `{line: int | None, message: str}`.
+- `WarningDict` — `{file: str, line: int | None, message: str}`. `file` is the name Maude
+  printed for the warning's file (the diagnosed file, a `load`/`in` dependency, or
+  `<standard input>` for some first-line warnings); the provider uses it to attribute the
+  warning instead of pinning everything on the diagnosed file.
 - `LoadDiagnosticsResult` — `{ok: bool, warnings: list[WarningDict]}`. `ok` is the
   `maude.load` return value: `True` for every parseable input (Maude recovers from
   arbitrary garbage), `False` for missing files / unrecoverable parse failures.
@@ -130,7 +133,7 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 | Type | Base | Attributes | Raised by |
 | --- | --- | --- | --- |
 | `MaudeError` | `RuntimeError` | — | base for all worker-subsystem failures |
-| `MaudeInitError` | `MaudeError` | — | `MaudeExecutor.start` warm-up failure (worker init) |
+| `MaudeInitError` | `MaudeError` | — | `MaudeExecutor.start` fail-fast init check (worker init) |
 | `MaudeWorkerError` | `MaudeError` | `reason: str` | base for running-call failures |
 | `MaudeWorkerCrashedError` | `MaudeWorkerError` | — | broken pool (submit time) or worker death mid-task |
 | `MaudeWorkerTimeoutError` | `MaudeWorkerError` | — | call exceeded the configured timeout |

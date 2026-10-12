@@ -1,11 +1,21 @@
 # The deferred `q .` warning quirk (`no_new_module.maude`)
 
-Status: research record — **no fix implemented** (harold-mcp `0.0.4.dev0`, 2026-09-29).
-Found while integrating the heuristic linter into `maude_program_diagnostics`; the
-integration tests carry a workaround (a dedicated worker for the fixtures the
-heuristic provider asserts on) that hides the quirk from the test suite but not
-from production. This document records the reproduction, the analysis, and the
-options; the experiments live next to it in this directory.
+Status: **fixed** (2026-10-12) — option A, per-call interpreter isolation; see the
+[implementation plan](implementation/plan.md) for the executed work and the extended
+[research notes](research/). This document records the original reproduction, analysis
+and options, and is preserved as the research record.
+
+**Outcome (2026-10-12).** The quirk is fixed by **option A — `max_tasks_per_child=1`**
+(a fresh Maude interpreter per diagnostics call), not by the flush (option B) this
+record originally recommended: later research showed the residue is *executable
+commands* from the interrupted file, which a flush would run (defining modules, running
+reductions) rather than discard, and it also leaves relative-path resolution pinned to
+the previous file's directory. The executed plan — steps, red-green tests, tool
+semantics, and the ready-to-send maude-bindings issue proposal — lives in
+[`implementation/plan.md`](implementation/plan.md); the extended findings are in
+[`research/quirk-inventory.md`](research/quirk-inventory.md). The
+`heuristic_executor` workaround in the integration tests was removed, as this document
+anticipated; `no_new_module.maude` stays a clean, correct program.
 
 ## TL;DR
 
@@ -25,16 +35,15 @@ options; the experiments live next to it in this directory.
 - The trigger is narrow (a file containing a live `q .`) but the failure is
   silent, misattributed, and call-order-dependent — a correctness bug of the
   tool's output, not just cosmetic noise.
-- Recommended fix: flush the residue **inside the worker** after each load (load
-  a dummy empty file, discard its capture) — measured to clear both symptoms,
-  keeps the warm pool, sub-millisecond cost. Complement it with a heuristic rule
-  flagging REPL-only commands so the `q .` line is reported by the layer that can
-  point at it exactly.
+- Originally recommended fix (superseded, see Outcome): flush the residue **inside the
+  worker** after each load (load a dummy empty file, discard its capture) — measured to
+  clear both symptoms on a warm pool. Later research showed the residue is executable
+  commands, so a flush would run them; the fix that landed is option A.
 - `max_tasks_per_child=1` (the proposal in the issue) also fixes the quirk by
   isolation, but at ≈0.34 s per call (spawn + prelude init) versus ~0 ms on the
   warm pool, and it changes the semantics from "persistent session" to "fresh
-  interpreter per call". It is the right lever only if hermetic calls are wanted
-  for their own sake (see [Options](#options)).
+  interpreter per call". **This is the fix that landed** (see Outcome); the
+  original caveat above is retained as the historical measurement.
 
 ## Observed behavior
 
@@ -299,6 +308,10 @@ above. Keep as interim only.
 
 ## Recommendation
 
+Superseded by the Outcome at the top (option A implemented; see
+[`implementation/plan.md`](implementation/plan.md)). Kept as the record of the
+alternatives considered at the time.
+
 1. **Short term — implement B + D.** Flush the parser residue in
    `worker.load_diagnostics` (discarded dummy load, unconditional) and add a
    heuristic rule that flags REPL-only commands so the `q .` line is reported by
@@ -327,11 +340,24 @@ All scripts run from the `harold-mcp` root with the project environment, e.g.
 | `scratch_mtc.py` | Tool-level sequence on a warm pool (quirk) vs `max_tasks_per_child=1` (clean); timing of both; the parallel-workers budget. |
 | `scratch_flush2.py` | One flush scenario per process: controls (`empty_load_alone`, `relative_alone`, `relative_after_clean`), unsafe `maude.input` candidates (segfault: exit 139), dummy-load flush (`same_call_flush_*`, `dummy_load_after_q`), and the relative-path leak (`relative_after_q`, `relative_after_q_flush`). |
 | `scratch_flush.py` | First, unsafe attempt: loops `maude.input` candidates and dies with SIGSEGV at `input('')`; kept as the record of why `maude.input` is not the fix. |
+| `scratch_quirks.py` | Command-family probe: `quit .` leaves the same residue; text after `q .` executes during the next load; `eof` stops cleanly. |
+| `scratch_commands.py` | One fresh process per quit-like/REPL command (`quit`, `q`, `q .`, `quit .`, `eof`, debugger commands): residue and remainder-parsing per command. |
+| `scratch_deps.py`, `scratch_resolve.py`, `scratch_nested.py` | Dependency resolution: `load`/`in` inside a file resolve against the file's own directory (decoys prove the cwd is ignored); nested and missing-dependency cases. |
+| `scratch_attribution.py` | Raw capture showing Maude attributes dependency warnings to the dependency's basename (subdirectory deps included) — the data behind the attribution fix. |
+| `scratch_timing.py` | Warm pool vs `max_tasks_per_child=1` timing (1/2/6 workers) and per-worker RSS (~100 MB). |
+| `scratch_race.py`, `scratch_race_fixed.py` | opencode's race claim: concurrent diagnostics of all fixtures on the current code (21/21 spurious) vs recycled pools (9/9 clean). |
+| `scratch_fixture_dump.py`, `scratch_files.py`, `scratch_dep_raw.py`, `scratch_dep_raw2.py` | Parsed/raw captures used to write the red tests precisely. |
+| `repro_minimal.py` + `repro/` | Standalone issue reproduction with the real `.maude` inputs: `q .`/`quit .` contaminate the next load, `eof` does not. |
+| `scratch_issue_snippet.py` | Runs the issue's inline snippet verbatim to confirm its stated output. |
+| `maude-bindings-issue.md` | Ready-to-send GitHub issue proposal for the maude-bindings repository. |
 
 ## References
 
-- Workaround in the tests: `tests/integration/test_diagnostics_integration.py`
-  (`heuristic_executor`, L40–53; `test_program_without_modules`, L100–103).
+- Former workaround (removed by the fix): the `heuristic_executor` fixture in
+  `tests/integration/test_diagnostics_integration.py`. The regression tests for this quirk
+  now live there too (`test_*_does_not_contaminate_next_diagnosis`,
+  `test_content_after_q_is_not_reported`,
+  `test_parallel_diagnostics_do_not_share_interpreter_state`).
 - Worker capture and parsing: `src/harold_mcp/maude/worker.py`
   (`load_diagnostics`, `_parse_warnings`, `_WARNING_RE`).
 - Provider mapping (drops the file name, attributes to the diagnosed file):
@@ -342,3 +368,9 @@ All scripts run from the `harold-mcp` root with the project environment, e.g.
   `.agents/planning/maude-diagnostics-tool-v1/research/maude-bindings.md`.
 - `ProcessPoolExecutor.max_tasks_per_child` semantics:
   <https://docs.python.org/3/library/concurrent.futures.html#processpoolexecutor>
+- The executed fix and its process record: [`implementation/plan.md`](implementation/plan.md)
+  (steps, red-green tests, measurements, and the tool/CLI semantics changes),
+  [`design/detailed-design.md`](design/detailed-design.md), and
+  [`research/`](research/) in this directory.
+- Ready-to-send maude-bindings issue: [`maude-bindings-issue.md`](maude-bindings-issue.md)
+  with [`repro_minimal.py`](repro_minimal.py) + [`repro/`](repro/).

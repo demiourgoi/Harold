@@ -9,7 +9,7 @@ Checklist (tick as each step lands):
 - [x] Step 5: path absolutization in `SourceFile.from_path`
 - [x] Step 6: tool description + README + CHANGELOG
 - [x] Step 7: maude-bindings bug report artifact
-- [ ] Step 8: full validation + knowledge-base refresh
+- [x] Step 8: full validation + knowledge-base refresh
 
 The plan follows the design in [`../design/detailed-design.md`](../design/detailed-design.md).
 Every step ends with a demoable, working increment; tests are written before or
@@ -373,6 +373,23 @@ Objective: everything green and the repo's knowledge base honest.
    actually releasing.
 
 Demo: full CI pass (`make release`) and an up-to-date planning record.
+
+### Implementation notes (Step 8)
+
+- **Validation**: the user ran `make release` (install + check + full sequential test
+  suite + strict docs build) and it passes.
+- **Planning record updated**: [`../README.md`](../README.md) now states the fix status
+  and the outcome at the top (option A implemented, flush superseded with the reason),
+  marks the original Recommendation section as superseded, refreshes the stale
+  test-workaround references, and lists every new experiment/repro file in its tables;
+  [`../summary.md`](../summary.md) records the outcome and the remaining project-level
+  follow-ups.
+- **Suggested next steps for the user** (project-level, not part of this PDD): re-run
+  the codebase-summary skill to refresh `.agents/summary/` + `AGENTS.md` (the settings
+  default, executor semantics, worker parser and tool description all changed); file the
+  maude-bindings issue ([`../maude-bindings-issue.md`](../maude-bindings-issue.md)) when
+  convenient; use the `update-changelog-for-release` skill at release time (the 0.0.4
+  entries are in place).
 
 ---
 

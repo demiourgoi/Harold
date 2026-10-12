@@ -22,6 +22,11 @@
       (`null` for whole-file problems; interpreter findings have `column=null`; heuristic
       findings carry exact exclusive-end columns), and an optional report-only `fix`
       (`description` + applyable `edits`; the tool never writes to the file).
+    - Each call is hermetic (a fresh interpreter loads the file; no state carries over),
+      and the interpreter checks the whole load: the file plus its `load`/`in`
+      dependencies. Problems attributed to a dependency are whole-file diagnostics whose
+      message names the dependency and points at this tool; the result `path` is the
+      input path **made absolute** (`Path.resolve()`).
     - `success` is `true` only when no diagnostic has severity `warning` or `error`;
       `"info"`-only results (a shadowed prelude sort, non-ASCII punctuation Maude
       accepts) still succeed. `summary` counts all three severities. Diagnostics are
@@ -41,7 +46,7 @@
     - Only the free-form text above `Args:` becomes the MCP tool description (FastMCP
       excludes `Returns`/`Raises`/`Example` sections — noted in a comment in the code),
       and the result models' attribute docstrings become output-schema field descriptions
-      (see `data_models.md`). Loading mutates interpreter state ("last load wins"),
+      (see `data_models.md`). The hermetic per-call and whole-load/dependency semantics are
       documented in that prose.
 
 ```mermaid
@@ -76,8 +81,9 @@ sequenceDiagram
   module (byte-stable), refuses extractions with fewer than 50 sort names, and with
   `--check` compares the **data** against a fresh extraction (exit 1 when stale; the
   provenance header may differ). See `DEVELOPER_GUIDE.md`.
-- On startup the lifespan warms up the worker pool (fail-fast on `MaudeInitError`); on
-  SIGTERM the server tears the pool down and exits 0.
+- On startup the lifespan performs a fail-fast worker initialization check (one
+  `init_maude` ping per worker; the pinged processes are recycled — no warm pool stays
+  around); on SIGTERM the server tears the pool down and exits 0.
 - Intended for installation via `uvx harold-mcp` and configuration as an MCP server
   command for clients (the Zed and opencode configurations we test live in `README.md`;
   any other MCP-compatible client works too).
@@ -86,7 +92,7 @@ sequenceDiagram
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `HAROLD_MAUDE_WORKERS` | `1` | number of Maude worker processes |
+| `HAROLD_MAUDE_WORKERS` | `max(1, min(3, cpu_count // 2))` | bound on concurrently running Maude interpreters (workers are recycled after every call) |
 | `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | `60` | per-call timeout in seconds |
 
 Invalid values fail fast at import (pydantic validation).
@@ -106,10 +112,10 @@ Invalid values fail fast at import (pydantic validation).
   - `DiagnosticProvider` — the protocol (`name`, `diagnose(source)`); implement it to
     add a new diagnostics source. Providers live with their capability package and raise
     `DiagnosticProviderError` (chaining the cause).
-  - Value types: `SourceFile` (`from_path` — the tool's pre-check and read; raises
-    `SourceFileNotFoundError`), `ProviderDiagnostic` (source, severity, code, message,
-    1-based `line`/`column`/`end_column`, optional fix), `FixEdit`, `FixSuggestion`,
-    `Severity`, `DiagnosticSource`.
+  - Value types: `SourceFile` (`from_path` — the tool's pre-check, path resolution to
+    absolute and read; raises `SourceFileNotFoundError`), `ProviderDiagnostic` (source,
+    severity, code, message, 1-based `line`/`column`/`end_column`, optional fix),
+    `FixEdit`, `FixSuggestion`, `Severity`, `DiagnosticSource`.
   - `collect_diagnostics(providers, source) -> list[ProviderDiagnostic]` — runs every
     provider in order, merges and orders the result, and raises
     `DiagnosticCollectionError` (with `.failures`) when any provider failed.
@@ -126,22 +132,26 @@ Invalid values fail fast at import (pydantic validation).
   - `extract_prelude_sorts` / `render_snapshot_module` — the snapshot maintenance API
     behind the CLI.
 - `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton.
-- `harold_mcp.maude.MaudeExecutor` — the client wrapper:
-  - `start()` / `shutdown()` — pool lifecycle.
+- `harold_mcp.maude.MaudeExecutor` — the client wrapper (one task per process:
+  `max_tasks_per_child=1`, so every call gets a fresh interpreter):
+  - `start()` / `shutdown()` — pool lifecycle (start runs the fail-fast init pings).
   - `submit(fn, *args) -> Future` — raw submit (test/crash support); raises
     `MaudeWorkerCrashedError` on a broken pool.
   - `diagnostics(path) -> LoadDiagnosticsResult` — typed worker op; crash/timeout mapped
     to `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`, pool replaced.
   - `_run_task(fn, *args) -> T` — generic submit-and-await runner for future worker ops.
 - `harold_mcp.maude.InterpreterDiagnosticProvider(executor)` — the interpreter provider
-  (warning mapping + synthesized whole-file error; worker errors become
-  `DiagnosticProviderError` with the cause chained).
+  (warning mapping + synthesized whole-file error; own-file/`<standard input>` warnings
+  keep their line, foreign-file warnings become whole-file dependency diagnostics naming
+  the file and suggesting this tool; worker errors become `DiagnosticProviderError` with
+  the cause chained).
 - `harold_mcp.maude.get_maude_executor(settings=Depends(get_settings))` — lazy,
   lock-guarded singleton; FastMCP resolves the nested `get_settings` dependency. Direct
   callers pass settings explicitly.
 - `harold_mcp.maude.worker` — worker-side module (imported by the worker process only in
-  practice; safe to import anywhere): `init_maude`, `ping`, `sleep`, `load_diagnostics`,
-  `_crash`, and the `WarningDict` / `LoadDiagnosticsResult` TypedDicts.
+  practice; safe to import anywhere): `init_maude`, `ping`, `sleep`, `rendezvous_pid`,
+  `load_diagnostics`, `_crash`, and the `WarningDict` / `LoadDiagnosticsResult` TypedDicts
+  (`WarningDict` carries the `file` Maude attributed the warning to).
 - `harold_mcp.maude` error hierarchy — `MaudeError`, `MaudeInitError`,
   `MaudeWorkerError` (`MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`).
 - `harold_mcp.resources.HAROLD_ICON` — `mcp.types.Icon` used for server branding.
@@ -159,7 +169,8 @@ Importing `harold_mcp.server`:
 
 The Maude interpreter is **not** touched at import time: no `maude` import in the server
 process (worker.py imports it lazily), and the worker pool is created in the lifespan
-(startup), not at import. The heuristic linter and the prelude snapshot are pure data and
+(startup), not at import — and each task then runs in its own fresh process
+(`max_tasks_per_child=1`). The heuristic linter and the prelude snapshot are pure data and
 text processing — importing them never touches the interpreter.
 
 ## Related documents

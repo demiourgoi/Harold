@@ -2,12 +2,52 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review (2026-09-29, after the
-heuristic-linter port landed without a knowledge-base refresh; the
-`port-linter.py/summary.md` follow-up asked for this refresh). Older resolved issues are
-kept for the record.
+Findings from the consistency and completeness review. The 2026-10-12 refresh covers the
+`no_new_module_quirk` implementation (hermetic per-call interpreters, the new workers
+default, dependency-warning attribution, path absolutization, and the test-suite rework);
+the 2026-09-29 refresh covered the heuristic-linter port. Older resolved issues are kept
+for the record.
 
-## Changes absorbed into this refresh
+## Changes absorbed into this refresh (2026-10-12)
+
+- **Hermetic per-call diagnostics.** `maude/executor.py` sets `max_tasks_per_child=1` on
+  the pool, so every task runs in a fresh process (no loaded modules or parser state
+  survive across calls), fixing the deferred `q .`/`quit .` residue contamination.
+  `start()`'s pings are now a fail-fast initialization check (the pinged processes are
+  recycled), and the "last load wins" sentence is gone from the tool description, README
+  and this knowledge base. Design record: `.agents/planning/no_new_module_quirk/`.
+- **`HAROLD_MAUDE_WORKERS` default** — now `max(1, min(3, (os.cpu_count() or 0) // 2))`
+  via `Field(default_factory=...)`; it caps concurrent per-call interpreters (≈100 MB
+  each), not warm workers. Env override and `gt=0` validation unchanged.
+- **Path absolutization** — `SourceFile.from_path` stores `Path.resolve()` (after the
+  `is_file()` pre-check), and the tool reports the resolved absolute path instead of
+  echoing the raw input; a fresh worker's cwd is not the client's.
+- **Dependency-warning attribution** — `WarningDict` gained `file`; the worker regex
+  accepts the `(fmod X) :` spelling (its warnings used to be dropped); the interpreter
+  provider maps own-file and `<standard input>` warnings to their line and foreign-file
+  warnings to whole-file diagnostics naming the dependency and suggesting this tool
+  (`_to_diagnostic` / `_dependency_message`).
+- **Integration suite rework** — new isolation/race/dependency regression tests and
+  9 new fixtures (26 total); the `heuristic_executor` workaround is gone;
+  `test_maude_executor_integration.py` keeps only real concurrency (via the
+  `rendezvous_pid` marker helper, replacing interval witnesses that flaked under xdist);
+  `test_mcp_smoke` kills the server if the graceful SIGTERM exit exceeds 15 s under
+  parallel load.
+- **Test tooling** — `pytest-xdist` dev dependency; `make test-unit` and
+  `make test-integration` (`-n auto`) targets for iteration; `make test` stays the
+  authoritative sequential run (CI, `make release`).
+- **New manual knowledge-base file** — `maude-lib.md` (added mid-cycle at `b8809cc`)
+  documents the `maude` wheel layout, prelude discovery (`MAUDE_LIB` → wheel dir → cwd),
+  and prelude availability per recycled worker; it already reflects the per-call
+  recycling.
+- **New planning record** — `.agents/planning/no_new_module_quirk/` is a complete PDD
+  cycle with a ready-to-send `maude-bindings-issue.md` proposal (filing it is pending).
+- Inconsistencies resolved: `AGENTS.md`'s workers default, executor semantics and tool
+  description were refreshed; `README.md`'s env table and tool bullet now document the
+  hermetic/whole-load semantics; `CHANGELOG.md` `[0.0.4]` records the fix (no separate
+  `0.0.5` section — `0.0.4.dev0` is the WIP release).
+
+## Changes absorbed into the previous refresh (2026-09-29)
 
 - New `harold_mcp.diagnostics` package — provider seam (`DiagnosticProvider` protocol,
   `SourceFile`/`ProviderDiagnostic`/`FixSuggestion` values, `DiagnosticsError`
@@ -95,6 +135,10 @@ kept for the record.
    caught `MaudeFileNotFoundError` or `MaudeWorkerCrashedError` at the tool boundary must
    catch `SourceFileNotFoundError` / `DiagnosticCollectionError` instead (the Maude error
    stays reachable as the chained cause). Pre-1.0 API churn, recorded in `CHANGELOG.md`.
+10. **Minor: the tool docstring's hermetic/whole-load sub-bullets have inconsistent
+    indentation** (the two sub-bullets are indented deeper than their parent bullet and
+    their continuation lines are shallower), so the served MCP description renders them
+    slightly off; cosmetic, no behavioral impact.
 
 ## Completeness gaps
 
@@ -107,9 +151,10 @@ kept for the record.
 2. **No timeout integration test.** The timeout mapping is unit-tested; a real hang needs
    a deliberately-stuck worker (`worker.sleep` exists but no slow fixture triggers the
    timeout path end-to-end).
-3. **Advisory/`<standard input>` hardening is partial.** ANSI stripping, binary input,
-   `skipped:` and `unable to locate file:` formats are pinned; multi-line Maude warning
-   messages are not yet exercised (none observed).
+3. **Advisory/`<standard input>` hardening is mostly resolved.** ANSI stripping, binary
+   input, `skipped:`/`unable to locate file:` formats and the `(fmod X) :` spelling are
+   pinned; `<standard input>` warnings are attributed to the diagnosed file; multi-line
+   Maude warning messages are still not exercised (none observed).
 4. **The server CLI wiring is untested.** `main.py` (cyclopts app, `serve` subcommand,
    default command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
    The snapshot CLI, by contrast, has in-process tests in

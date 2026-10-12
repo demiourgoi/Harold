@@ -12,7 +12,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **How does the Maude interpreter find its prelude, and what does `MAUDE_LIB` change?** → `maude-lib.md`
 - **What data structures/types exist?** → `data_models.md`
 - **What are the known gaps or inconsistencies?** → `review_notes.md`
-- **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale; `scala-issue.md` documents a related SIGSEGV/throughput analysis for the Scala/Java bindings)
+- **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` (stderr capture + crash containment) and `.agents/planning/sigsegv-under-load/issue.md` (SIGSEGV history; `scala-issue.md` documents a related analysis for the Scala/Java bindings); `.agents/planning/no_new_module_quirk/` adds per-call interpreter isolation.
 - **Why does the tool have two diagnostic sources, and how does the linter work?** → `.agents/planning/port-linter.py/design/detailed-design.md`; condensed record in `.agents/planning/port-linter.py/summary.md`
 - **What is planned next (run tool, RAG index)?** → `.agents/planning/port-maude_eval.py/summary.md` (paused research for term evaluation) and `.agents/planning/maude-diagnostics-tool-v1/`
 
@@ -21,11 +21,11 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 | File | Content | Consult when… |
 | --- | --- | --- |
 | [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, package layout, dependency management, the two console scripts | you need basic facts about the project (language, versions, tooling) |
-| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker), provider seam and aggregation, heuristic linter placement, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
+| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker, one task per process), provider seam and aggregation, heuristic linter placement, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
 | [`components.md`](components.md) | Per-module responsibilities: `main`, `settings`, the `server` package (incl. the tag vocabulary `server/tags.py` and the tool), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, interpreter provider, worker), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
 | [`interfaces.md`](interfaces.md) | MCP tool surface (two providers, `fix` payload, error semantics), both console scripts, env-var config, internal Python API (seam protocol, rules registry, `MaudeExecutor`, worker ops), import-time side effects | you need the public surface or must call/register a tool |
 | [`data_models.md`](data_models.md) | Wire result models, provider-seam value types, linter-internal types, worker protocol TypedDicts, the two error hierarchies, framework types, typing conventions | you need the type landscape or must add a model |
-| [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution and failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
+| [`workflows.md`](workflows.md) | Dev loop (incl. the test splits), server lifecycle, hermetic per-call semantics, tool execution and failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
 | [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role and the Maude pin/prelude snapshot link) | you plan to add, upgrade, or reason about a dependency |
 | [`maude-lib.md`](maude-lib.md) | The third-party `maude` wheel internals: bundle layout, how `maude.init` locates `prelude.maude` (`MAUDE_LIB` → `libmaude.so` directory → cwd), prelude availability in workers/`InterpreterDiagnosticProvider`, and the `MAUDE_LIB` version-matching caveat | you reason about the interpreter, prelude loading, or `MAUDE_LIB` |
 | [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations | you hit an inconsistency or want to improve the docs |
@@ -48,7 +48,9 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "How do I refresh the prelude sort list?" → `workflows.md` → Prelude snapshot maintenance; the CLI is documented in `DEVELOPER_GUIDE.md` and `interfaces.md`.
 - "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
 - "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.4]`.
-- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
+- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker and, with `max_tasks_per_child=1`, per call; fail-fast init check in the lifespan); `components.md` → `harold_mcp.maude.worker`.
+- "Why does every diagnostics call get a fresh interpreter?" → `architecture.md` → key decision 2; `workflows.md` → Hermetic calls; design record in `.agents/planning/no_new_module_quirk/` (the deferred `q .` residue bug).
+- "How are warnings from a loaded dependency reported?" → `components.md` → `harold_mcp.maude.provider` (whole-file diagnostics naming the dependency); `workflows.md` → Hermetic calls; `data_models.md` → `WarningDict.file`.
 - "Where does the bundled Maude prelude come from, and is it used by `InterpreterDiagnosticProvider`?" → `maude-lib.md`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.

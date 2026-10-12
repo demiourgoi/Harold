@@ -10,7 +10,11 @@
 2. Edit code under `src/harold_mcp` (tests under `tests/`).
 3. `make check` — lockfile consistency (`uv lock --locked`), ruff (lint fails if any
    auto-fix is applied) + ruff format, mypy, **basedpyright** (unused call results), deptry.
-4. `make test` — pytest with coverage (`--cov --cov-config=pyproject.toml`).
+4. `make test` — pytest with coverage (`--cov --cov-config=pyproject.toml`). For iteration,
+   `make test-unit` (fast, hermetic, no Maude interpreter) and `make test-integration`
+   (parallel via pytest-xdist, `-n auto`; every call pays a process spawn + prelude init
+   because workers are recycled per call) run the splits; `make test` stays the
+   authoritative sequential run for CI and releases.
 5. `make release` — full CI pass (`install check test docs-test`), then prints a success
    message.
 
@@ -19,7 +23,8 @@
 - Development: `make run` (or `uv run harold-mcp`) — serves MCP over stdio.
 - Entry points: `uv run harold-mcp --help` lists the cyclopts CLI (default command and
   `serve`).
-- Startup: lifespan warm-up pings the Maude worker (fail-fast on init failure).
+- Startup: lifespan fail-fast init check — one `init_maude` ping per worker (the pinged
+  processes are recycled immediately; there is no warm pool).
 - Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
   lifespan; workers then exit on their own via the queue pipe).
 - Connect an MCP-compatible client (Zed and opencode are the configurations we test; other
@@ -33,7 +38,7 @@ flowchart TD
     A[harold-mcp console script] --> B[main.run]
     B --> C[server.run<br>SIGTERM handler installed]
     C --> D[mcp.run enters lifespan]
-    D --> E[MaudeExecutor.start<br>pool warm-up, fail-fast]
+    D --> E[MaudeExecutor.start<br>fail-fast init check, one ping per worker]
     E --> F[MCP over stdio]
     F --> G[tool call maude_program_diagnostics path]
     G --> H{SourceFile.from_path<br>regular file?}
@@ -74,6 +79,30 @@ flowchart TD
    share a position); each rule returns findings with exact 1-based spans.
 4. `HeuristicLinterProvider` stamps each finding with the rule's `code`/`severity` and
    hands them to the aggregator; fixes are report-only, the file is never modified.
+
+### Hermetic calls (per-call interpreter isolation)
+
+- The pool recycles each worker after a single task (`max_tasks_per_child=1`), so every
+  `maude_program_diagnostics` call loads its file into a **fresh interpreter process**:
+  loaded modules and parser state never carry over between calls. This fixed the deferred
+  `q .` parser-residue contamination (a file with a top-level `q .`/`quit .` used to leave
+  the parser half-parsed and contaminate the *next* call; see
+  `.agents/planning/no_new_module_quirk/`).
+- Consequences: there is no session state (`last load wins` is gone); each call pays
+  spawn + prelude init (≈1 s); `HAROLD_MAUDE_WORKERS` bounds concurrency (~100 MB per
+  running interpreter), not standing workers. `MaudeExecutor.start()` pings are a
+  fail-fast initialization check, not a warm-up.
+- Relative input paths are absolutized by `SourceFile.from_path` before the worker sees
+  them, because a fresh worker's working directory is not the client's; the result echoes
+  the resolved absolute path.
+- Interpreter warnings are attributed honestly: own-file (and `<standard input>`) warnings
+  keep their line; a warning Maude attributed to a `load`/`in` dependency becomes a
+  whole-file diagnostic naming the dependency and suggesting `maude_program_diagnostics`
+  on it.
+- Regression coverage: the isolation tests (each `q .` fixture followed by a clean
+  diagnosis), the dependency tests, and
+  `test_parallel_diagnostics_do_not_share_interpreter_state` (4 concurrent workers, every
+  interpreter-clean fixture swept), plus the relative-path test.
 
 ## Worker crash recovery
 
@@ -138,6 +167,10 @@ flowchart TD
 - `tox` — runs the test suite on Python 3.14 (single env `py314` in `tox.ini`). The CI
   workflows themselves live at the Git repository root (`../.github/workflows/` relative
   to this package directory).
+- `pytest-xdist` (dev group) powers `make test-integration`; the sequential `make test`
+  remains what CI and `make release` run. `-n auto` is affinity-aware on Python 3.13+, so
+  the same target fits workstations and small CI runners; cap it with
+  `PYTEST_XDIST_AUTO_NUM_WORKERS=<n>` on shared machines.
 
 ## Related documents
 

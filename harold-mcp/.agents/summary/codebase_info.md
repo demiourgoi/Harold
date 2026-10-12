@@ -4,7 +4,7 @@
 
 ## Identity
 
-- **Project**: `harold-mcp` v0.0.4.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.4]` section documenting the heuristic-linter port)
+- **Project**: `harold-mcp` v0.0.4.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.4]` section documenting the heuristic-linter port and the hermetic-calls/isolation work)
 - **Author**: Juan Rodriguez (`juanrh@pm.me`)
 - **Repository**: <https://github.com/demiourgoi/harold>
 - **Documentation site**: <https://demiourgoi.github.io/Harold/> (MkDocs, built from `docs/`)
@@ -47,6 +47,7 @@ The heuristic linter and the diagnostics seam added **no** runtime dependencies:
 ## Dev dependencies (dev group)
 
 - `pytest`, `pytest-cov` — testing and coverage
+- `pytest-xdist` — parallel integration runs (`make test-integration`, `-n auto`)
 - `ruff` — linter and formatter
 - `mypy` — primary static type checker
 - `basedpyright` — minimal companion check (unused call results only)

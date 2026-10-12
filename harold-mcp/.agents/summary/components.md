@@ -17,8 +17,12 @@
 ### `harold_mcp.settings`
 
 - **Responsibility**: application configuration, read once from `HAROLD_*` env vars.
-- `Settings(BaseSettings)` — flat model: `maude_workers: int` (default 1, `gt=0`),
-  `maude_worker_timeout_secs: int` (default 60, `gt=0`). Invalid values fail at import.
+- `Settings(BaseSettings)` — flat model: `maude_workers: int` (default via
+  `_default_maude_workers()` → `max(1, min(3, (os.cpu_count() or 0) // 2))` — half the
+  logical CPUs, capped at 3; validated with `gt=0`), `maude_worker_timeout_secs: int`
+  (default 60, `gt=0`). Workers are transient (`max_tasks_per_child=1`), so
+  `maude_workers` caps concurrent per-call interpreters (≈100 MB each), not warm workers.
+  Invalid values fail at import.
 - `settings` — module-level singleton; `get_settings() -> Settings` returns it (FastMCP
   dependency factory). Env vars are documented in `README.md`.
 
@@ -29,7 +33,7 @@
 - **`server.py`** — the FastMCP instance and its lifecycle:
   - `mcp = FastMCP(name="Harold", instructions=..., website_url=..., icons=[HAROLD_ICON], lifespan=app_lifespan)`.
   - `app_lifespan` — `@lifespan`-decorated async generator: `get_maude_executor(
-    get_settings()).start()` (warm-up, fail-fast), teardown in `finally`.
+    get_settings()).start()` (fail-fast init check), teardown in `finally`.
   - `run()` — registers a SIGTERM handler that raises `KeyboardInterrupt`, calls
     `mcp.run()`, and on `KeyboardInterrupt` logs and calls `os._exit(0)` (see
     `architecture.md` §5 for why).
@@ -47,19 +51,23 @@
     `MaudeFix`, `MaudeDiagnostic` (with `source`, `code`, `fix`), `MaudeDiagnosticsSummary`
     (with `info`), `MaudeProgramDiagnosticsResult`.
   - Tool flow: `SourceFile.from_path(path)` (pre-check: rejects missing/non-regular
-    files with `SourceFileNotFoundError`, reads the text once) →
+    files with `SourceFileNotFoundError`, resolves the path to absolute, reads the text
+    once) →
     `collect_diagnostics((InterpreterDiagnosticProvider(maude_executor),
     HeuristicLinterProvider()), source)` → adapter to the wire models. `success` is
     `all(severity == "info")`; `summary` counts all three severities; `range` is `None`
-    for whole-file problems; fix edits map to wire ranges with an exclusive `end`.
+    for whole-file problems; fix edits map to wire ranges with an exclusive `end`. The
+    result reports `str(source.path)` — the resolved absolute path — not the raw input.
   - Registered with the full read-only annotation profile (`readOnlyHint=True`,
     `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) and
     `tags=harold_tags(DIAGNOSTICS)`. The models inherit the private `_ResultModel` base
     (`ConfigDict(use_attribute_docstrings=True)`), so their attribute docstrings reach
     clients as output-schema field descriptions (see `data_models.md`); a code comment next
     to the tool records that only the text above `Args:` becomes the MCP description.
-  - The docstring describes both sources, the severity meanings, the `fix` payload, the
-    ordering, and that loading mutates interpreter state ("last load wins").
+  - The docstring describes both sources, their severity meanings, the `fix` payload, the
+    ordering, the hermetic per-call semantics (fresh interpreter; no state carries over)
+    and the whole-load/dependency behavior (dependency problems are whole-file diagnostics
+    naming the dependency and pointing at this tool).
 
 ### `harold_mcp.diagnostics` (package)
 
@@ -73,7 +81,8 @@ models, so every capability package can depend on it independently.
     `DiagnosticSource = Literal["interpreter", "heuristic-linter"]` (the closed set of
     provider names; tool code and the wire model share these aliases).
   - Frozen slotted dataclasses: `SourceFile` (`path` + `text`; `from_path` classmethod
-    rejects anything that is not a regular file and reads with
+    rejects anything that is not a regular file, then stores `Path.resolve()` — `path` is
+    always absolute, so the worker can load it from any cwd — and reads with
     `utf-8`/`errors="replace"`), `FixEdit` (`line`, `start_column`, exclusive
     `end_column`, `new_text`), `FixSuggestion` (`description` + `edits` tuple),
     `ProviderDiagnostic` (`source`, `severity`, `code`, `message`, optional 1-based
@@ -175,35 +184,47 @@ replacing it (findings are heuristics and may be false positives).
   imports the SWIG `maude` bindings.
 - **`executor.py`** — the client-side access layer:
   - Error hierarchy: `MaudeError(RuntimeError)` base; `MaudeInitError` (worker init
-    failure, surfaced at warm-up); `MaudeWorkerError(reason)` with
+    failure, surfaced at startup); `MaudeWorkerError(reason)` with
     `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError` subclasses. The old
     `MaudeFileNotFoundError` was removed — the tool's input error is
     `harold_mcp.diagnostics.SourceFileNotFoundError`.
   - `MaudeExecutor(Logging)` — wraps a `ProcessPoolExecutor` (spawn,
-    `initializer=worker.init_maude`): `start()` (warm-up pings, `MaudeInitError` on
-    failure), `shutdown()` (idempotent), `submit()` (raises `MaudeWorkerCrashedError` on a
-    broken pool, replaces it), `diagnostics(path)` (thin wrapper over `_run_task`), and
-    the generic `_run_task(fn, *args) -> T` runner (submit + await + crash/timeout
-    mapping). `_reset_executor(replace=True, failed=None)` is a pure command (CQS) that
-    swaps the pool under `_executor_lock` (an RLock) and kills the old pool with
-    `kill_workers()` outside the lock; the `failed` identity check makes concurrent
-    failure reports replace exactly once.
+    `initializer=worker.init_maude`, `max_tasks_per_child=1` — each task runs in a fresh
+    process, so no interpreter state survives across calls): `start()` (fail-fast init
+    check: one ping per worker, `MaudeInitError` on failure — the pings are recycled,
+    not kept warm), `shutdown()` (idempotent), `submit()` (raises
+    `MaudeWorkerCrashedError` on a broken pool, replaces it), `diagnostics(path)` (thin
+    wrapper over `_run_task`), and the generic `_run_task(fn, *args) -> T` runner
+    (submit + await + crash/timeout mapping). `_reset_executor(replace=True,
+    failed=None)` is a pure command (CQS) that swaps the pool under `_executor_lock` (an
+    RLock) and kills the old pool with `kill_workers()` outside the lock; the `failed`
+    identity check makes concurrent failure reports replace exactly once.
   - `get_maude_executor(settings: Settings = Depends(get_settings)) -> MaudeExecutor` —
     process-wide singleton, created lazily under a lock (nested FastMCP dependency).
 - **`provider.py`** — `InterpreterDiagnosticProvider` (v1 behavior behind the seam):
-  runs `executor.diagnostics(str(source.path))`, maps each `Warning:` to a line-only
-  `warning` diagnostic and appends one synthesized whole-file `error` when the load
-  failed (`ok=False`); every diagnostic carries `source="interpreter"` and
-  `code="compiler"`. A `MaudeWorkerError` (crash/timeout) becomes a
-  `DiagnosticProviderError` with the original error as `__cause__`.
+  runs `executor.diagnostics(str(source.path))`, maps each `Warning:` to a `warning`
+  diagnostic and appends one synthesized whole-file `error` when the load failed
+  (`ok=False`); every diagnostic carries `source="interpreter"` and `code="compiler"`.
+  Attribution rule (`_to_diagnostic`): warnings Maude attributed to the diagnosed file or
+  to `<standard input>` (some first-line warnings) keep their line; warnings for another
+  file (a `load`/`in` dependency) become **whole-file** diagnostics (`line=None`) whose
+  message names the dependency and suggests running `maude_program_diagnostics` on it
+  (`_dependency_message`; a missing final punctuation is completed). A `MaudeWorkerError`
+  (crash/timeout) becomes a `DiagnosticProviderError` with the original error as
+  `__cause__`.
 - **`worker.py`** — the interpreter side, pickled/spawn-imported by the worker process;
   imports `maude` **lazily inside functions** so the server process never touches the
   bindings (the absolute `import maude` is the third-party package, not this one):
   - `init_maude()` — idempotent; `maude.init(loadPrelude=True, advise=False)` then
     disables Maude IO (`setAllowDir/File/Processes(False)`); raises `WorkerInitError`.
-  - `ping()` — warm-up no-op. `sleep(seconds) -> int` — test/timeout support.
+  - `ping()` — no-op init check (one task per process: the pinged worker is recycled).
+    `sleep(seconds) -> int` and `rendezvous_pid(directory, timeout)` — test/timeout
+    support (the rendezvous helper makes each task complete only once a peer task is
+    running concurrently).
   - `load_diagnostics(path) -> LoadDiagnosticsResult` — fd-2 capture around `maude.load`
-    (binary tempfile, lossy UTF-8 decode, ANSI CSI stripping, `Warning:` regex parsing).
+    (binary tempfile, lossy UTF-8 decode, ANSI CSI stripping, `Warning:` regex parsing;
+    `WarningDict` carries the `file` Maude attributed the warning to, and the regex
+    tolerates the `(fmod X) :` spelling).
   - `_crash()` — test-only `os._exit(1)` (SIGSEGV analogue).
 
 ### `harold_mcp.resources`
@@ -220,23 +241,26 @@ replacing it (findings are heuristics and may be false positives).
 ## Tests
 
 - `tests/unit/` (hermetic, mocked):
-  - `test_settings.py` — defaults, env overrides, case-insensitivity, invalid values,
-    singleton.
+  - `test_settings.py` — the default formula (`max(1, min(3, cpu_count // 2))`,
+    monkeypatched `cpu_count` matrix incl. `None`), env overrides, case-insensitivity,
+    invalid values, singleton.
   - `test_tags.py` — the shared vocabulary: `harold_tags` always adds the domain tags,
     and the tag strings are pinned (they are part of the client-visible interface).
-  - `test_maude_worker.py` — `_parse_warnings` (observed formats, ANSI stripping,
-    unmatched/advisory lines ignored) and the `init_maude` sequence (success/failure, IO
-    lockdown, idempotency) with the `maude` bindings faked via `sys.modules`.
-  - `test_maude_executor.py` — fake executors/futures: warm-up (success/fail), broken
-    submit, crash/timeout mapping + kill, exception propagation, exactly-once concurrent
-    replacement, singleton.
+  - `test_maude_worker.py` — `_parse_warnings` (observed formats incl. the `(fmod X) :`
+    spacing and `<standard input>`, the `file` field, ANSI stripping, unmatched/advisory
+    lines ignored) and the `init_maude` sequence (success/failure, IO lockdown,
+    idempotency) with the `maude` bindings faked via `sys.modules`.
+  - `test_maude_executor.py` — fake executors/futures: `start()` ping/init check
+    (success/fail), broken submit, crash/timeout mapping + kill, exception propagation,
+    exactly-once concurrent replacement, singleton.
   - `test_maude_provider.py` — `InterpreterDiagnosticProvider`: warning/error mapping,
-    `source`/`code` stamping, and worker errors becoming `DiagnosticProviderError` with
-    the cause chained.
+    `source`/`code` stamping, own-file and `<standard input>` attribution, foreign-file
+    warnings becoming whole-file dependency diagnostics, and worker errors becoming
+    `DiagnosticProviderError` with the cause chained.
   - `test_diagnostics_seam.py` — seam contracts: errors are not `MaudeError`s, message
     formatting, position invariants, frozen fix values, and `SourceFile.from_path`
-    (regular file, string paths, missing/directory/non-regular/unreadable rejection,
-    lossy decoding, newline normalization).
+    (regular file, string paths, relative-path resolution to absolute, missing/directory/
+    non-regular/unreadable rejection, lossy decoding, newline normalization).
   - `test_diagnostics_aggregate.py` — merge provenance and ordering (file order, provider
     tie-break, whole-file last), every provider receives the source, no-diagnostics
     success, one failing provider → `DiagnosticCollectionError` without partial results,
@@ -266,27 +290,40 @@ replacing it (findings are heuristics and may be false positives).
     junk-extraction refusal, missing prelude.
 - `tests/integration/` (real interpreter; distinct basenames to avoid pytest module-name
   collisions):
-  - `test_maude_worker_integration.py` — `load_diagnostics` on the four interpreter
-    fixtures + advisory suppression on redefinition.
-  - `test_maude_executor_integration.py` — warm-up, interpreter fixtures, real `_crash`
-    containment + retry, two-worker parallelism via slow `sleep` tasks.
+  - `test_maude_worker_integration.py` — raw `load_diagnostics` shapes on the interpreter
+    fixtures (including the `file` values, `<standard input>` attribution) + advisory
+    suppression on redefinition.
+  - `test_maude_executor_integration.py` — real concurrent execution across workers, via
+    the `rendezvous_pid` marker helper (completion proves two processes ran concurrently
+    regardless of scheduling jitter). Fixture round-trips and crash recovery live at the
+    worker level and the tool level respectively (file docstring says so).
   - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-pool drive.
   - `test_diagnostics_integration.py` — the acceptance suite, per source: interpreter
-    fixtures; linter fixtures for every rule (`when_guard`, `dash_comment`, `eq_in_if`,
-    `non_linear_pattern`, `undeclared_identifier`, `nonascii_apostrophe`,
-    `redeclare_prelude`, `elt_sort_declaration`); negative fixtures
-    (`string_with_specials`, `quoted_id_when_dash`, `declarations_when_dash`,
-    `capitalized_identifiers_ok`); binary-file regression; parallel workers; crash
-    recovery (the tool now raises `DiagnosticCollectionError` naming `interpreter` and
-    recovers on the next call); and the MCP smoke test (real stdio server), which asserts
-    the client-visible annotation profile and the new schema (e.g. `redeclare_prelude`
-    returns `success=true` with one `heuristic-linter`/`prelude-sort-redeclared`/`info`
-    diagnostic). Tags are intentionally not asserted on the wire: mcp SDK 1.29 does not
-    serialize them.
-- `tests/integration/fixtures/` — 17 files:
+    fixtures; the relative-path regression test; the isolation regressions (`quit_command`,
+    `q_with_trailing_text`, and a `q .` inside a loaded dependency) each followed by a
+    clean diagnosis; the dependency tests (`loads_dependency`, `loads_missing_dependency`,
+    `loads_bad_dependency` with honest attribution); linter fixtures for every rule
+    (`when_guard`, `dash_comment`, `eq_in_if`, `non_linear_pattern`,
+    `undeclared_identifier`, `nonascii_apostrophe`, `redeclare_prelude`,
+    `elt_sort_declaration`); negative fixtures (`string_with_specials`,
+    `quoted_id_when_dash`, `declarations_when_dash`, `capitalized_identifiers_ok`);
+    binary-file regression; the parallel race test
+    (`test_parallel_diagnostics_do_not_share_interpreter_state`, 4 workers, every
+    interpreter-clean fixture swept); crash recovery (the tool raises
+    `DiagnosticCollectionError` naming `interpreter` and recovers on the next call); and
+    the MCP smoke test (real stdio server), which asserts the client-visible annotation
+    profile, the new schema (e.g. `redeclare_prelude` returns `success=true` with one
+    `heuristic-linter`/`prelude-sort-redeclared`/`info` diagnostic) and the hermetic +
+    dependency sentences of the served description. Tags are intentionally not asserted on
+    the wire: mcp SDK 1.29 does not serialize them.
+- `tests/integration/fixtures/` — 26 files:
   - interpreter baseline: `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
     (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude
     recovers from everything parseable), `no_new_module.maude`;
+  - isolation/`q .` regressions: `quit_command.maude`, `q_with_trailing_text.maude`,
+    `dep_q.maude` + `loads_dependency_q.maude`;
+  - dependency handling: `dep_clean.maude` + `loads_dependency.maude`, `dep_bad.maude` +
+    `loads_bad_dependency.maude`, `loads_missing_dependency.maude`;
   - linter positives: `when_guard.maude`, `dash_comment.maude`, `eq_in_if.maude`,
     `non_linear_pattern.maude`, `undeclared_identifier.maude`, `nonascii_apostrophe.maude`,
     `redeclare_prelude.maude`;
@@ -312,6 +349,13 @@ replacing it (findings are heuristics and may be false positives).
   value, the seed of "run Maude programs") but deliberately not implemented; `design/` and
   `implementation/` are intentionally empty and `summary.md` lists the five Phase-2 probes
   to resume with. No code changed for it.
+- `no_new_module_quirk/` — complete PDD cycle for the deferred `q .` parser-residue bug
+  (implemented): `rough-idea.md`, `idea-honing.md`, `research/` (quirk inventory, race
+  reproduction, dependencies, misattribution, isolation cost), `design/detailed-design.md`
+  (option A: `max_tasks_per_child=1`), `implementation/plan.md` (8 steps, checklist
+  ticked, deviations recorded), `summary.md`, and the ready-to-send
+  `maude-bindings-issue.md` with its standalone `repro_minimal.py` + `repro/` `.maude`
+  inputs.
 - `sigsegv-under-load/` — SIGSEGV history that motivated the worker architecture:
   `issue.md` (the `maude` Python bindings) and `scala-issue.md` (root-cause analysis of
   SIGSEGV and throughput degradation in the Scala/Java Maude bindings — background

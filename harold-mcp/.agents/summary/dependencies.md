@@ -23,6 +23,7 @@ stack.
 | Package | Purpose |
 | --- | --- |
 | `pytest` / `pytest-cov` | Tests and coverage |
+| `pytest-xdist` | Parallel integration runs for `make test-integration` (`-n auto`); `make test` stays sequential |
 | `ruff` | Lint and format (configuration in `pyproject.toml`) |
 | `mypy` | Primary strict type checker (configuration in `pyproject.toml`) |
 | `basedpyright` | Minimal companion check: `reportUnusedCallResult` only (`typeCheckingMode = "off"`), matching Zed's LSP |
@@ -55,7 +56,8 @@ stack.
   interpreter would have no `maude` wheel and would fall back to a source build. Relax the cap
   when the bindings publish newer wheels. Lint/format target is `py314`.
 - `ProcessPoolExecutor` uses an explicit `spawn` context (threaded parent; `forkserver`
-  needs an AF_UNIX socket); Python 3.14 features in use: `ProcessPoolExecutor.kill_workers()`,
+  needs an AF_UNIX socket) and `max_tasks_per_child=1` (one task per process: hermetic
+  per-call interpreters); Python 3.14 features in use: `ProcessPoolExecutor.kill_workers()`,
   `BrokenProcessPool` from `concurrent.futures.process`, PEP 758 `except A, B:` syntax.
 
 ## Related documents
