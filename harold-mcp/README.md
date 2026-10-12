@@ -96,14 +96,17 @@ If you want to run a specific version, check the release [history in PyPI](https
 
 ### Configuration
 
-The server is configured through environment variables (`HAROLD_*` prefix) set in the MCP server configuration:
+The server is configured through environment variables set in the MCP server configuration. `HAROLD_*` variables are Harold's own settings; `MAUDE_LIB` is inherited from the underlying Maude bindings:
 
 | Env var | Meaning | Default |
 | --- | --- | --- |
 | `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Diagnostics run in parallel across workers; more workers use more memory (each creates its own Maude interpreter). | `1` |
 | `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Seconds to wait for each worker call before failing it as timed out. | `60` |
+| `MAUDE_LIB` | Inherited by the Maude bindings, not read by Harold itself: colon-separated directories where Maude searches for `prelude.maude` (and for library files loaded with `in`/`load`). Only needed to override the prelude bundled with the `maude` wheel. | unset (the bundled prelude is used) |
 
 Invalid values (e.g. `HAROLD_MAUDE_WORKERS=0`) make the server fail fast at startup.
+
+If you use `MAUDE_LIB` to override the bundled prelude, that prelude must match the Maude version Harold uses (currently Maude 3.5.1, the version the `maude` dependency is built against); a mismatched prelude can make the interpreter fail to load it or behave inconsistently. See [`.agents/summary/maude-lib.md`](.agents/summary/maude-lib.md) for how Maude locates the prelude.
 
 ## Development
 

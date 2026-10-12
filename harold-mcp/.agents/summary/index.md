@@ -9,6 +9,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **Where is something implemented?** → `components.md`, then `architecture.md`
 - **How do I invoke/run it? What are the entry points?** → `interfaces.md`, `workflows.md`
 - **What stack/dependencies are in play, and what are their constraints?** → `dependencies.md`, `codebase_info.md`
+- **How does the Maude interpreter find its prelude, and what does `MAUDE_LIB` change?** → `maude-lib.md`
 - **What data structures/types exist?** → `data_models.md`
 - **What are the known gaps or inconsistencies?** → `review_notes.md`
 - **Why is the Maude interpreter in a worker process?** → `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` and `.agents/planning/sigsegv-under-load/issue.md` (design rationale; `scala-issue.md` documents a related SIGSEGV/throughput analysis for the Scala/Java bindings)
@@ -26,6 +27,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 | [`data_models.md`](data_models.md) | Wire result models, provider-seam value types, linter-internal types, worker protocol TypedDicts, the two error hierarchies, framework types, typing conventions | you need the type landscape or must add a model |
 | [`workflows.md`](workflows.md) | Dev loop, server lifecycle, tool execution and failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
 | [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role and the Maude pin/prelude snapshot link) | you plan to add, upgrade, or reason about a dependency |
+| [`maude-lib.md`](maude-lib.md) | The third-party `maude` wheel internals: bundle layout, how `maude.init` locates `prelude.maude` (`MAUDE_LIB` → `libmaude.so` directory → cwd), prelude availability in workers/`InterpreterDiagnosticProvider`, and the `MAUDE_LIB` version-matching caveat | you reason about the interpreter, prelude loading, or `MAUDE_LIB` |
 | [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations | you hit an inconsistency or want to improve the docs |
 
 ## Relationships between documents
@@ -47,6 +49,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
 - "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.4]`.
 - "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker; pool warm-up in the lifespan); `components.md` → `harold_mcp.maude.worker`.
+- "Where does the bundled Maude prelude come from, and is it used by `InterpreterDiagnosticProvider`?" → `maude-lib.md`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.
 - "Can I use Python 3.12 syntax here?" → `codebase_info.md` → language floor is 3.14.
