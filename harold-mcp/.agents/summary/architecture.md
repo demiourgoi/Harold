@@ -35,7 +35,7 @@ its findings are merged with the interpreter's by the diagnostics aggregator.
 graph TB
     main[main.py<br>cyclopts: default + serve] --> serverpkg[server/__init__.py<br>mcp, run + tool registration]
     serverpkg --> serversrv[server/server.py<br>FastMCP + lifespan + signals]
-    serverpkg --> tools[server/tools/diagnostics.py<br>tool + wire models + adapter]
+    tools[server/tools/diagnostics.py<br>tool + wire models + adapter<br>+ provider registry DI]
     tools --> diagpkg[diagnostics/<br>seam + aggregator]
     tools --> heurpkg[heuristic/<br>linter provider + rules]
     tools --> maudeprov[maude/provider.py<br>interpreter provider]
@@ -94,7 +94,8 @@ graph TB
    (`HAROLD_` prefix): `maude_workers` (default `max(1, min(3, cpu_count // 2))` via
    `default_factory`), `maude_worker_timeout_secs` (default 60).
    `get_maude_executor(settings=Depends(get_settings))` is a lazy, lock-guarded
-   singleton — FastMCP nested dependency injection.
+   singleton — FastMCP nested dependency injection; the tool module's
+   `get_diagnostic_providers` nests one level deeper (providers → executor → settings).
 8. **CLI via cyclopts, two console scripts.** `harold_mcp.main` builds a cyclopts `App`
    whose default command and `serve` subcommand both call `server.run`;
    `harold_mcp.heuristic.prelude_extract` builds the maintenance CLI for the prelude sort
@@ -114,8 +115,10 @@ graph TB
     `DiagnosticProvider` protocol, and `collect_diagnostics`. The seam is
     provider-agnostic, stdlib-only and free of framework types; concrete providers live
     with the capability they belong to (`maude/provider.py`, `heuristic/provider.py`), and
-    the tool is the only place that wires providers and adapts seam values to the wire
-    models. Providers run **in order** (interpreter first — the order is also the
+    the tool module is the only place that wires providers — the `get_diagnostic_providers`
+    FastMCP dependency builds the registry (with `get_maude_executor` nested inside it) —
+    and adapts seam values to the wire models. Providers run **in order** (interpreter
+    first — the order is also the
     tie-break for findings on the same line) and a failure of any provider fails the whole
     call with `DiagnosticCollectionError`, which names every failing provider (no partial
     results: MCP cannot express "error + content"). The merge order is file position,

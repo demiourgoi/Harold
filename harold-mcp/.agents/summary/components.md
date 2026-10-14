@@ -50,14 +50,19 @@
   - Wire models (see `data_models.md`): `MaudePosition`, `MaudeRange`, `MaudeTextEdit`,
     `MaudeFix`, `MaudeDiagnostic` (with `source`, `code`, `fix`), `MaudeDiagnosticsSummary`
     (with `info`), `MaudeProgramDiagnosticsResult`.
+  - `get_diagnostic_providers(maude_executor=Depends(get_maude_executor))` — the
+    module-level FastMCP dependency returning the provider registry
+    `(InterpreterDiagnosticProvider(executor), HeuristicLinterProvider())`; the tool
+    receives it via `Depends` (dependency parameters are excluded from the MCP schema).
+    Direct callers (tests) pass an executor explicitly; the registry order is the
+    merge/tie-break order.
   - Tool flow: `SourceFile.from_path(path)` (pre-check: rejects missing/non-regular
     files with `SourceFileNotFoundError`, resolves the path to absolute, reads the text
-    once) →
-    `collect_diagnostics((InterpreterDiagnosticProvider(maude_executor),
-    HeuristicLinterProvider()), source)` → adapter to the wire models. `success` is
-    `all(severity == "info")`; `summary` counts all three severities; `range` is `None`
-    for whole-file problems; fix edits map to wire ranges with an exclusive `end`. The
-    result reports `str(source.path)` — the resolved absolute path — not the raw input.
+    once) → `collect_diagnostics(providers, source)` → adapter to the wire models.
+    `success` is `all(severity == "info")`; `summary` counts all three severities; `range`
+    is `None` for whole-file problems; fix edits map to wire ranges with an exclusive
+    `end`. The result reports `str(source.path)` — the resolved absolute path — not the
+    raw input.
   - Registered with the full read-only annotation profile (`readOnlyHint=True`,
     `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) and
     `tags=harold_tags(DIAGNOSTICS)`. The models inherit the private `_ResultModel` base
@@ -100,8 +105,9 @@ models, so every capability package can depend on it independently.
   - `collect_diagnostics(providers, source)`: runs every provider **in order**, never
     short-circuits after a failure (so all failures are named), discards successful
     providers' findings when any provider failed (no partial results, MCP cannot express
-    "error + content"), then sorts the merged list by (whole-file last, line, provider
-    registry order, column).
+    "error + content"), then sorts the merged list with the module-level `_order` key
+    (bound per call via `functools.partial`) by (whole-file last, line, provider registry
+    order, column).
 
 ### `harold_mcp.heuristic` (package)
 
@@ -265,7 +271,8 @@ replacing it (findings are heuristics and may be false positives).
     tie-break, whole-file last), every provider receives the source, no-diagnostics
     success, one failing provider → `DiagnosticCollectionError` without partial results,
     remaining providers still attempted, unexpected bugs reported with their type.
-  - `test_diagnostics.py` — the tool with a fake executor: warning/error mapping and the
+  - `test_diagnostics.py` — the tool with the real provider registry wired to a fake
+    executor (`_providers` helper): warning/error mapping and the
     synthesized whole-file error, `info`-only success, summary counts, whole-file ranges,
     adapter mapping of columns and fixes, pre-check before any provider,
     `DiagnosticCollectionError` propagation, and

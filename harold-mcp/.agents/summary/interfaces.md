@@ -14,8 +14,9 @@
   - `maude_program_diagnostics(path: str) -> MaudeProgramDiagnosticsResult` — diagnoses
     one Maude source file with two providers in a single call: the **Maude interpreter**
     load (worker process) and Harold's **heuristic linter** (server process, pure text).
-    Input schema is exactly `{path: str}` (the executor is injected via `Depends`,
-    excluded from the schema).
+    Input schema is exactly `{path: str}` (the provider registry is injected via
+    `Depends` — `get_diagnostic_providers`, which itself depends on
+    `get_maude_executor` — and excluded from the schema).
     - Every diagnostic carries `source` (`"interpreter"` | `"heuristic-linter"`), `code`
       (`"compiler"` for the interpreter; the rule name for linter findings), `severity`
       (`"info"` | `"warning"` | `"error"`), `message`, an LSP-style 1-based `range`
@@ -57,7 +58,7 @@ sequenceDiagram
     participant P as providers
     participant W as Maude worker
     C->>F: tools/call maude_program_diagnostics path
-    F->>T: run tool, inject executor via Depends
+    F->>T: run tool, inject providers via Depends
     T->>T: SourceFile.from_path pre-check and read
     T->>P: collect_diagnostics interpreter + heuristic, in order
     P->>W: interpreter provider: load_diagnostics task
@@ -108,6 +109,10 @@ Invalid values fail fast at import (pydantic validation).
   - `harold_tags(*tags) -> set[str]` — builds a tool's tag set with the domain tags
     automatically added; pass it to `@mcp.tool(tags=...)`.
   - Effect/safety metadata stays in `ToolAnnotations`, not tags.
+- `harold_mcp.server.tools.diagnostics.get_diagnostic_providers(
+  maude_executor=Depends(get_maude_executor))` — the provider registry in merge/tie-break
+  order, injected into the tool via `Depends`; direct callers (tests) pass an executor
+  explicitly.
 - `harold_mcp.diagnostics` — the provider seam (stdlib-only):
   - `DiagnosticProvider` — the protocol (`name`, `diagnose(source)`); implement it to
     add a new diagnostics source. Providers live with their capability package and raise

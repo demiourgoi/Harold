@@ -2,13 +2,39 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-10-12 refresh covers the
+Findings from the consistency and completeness review. The 2026-10-14 refresh covers the
+provider-registry FastMCP dependency; the 2026-10-12 refresh covers the
 `no_new_module_quirk` implementation (hermetic per-call interpreters, the new workers
 default, dependency-warning attribution, path absolutization, and the test-suite rework);
 the 2026-09-29 refresh covered the heuristic-linter port. Older resolved issues are kept
 for the record.
 
-## Changes absorbed into this refresh (2026-10-12)
+## Changes absorbed into this refresh (2026-10-14)
+
+- **Provider registry as a FastMCP dependency.** `server/tools/diagnostics.py` gained
+  `get_diagnostic_providers(maude_executor=Depends(get_maude_executor))`, returning the
+  ordered registry `(InterpreterDiagnosticProvider, HeuristicLinterProvider)`; the tool
+  now takes `providers: tuple[DiagnosticProvider, ...] = Depends(...)` instead of a
+  `maude_executor` parameter and builds nothing inline. The registry order remains the
+  merge/tie-break order; unit and integration tests build it with
+  `get_diagnostic_providers(maude_executor=<fake>)`.
+- **Ordering key extracted.** `diagnostics/aggregate.py`'s sort key moved from a nested
+  closure to the module-level `_order(provider_order, diagnostic)`, bound per call with
+  `functools.partial`; `fallback_index` collapsed into `len(provider_order)`. Behavior
+  unchanged (the ordering tests pin it).
+- **Lint nuance found during the review.** Ruff's B008 does not fire on a `Depends(...)`
+  default whose parameter is annotated with an immutable generic (`tuple[...]`), so the
+  tool's injected `providers` parameter needs no `# noqa: B008`; the
+  `get_diagnostic_providers` parameter (`MaudeExecutor`) keeps it. Documented in
+  `data_models.md` and `AGENTS.md`.
+- **Version bookkeeping.** 0.0.4 was released; `pyproject.toml` is now `0.0.5.dev0` with
+  an open (empty) `[0.0.5]` changelog section — `codebase_info.md` updated accordingly.
+- Verified unchanged: `workflows.md` (the provider-registry change does not alter any
+  documented flow), `maude-lib.md` (manually maintained, still accurate) and the rest of
+  this knowledge base apart from the items above and `functools` added to the stdlib list
+  in `dependencies.md`.
+
+## Changes absorbed into the 2026-10-12 refresh
 
 - **Hermetic per-call diagnostics.** `maude/executor.py` sets `max_tasks_per_child=1` on
   the pool, so every task runs in a fresh process (no loaded modules or parser state

@@ -149,7 +149,7 @@ interpreter error.
 | `FastMCP` | `fastmcp` | `server/server.py` — the server instance |
 | `Lifespan` (via `@lifespan`) | `fastmcp.server.lifespan` | `server/server.py` — the lifespan |
 | `App` | `cyclopts` | `main.py` (server CLI) and `heuristic/prelude_extract.py` (snapshot CLI) |
-| `Depends` | `fastmcp.dependencies` | tool + `get_maude_executor` (nested DI) |
+| `Depends` | `fastmcp.dependencies` | tool (via `get_diagnostic_providers`) + `get_maude_executor` (nested DI: providers → executor → settings) |
 | `ToolAnnotations` | `mcp.types` | tool annotations: full read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) — reaches clients over the wire |
 | tags (`set[str]`) | `fastmcp` `@mcp.tool(tags=...)` | `tools/diagnostics.py` via `harold_tags` — server-side categorization only with mcp SDK 1.29 (not serialized to clients) |
 | `Icon` / `Image` | `mcp.types` / `fastmcp.utilities.types` | `resources.py` — server branding |
@@ -179,9 +179,10 @@ Defined in `harold_mcp.server.tags` (plain `str` constants, plus the `harold_tag
 - The diagnostics seam and the linter are pure stdlib: frozen slotted dataclasses for
   values, `Literal` aliases for closed vocabularies (`Severity`, `DiagnosticSource`),
   `Protocol` for the provider contract, `TypedDict` across the process boundary.
-- FastMCP DI defaults (`Depends(...)` in signatures) need `# noqa: B008`; the
-  `@lifespan` decorator replaces the deprecated `@asynccontextmanager` +
-  `AsyncIterator` annotation.
+- FastMCP DI defaults (`Depends(...)` in signatures) need `# noqa: B008` — except when
+  the parameter's annotation is an immutable generic (e.g. `tuple[...]`), which ruff
+  exempts (the tool's injected `providers` parameter carries none); the `@lifespan`
+  decorator replaces the deprecated `@asynccontextmanager` + `AsyncIterator` annotation.
 
 ## Related documents
 

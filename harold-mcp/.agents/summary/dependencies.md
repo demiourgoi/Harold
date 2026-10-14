@@ -14,7 +14,7 @@
 | `pydantic-settings` | `>=2.15.0` | `Settings` from `HAROLD_*` env vars |
 
 The diagnostics seam and the heuristic linter added **no** runtime dependencies: they are
-stdlib-only (`dataclasses`, `typing`, `re`, `unicodedata`, `hashlib`, `importlib`,
+stdlib-only (`dataclasses`, `typing`, `functools`, `re`, `unicodedata`, `hashlib`, `importlib`,
 `datetime`, `collections`), which keeps the server process independent of the worker
 stack.
 

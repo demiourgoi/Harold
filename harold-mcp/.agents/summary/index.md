@@ -43,7 +43,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 
 - "Where do I register a new MCP tool?" → `components.md` → `harold_mcp.server` package (tools live in `server/tools/`, registered via `server/__init__.py`), then `interfaces.md` for the `@mcp.tool` + `Depends` pattern.
 - "How do I tag/annotate a new tool?" → `components.md` → `harold_mcp.server.tags` (build tag sets with `harold_tags(<category>)`); effect/safety metadata goes in `ToolAnnotations`, see `interfaces.md` and `data_models.md`.
-- "How do I add a diagnostics provider (e.g. a new Maude analysis)?" → `components.md` → `harold_mcp.diagnostics` (implement the `DiagnosticProvider` protocol); register it in the tool's provider tuple, `interfaces.md` → tool flow.
+- "How do I add a diagnostics provider (e.g. a new Maude analysis)?" → `components.md` → `harold_mcp.diagnostics` (implement the `DiagnosticProvider` protocol); register it in `get_diagnostic_providers` (`harold_mcp.server.tools.diagnostics`), `interfaces.md` → tool flow.
 - "How do I add or refine a linter rule?" → `components.md` → `harold_mcp.heuristic.rules` (`RULES` registry, `RuleFinding`); read the masking rules in `lexical.py` first; `.agents/planning/port-linter.py/design/detailed-design.md` Appendix D lists the known limitations.
 - "How do I refresh the prelude sort list?" → `workflows.md` → Prelude snapshot maintenance; the CLI is documented in `DEVELOPER_GUIDE.md` and `interfaces.md`.
 - "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
