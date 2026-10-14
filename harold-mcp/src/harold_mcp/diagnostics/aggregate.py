@@ -5,8 +5,9 @@ see `collect_diagnostics`): a failure of any provider fails the whole tool call,
 `DiagnosticCollectionError` names every failing provider with its cause.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 
 from harold_mcp.diagnostics.provider import (
     DiagnosticProvider,
@@ -47,6 +48,24 @@ def _describe(failure: ProviderFailure) -> str:
     return f"{failure.provider} ({reason})"
 
 
+def _order(
+    provider_order: Mapping[DiagnosticSource, int],
+    diagnostic: ProviderDiagnostic,
+) -> tuple[bool, int, int, int]:
+    """Order by file position, then provider, then column; whole-file problems last.
+
+    `provider_order` (each provider's position in the registry) comes first so the
+    caller can bind it with `functools.partial` and let the sort supply the diagnostic.
+    A diagnostic whose source is not registered sorts after every registered provider.
+    """
+    return (
+        diagnostic.line is None,
+        diagnostic.line or 0,
+        provider_order.get(diagnostic.source, len(provider_order)),
+        diagnostic.column or 0,
+    )
+
+
 def collect_diagnostics(
     providers: Sequence[DiagnosticProvider],
     source: SourceFile,
@@ -76,16 +95,5 @@ def collect_diagnostics(
         # successful providers' diagnostics alongside the error is not
         # expressible (MCP spec 2025-06-18; FastMCP raises on tool errors).
         raise DiagnosticCollectionError(failures) from failures[0].error
-    fallback_index = len(provider_order)
-
-    def order(diagnostic: ProviderDiagnostic) -> tuple[bool, int, int, int]:
-        """Order by file position, then provider, then column; whole-file problems last."""
-        return (
-            diagnostic.line is None,
-            diagnostic.line or 0,
-            provider_order.get(diagnostic.source, fallback_index),
-            diagnostic.column or 0,
-        )
-
-    collected.sort(key=order)
+    collected.sort(key=partial(_order, provider_order))
     return collected

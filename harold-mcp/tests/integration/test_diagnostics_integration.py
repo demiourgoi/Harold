@@ -20,6 +20,7 @@ from harold_mcp.maude import MaudeExecutor, MaudeWorkerCrashedError, worker
 from harold_mcp.server.tools.diagnostics import (
     MaudeDiagnostic,
     MaudeProgramDiagnosticsResult,
+    get_diagnostic_providers,
     maude_program_diagnostics,
 )
 from harold_mcp.settings import Settings
@@ -39,7 +40,9 @@ def executor() -> Iterator[MaudeExecutor]:
 
 
 def _diagnose(executor: MaudeExecutor, fixture_name: str) -> MaudeProgramDiagnosticsResult:
-    return maude_program_diagnostics(str(FIXTURES_DIR / fixture_name), maude_executor=executor)
+    return maude_program_diagnostics(
+        str(FIXTURES_DIR / fixture_name), providers=get_diagnostic_providers(maude_executor=executor)
+    )
 
 
 def test_clean_program(executor: MaudeExecutor) -> None:
@@ -58,7 +61,7 @@ def test_relative_path_input_is_resolved_before_the_worker(
     """A relative `path` is absolutized by the seam: the worker's cwd is not the client's."""
     monkeypatch.chdir(FIXTURES_DIR)
 
-    result = maude_program_diagnostics("hello.maude", maude_executor=executor)
+    result = maude_program_diagnostics("hello.maude", providers=get_diagnostic_providers(maude_executor=executor))
 
     assert result.path == str(FIXTURES_DIR / "hello.maude")
     assert result.success is True
@@ -234,7 +237,9 @@ def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
         with ThreadPoolExecutor(max_workers=concurrent) as pool:
             results = list(
                 pool.map(
-                    lambda fixture: maude_program_diagnostics(str(fixture), maude_executor=parallel),
+                    lambda fixture: maude_program_diagnostics(
+                        str(fixture), providers=get_diagnostic_providers(maude_executor=parallel)
+                    ),
                     fixtures,
                 )
             )
@@ -418,7 +423,7 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
     binary = tmp_path / "garbage.maude"
     binary.write_bytes(b"\x00\x01\x02\xff\xfe binary garbage \x00\x00")
 
-    result = maude_program_diagnostics(str(binary), maude_executor=executor)
+    result = maude_program_diagnostics(str(binary), providers=get_diagnostic_providers(maude_executor=executor))
 
     assert result.success is False
     assert result.diagnostics  # Maude skips the garbage and reports warnings

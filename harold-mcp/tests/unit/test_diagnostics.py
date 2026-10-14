@@ -7,6 +7,7 @@ import pytest
 
 from harold_mcp.diagnostics import (
     DiagnosticCollectionError,
+    DiagnosticProvider,
     DiagnosticProviderError,
     FixEdit,
     FixSuggestion,
@@ -22,6 +23,7 @@ from harold_mcp.server.tools.diagnostics import (
     MaudeRange,
     MaudeTextEdit,
     _build_result,
+    get_diagnostic_providers,
     maude_program_diagnostics,
 )
 
@@ -49,15 +51,20 @@ def _write(path: Path, text: str = "fmod X is endfm\n") -> str:
     return str(path)
 
 
+def _providers(executor: FakeMaudeExecutor) -> tuple[DiagnosticProvider, ...]:
+    """The production provider registry, wired to a fake executor."""
+    return get_diagnostic_providers(maude_executor=executor)
+
+
 def _run(path: str, result: LoadDiagnosticsResult) -> MaudeProgramDiagnosticsResult:
-    return maude_program_diagnostics(path, maude_executor=FakeMaudeExecutor(result))
+    return maude_program_diagnostics(path, providers=_providers(FakeMaudeExecutor(result)))
 
 
 def test_clean_program_returns_success(tmp_path: Path) -> None:
     path = tmp_path / "hello.maude"
     content = _write(path)
     fake = FakeMaudeExecutor({"ok": True, "warnings": []})
-    result = maude_program_diagnostics(content, maude_executor=fake)
+    result = maude_program_diagnostics(content, providers=_providers(fake))
 
     assert result.path == content
     assert result.success is True
@@ -220,7 +227,7 @@ def test_missing_file_raises_before_touching_the_provider(tmp_path: Path) -> Non
     missing = tmp_path / "does-not-exist.maude"
 
     with pytest.raises(SourceFileNotFoundError, match="does-not-exist"):
-        _ = maude_program_diagnostics(str(missing), maude_executor=fake)
+        _ = maude_program_diagnostics(str(missing), providers=_providers(fake))
 
     assert fake.calls == []  # the pre-check fires before any provider call
 
@@ -233,7 +240,7 @@ def test_unreadable_file_raises_before_touching_the_provider(tmp_path: Path) -> 
     path.chmod(0o000)
 
     with pytest.raises(SourceFileNotFoundError, match="unreadable"):
-        _ = maude_program_diagnostics(str(path), maude_executor=fake)
+        _ = maude_program_diagnostics(str(path), providers=_providers(fake))
 
     assert fake.calls == []
 
@@ -244,7 +251,7 @@ def test_provider_failure_propagates_as_a_collection_error(tmp_path: Path) -> No
     fake = FakeMaudeExecutor(error=MaudeWorkerCrashedError())
 
     with pytest.raises(DiagnosticCollectionError) as exc_info:
-        _ = maude_program_diagnostics(content, maude_executor=fake)
+        _ = maude_program_diagnostics(content, providers=_providers(fake))
 
     assert str(exc_info.value) == "Diagnostics failed: interpreter (Maude worker crashed)"
     provider_error = exc_info.value.__cause__
@@ -258,7 +265,7 @@ def test_heuristic_finding_carries_columns_and_an_applyable_fix(tmp_path: Path) 
     content = _write(path, f"fmod T is\n    op L{APOSTROPHE} : -> Nat .\nendfm\n")
     before = path.read_bytes()
 
-    result = maude_program_diagnostics(content, maude_executor=FakeMaudeExecutor({"ok": True, "warnings": []}))
+    result = maude_program_diagnostics(content, providers=_providers(FakeMaudeExecutor({"ok": True, "warnings": []})))
 
     assert result.success is True  # info only: the load itself is fine
     assert result.summary.info == 1
@@ -283,7 +290,7 @@ def test_same_line_orders_interpreter_before_heuristic(tmp_path: Path) -> None:
     content = _write(path, f"fmod T is\n    op L{APOSTROPHE} : -> Nat .\nendfm\n")
     fake = FakeMaudeExecutor({"ok": True, "warnings": [{"file": "mixed.maude", "line": 2, "message": "some warning."}]})
 
-    result = maude_program_diagnostics(content, maude_executor=fake)
+    result = maude_program_diagnostics(content, providers=_providers(fake))
 
     assert result.success is False
     assert [(d.source, d.range.start.column if d.range else None) for d in result.diagnostics] == [

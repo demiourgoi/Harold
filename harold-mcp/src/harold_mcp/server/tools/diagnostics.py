@@ -3,8 +3,9 @@
 `maude_program_diagnostics` runs every diagnostic provider over one Maude source file
 and reports the merged result: the Maude interpreter load (in the dedicated worker
 process) and Harold's heuristic checks on the file text (in the server process). This
-module owns the MCP surface (wire models, description, annotations, tags) and the
-adapter from the provider seam to the wire models.
+module owns the MCP surface (wire models, description, annotations, tags), the
+diagnostics provider registry dependency, and the adapter from the provider seam to
+the wire models.
 """
 
 from collections.abc import Sequence
@@ -188,6 +189,19 @@ def _build_result(path: str, diagnostics: Sequence[ProviderDiagnostic]) -> Maude
     )
 
 
+def get_diagnostic_providers(
+    maude_executor: MaudeExecutor = Depends(get_maude_executor),  # noqa: B008 - FastMCP dependency-injection convention
+) -> tuple[DiagnosticProvider, ...]:
+    """The diagnostics provider registry, in merge and tie-break order.
+
+    The interpreter comes first: `collect_diagnostics` attempts the providers in this
+    order and uses it to break ties between diagnostics on the same line. `maude_executor`
+    is injected by FastMCP as a nested dependency on `get_maude_executor`; direct callers
+    (tests) pass a `MaudeExecutor` explicitly.
+    """
+    return (InterpreterDiagnosticProvider(maude_executor), HeuristicLinterProvider())
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -199,7 +213,7 @@ def _build_result(path: str, diagnostics: Sequence[ProviderDiagnostic]) -> Maude
 )
 def maude_program_diagnostics(
     path: str,
-    maude_executor: MaudeExecutor = Depends(get_maude_executor),  # noqa: B008 - FastMCP dependency-injection convention
+    providers: tuple[DiagnosticProvider, ...] = Depends(get_diagnostic_providers),
 ) -> MaudeProgramDiagnosticsResult:
     # FastMCP uses only the free-form text above `Args:` as the MCP tool description;
     # sections like `Returns`, `Raises`, and `Example` are excluded from the description
@@ -245,9 +259,5 @@ def maude_program_diagnostics(
             paths are resolved against the server's working directory.
     """
     source = SourceFile.from_path(path)  # raises SourceFileNotFoundError
-    providers: tuple[DiagnosticProvider, ...] = (
-        InterpreterDiagnosticProvider(maude_executor),
-        HeuristicLinterProvider(),
-    )
     diagnostics = collect_diagnostics(providers, source)  # raises DiagnosticCollectionError
     return _build_result(str(source.path), diagnostics)
