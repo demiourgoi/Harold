@@ -421,7 +421,7 @@ def test_elt_sort_declaration_is_not_reported(executor: MaudeExecutor) -> None:
 def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, tmp_path: Path) -> None:
     """Regression: arbitrary bytes must not crash the worker's capture decode."""
     binary = tmp_path / "garbage.maude"
-    binary.write_bytes(b"\x00\x01\x02\xff\xfe binary garbage \x00\x00")
+    _ = binary.write_bytes(b"\x00\x01\x02\xff\xfe binary garbage \x00\x00")
 
     result = maude_program_diagnostics(str(binary), providers=get_diagnostic_providers(maude_executor=executor))
 
@@ -444,7 +444,7 @@ def test_tool_reports_crash_and_recovers() -> None:
         # the client retries, and the next call succeeds. The interpreter's
         # vocabulary reaches the caller as the chained cause (Q11.5).
         with pytest.raises(DiagnosticCollectionError) as exc_info:
-            _diagnose(executor, "hello.maude")
+            _ = _diagnose(executor, "hello.maude")
         assert str(exc_info.value) == "Diagnostics failed: interpreter (Maude worker crashed)"
         provider_error = exc_info.value.__cause__
         assert isinstance(provider_error, DiagnosticProviderError)
@@ -469,7 +469,7 @@ def _recv(proc: subprocess.Popen, req_id: int, timeout: float = 30.0) -> dict:
 
 def _send(proc: subprocess.Popen, message: dict) -> None:
     assert proc.stdin is not None
-    proc.stdin.write(json.dumps(message) + "\n")
+    _ = proc.stdin.write(json.dumps(message) + "\n")
     proc.stdin.flush()
 
 
@@ -497,7 +497,7 @@ def test_mcp_smoke() -> None:
                 },
             },
         )
-        _recv(proc, 1)
+        _ = _recv(proc, 1)
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
 
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
@@ -587,10 +587,10 @@ def test_mcp_smoke() -> None:
     finally:
         proc.terminate()
         try:
-            proc.wait(timeout=15)
+            _ = proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             # Under heavy parallel load (pytest-xdist) the graceful SIGTERM path can
             # be slow; this smoke test asserts the MCP protocol exchange, not the
             # shutdown latency (the lifespan teardown is covered by test_lifespan).
             proc.kill()
-            proc.wait(timeout=15)
+            _ = proc.wait(timeout=15)
