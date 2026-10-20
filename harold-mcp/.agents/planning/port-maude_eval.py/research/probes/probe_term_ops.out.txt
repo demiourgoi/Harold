@@ -1,0 +1,56 @@
+[31mWarning: [0m<standard input>, line 0 : unexpected end of tokens.
+[31mWarning: [0m<standard input>, line 0: no parse for term.
+[31mWarning: [0m<standard input>, line 0: bad token [35mnope[0m.
+[31mWarning: [0m<standard input>, line 0: no parse for term.
+
+=== parseTerm ===
+NAT: NAT | type: 0
+ok                : Term '2 * 3' | sort: NzNat
+bad syntax        : None
+undeclared op     : None
+prettyPrint(0)    : '_*_(s_^2(0), s_^3(0))'
+prettyPrint(MIXFIX): 's_^2(0) * s_^3(0)'
+str               : '2 * 3'
+str == prettyPrint(0): False
+
+=== reduce (equational) ===
+2 * 3      | steps: 1 | term after: '6' | prettyPrint(0): 's_^6(0)' | sort: NzNat
+6          | steps: 0 | term after: '6'
+copy kept  | original stays: '2 * 3' | reduced term: '6'
+
+=== rewrite family (rule-based) ===
+input() -> True
+COUNTER: COUNTER | type: 1 (SYSTEM_MODULE = 1 )
+rewrite(1)        | steps: 2 | term after: 'c(1)'
+rewrite(5) again  | steps: 10 | term after: 'c(6)'
+rewrite(0)        | steps: 0 | term after: 'c(0)'
+frewrite(3)       | steps: 6 | term after: 'c(3)'
+erewrite(3)       | steps: 6 | original: 'c(0)' | result: 'c(3)'
+erewrite result type: Term
+
+=== match ===
+subject: c(5) | pattern: c(N)
+has UNBOUNDED constant: True
+maxDepth=-1 (on top, no extension): 1 matches | [('N=5', 'c(99)')]
+maxDepth=0 (on top, extension): 1 matches | [('N=5', 'c(99)')]
+c(c(5)) match c(N) anywhere: 2 | [('N=c(5)', 'c(99)'), ('N=5', 'c(c(99))')]
+c(5) match c(6): 0 matches
+
+=== search ===
+ONE_STEP (depth=2): 1 shown | [('c(1)', 'N=1', 2)]
+AT_LEAST_ONE_STEP (depth=2): 2 shown | [('c(1)', 'N=1', 2), ('c(2)', 'N=2', 4)]
+ANY_STEPS (depth=2): 3 shown | [('c(0)', 'N=0', 0), ('c(1)', 'N=1', 2), ('c(2)', 'N=2', 4)]
+NORMAL_FORM (depth=2): 0 shown | []
+BRANCH (depth=2): 0 shown | []
+ground c(2) =>1 c(3): [('c(3)', 'empty', 2)]
+ground c(0) =>1 c(3): []
+
+=== round-trip fidelity ===
+input() -> True
+'2 * 3'              -> '6'              | reparse ok: True | equal: True
+'1 + 2 * 3'          -> '7'              | reparse ok: True | equal: True
+'1 ; 2 ; 3'          -> '1 ; 2 ; 3'      | reparse ok: True | equal: False
+'wrap(1 ; 2)'        -> 'wrap(1 ; 2)'    | reparse ok: True | equal: True
+
+=== variable-containing pattern round-trip ===
+pattern str: 'c(N)' | reparse: 'c(N)'

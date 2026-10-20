@@ -1,0 +1,15 @@
+[10/20/26 21:22:17] INFO     Launching new process pool for 3    executor.py:100
+                             workers with a timeout of 60                       
+                             seconds                                            
+                    INFO     Pinging Maude workers...            executor.py:153
+[10/20/26 21:22:18] INFO     Maude workers are ready             executor.py:160
+start() (pool + init pings): 0.50s
+diagnostics call 1: 0.35s | {'ok': True, 'warnings': []}
+diagnostics call 2: 0.09s | {'ok': True, 'warnings': []}
+diagnostics call 3: 0.10s | {'ok': True, 'warnings': []}
+ping call 1: 0.17s
+ping call 2: 0.12s
+[10/20/26 21:22:19] INFO     Shutting down Maude process pool    executor.py:164
+                    INFO     Killing old process pool            executor.py:134
+                    INFO     Old process pool killed             executor.py:136
+ping call 3: 0.11s

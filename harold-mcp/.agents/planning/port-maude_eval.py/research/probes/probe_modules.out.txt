@@ -1,0 +1,86 @@
+
+=== scenario: init ===
+module count: 48
+first 10: [('BOOL', 0), ('TRUTH-VALUE', 0), ('BOOL-OPS', 0), ('TRUTH', 0), ('EXT-BOOL', 0), ('INITIAL-EQUALITY-PREDICATE', 0), ('NAT', 0), ('INT', 0), ('RAT', 0), ('FLOAT', 0)]
+current module: CONVERSION
+getModule('NAT'): NAT
+getModule('NOPE'): None
+getModule('nat'): None
+exit code: 0
+
+=== scenario: load ===
+load returned: True
+new modules: [('HELLO-WORLD', 0)]
+current module: HELLO-WORLD
+getModule('HELLO-WORLD'): HELLO-WORLD
+exit code: 0
+
+=== scenario: load-dependency ===
+load returned: True
+new modules: [('DEP-CLEAN', 0), ('LOADS-DEPENDENCY', 0)]
+current module: LOADS-DEPENDENCY
+getModule('DEP-CLEAN'): DEP-CLEAN
+getModule('LOADS-DEPENDENCY'): LOADS-DEPENDENCY
+exit code: 0
+
+=== scenario: missing-dependency ===
+load returned: True
+new modules: [('LOADS-MISSING-DEP', 0)]
+current module: None
+getModule('LOADS-MISSING-DEP'): None
+LOADS-MISSING-DEP module object: None
+--- stderr ---
+[31mWarning: [0m"loads_missing_dependency.maude", line 8: unable to locate file: [35mmissing.maude[0m
+[31mWarning: [0m"loads_missing_dependency.maude", line 10 (fmod LOADS-MISSING-DEP): module [35mNOPE[0m does not exist.
+[31mWarning: [0m"loads_missing_dependency.maude", line 9 (fmod LOADS-MISSING-DEP): this module contains one or more errors that could not be patched up and thus it cannot be used or imported.
+exit code: 0
+
+=== scenario: broken-recoverable ===
+load returned: True
+new modules: [('HELLO-WORLD', 0)]
+current module: HELLO-WORLD
+getModule('HELLO-WORLD'): HELLO-WORLD
+HELLO-WORLD module object: HELLO-WORLD
+parseTerm('f'): f
+reduce steps: 2 | value: 2
+--- stderr ---
+[31mWarning: [0m"broken-recoverable.maude", line 2 (fmod HELLO-WORLD): missing [35mis[0m keyword.
+exit code: 0
+
+=== scenario: broken-non-recoverable ===
+load returned: True
+new modules: []
+current module: CONVERSION
+getModule('HELLO-WORLD'): None
+--- stderr ---
+[31mWarning: [0m<standard input>, line 1: skipped unexpected token: [35mfmo[0m
+[31mWarning: [0m<standard input>, line 1: skipped unexpected token: [35mHELLO-WORLD[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 2: skipped unexpected token: [35mpr[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 2: skipped unexpected token: [35mNAT[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 3: skipped unexpected token: [35mf[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 3: skipped unexpected token: [35m:[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 3: skipped unexpected token: [35m->[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 3: skipped unexpected token: [35mNat[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 4: skipped unexpected token: [35mf[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 4: skipped unexpected token: [35m=[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 4: skipped unexpected token: [35m*[0m
+[31mWarning: [0m"broken-non-recoverable.maude", line 5: skipped unexpected token: [35mendfm[0m
+exit code: 0
+
+=== scenario: two-modules ===
+load returned: True
+new modules: [('FIRST', 0), ('SECOND', 0)]
+current module: SECOND
+getModule('FIRST'): FIRST
+getModule('SECOND'): SECOND
+exit code: 0
+
+=== scenario: no-module ===
+==========================================
+reduce in NAT : 1 + 2 .
+rewrites: 1 in 0ms cpu (0ms real) (~ rewrites/second)
+result NzNat: 3
+load returned: True
+new modules: []
+current module: NAT
+exit code: 0

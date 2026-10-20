@@ -1,0 +1,65 @@
+--- parseTerm ok
+    result = '2 * 3'
+    stdout = ''
+    stderr = ''
+--- parseTerm syntax error
+    result = None
+    stdout = ''
+    stderr = '\x1b[31mWarning: \x1b[0m<standard input>, line 0 : unexpected end of tokens.\n\x1b[31mWarning: \x1b[0m<standard input>, line 0: no parse for term.\n'
+--- parseTerm undeclared operator
+    result = None
+    stdout = ''
+    stderr = '\x1b[31mWarning: \x1b[0m<standard input>, line 0: bad token \x1b[35mnope\x1b[0m.\n\x1b[31mWarning: \x1b[0m<standard input>, line 0: no parse for term.\n'
+--- parseTerm wrong sort context (var undeclared)
+    result = None
+    stdout = ''
+    stderr = '\x1b[31mWarning: \x1b[0m<standard input>, line 0: bad token \x1b[35mM\x1b[0m.\n\x1b[31mWarning: \x1b[0m<standard input>, line 0: no parse for term.\n'
+--- reduce ok
+    result = 1
+    stdout = ''
+    stderr = ''
+--- reduce already normal
+    result = 0
+    stdout = ''
+    stderr = ''
+--- rewrite(1)
+    result = 2
+    stdout = ''
+    stderr = ''
+--- rewrite(0)
+    result = 0
+    stdout = ''
+    stderr = ''
+--- frewrite(2)
+    result = 4
+    stdout = ''
+    stderr = ''
+--- erewrite(2)
+    result = '(c(2), 4)'
+    stdout = ''
+    stderr = ''
+--- match hit
+    result = ['N=5']
+    stdout = ''
+    stderr = ''
+--- match miss
+    result = []
+    stdout = ''
+    stderr = ''
+--- search hit
+    result = ['c(0)', 'c(1)', 'c(2)']
+    stdout = ''
+    stderr = ''
+--- search miss
+    result = []
+    stdout = ''
+    stderr = ''
+--- load clean
+    result = True
+    stdout = ''
+    stderr = ''
+--- load with warnings
+    result = True
+    stdout = ''
+    stderr = '\x1b[31mWarning: \x1b[0m"broken-recoverable.maude", line 2 (fmod HELLO-WORLD): missing \x1b[35mis\x1b[0m keyword.\n'
+load capture returned: None

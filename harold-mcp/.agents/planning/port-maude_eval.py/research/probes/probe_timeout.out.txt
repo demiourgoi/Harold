@@ -1,0 +1,15 @@
+=== 1. hung call on a one-worker pool, timeout=5s ===
+  TimeoutError after 5.00s
+  kill_workers took 0.00s
+
+=== 2. fresh pool works after the kill ===
+  result: 1 (0.03s)
+
+=== 3. queued call behind a hung worker (one-worker pool) ===
+  queued call timed out after 5.00s (worker is stuck)
+
+=== 4. concurrent healthy call on a two-worker pool ===
+  healthy call while sibling hangs: 1 (0.03s)
+  hung call still running (expected)
+  kill_workers took 0.00s
+  in-flight healthy call raised BrokenProcessPool (the whole pool was killed)
