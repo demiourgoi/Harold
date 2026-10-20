@@ -1,121 +1,101 @@
-# Summary — `maude_eval.py` port: decision and research record
+# Summary — `maude_run` (term evaluation / bounded interpreter sessions)
 
-> **Status: paused at the decision point (2026-09-16).** Phase 1 research is complete; the
-> capability is wanted but deliberately not implemented in this cycle. `design/` and
-> `implementation/` are intentionally empty — the work to resume is in [Next steps](#next-steps).
+> **Status (2026-10-17): PDD complete, implementation not started.** The project resumed after the
+> heuristic linter and the hermetic per-call interpreter redesign landed. Requirements, research,
+> design and the implementation plan are ready; the code changes are listed in
+> [`implementation/plan.md`](implementation/plan.md).
 
 ## Artifacts
 
 | Artifact | Content |
 | --- | --- |
-| [`rough-idea.md`](rough-idea.md) | The original idea: port `improve-rag/improvement/maude_eval.py` into the diagnostics tool, and the two questions to settle first. |
-| [`idea-honing.md`](idea-honing.md) | Q1 — go/no-go and placement, with the chosen answer and the alternatives rejected. |
-| [`research/contribution.md`](research/contribution.md) | What `maude_eval.py` is, capability-by-capability against Harold's target state, and what it would (and would not) contribute. |
-| [`research/placement.md`](research/placement.md) | Fit test against `maude_program_diagnostics` and its provider seam; options A–D; the recommended shape of a future tool; open design questions. |
-| [`research/consumers.md`](research/consumers.md) | The `improve-rag` consumers, the de-facto evaluator contract they settled on, and why they should not migrate to Harold. |
+| [`rough-idea.md`](rough-idea.md) | The original idea plus the 2026-10-17 update (current code state, annotations, executor reuse, statelessness, Term API scope, tool-shape alternatives, timeouts, module handling, single input file, output capture). |
+| [`idea-honing.md`](idea-honing.md) | Q1–Q11 with the chosen answers and alternatives: new tool, step list, all six commands, REPL-style threading, load policy, caps as settings, timeout settings, name `maude_run`, output representation, outcome vocabulary, whole-call failures. |
+| [`research/contribution.md`](research/contribution.md) | Phase-1 record: what `maude_eval.py` contributes (the capability, not the file). |
+| [`research/placement.md`](research/placement.md) | Phase-1 record: why term evaluation does not belong in `maude_program_diagnostics`; the new-tool shape. |
+| [`research/consumers.md`](research/consumers.md) | Phase-1 record: the `improve-rag` consumers and why they stay separate. |
+| [`research/term-api.md`](research/term-api.md) | Bindings 1.6.0 inventory: module selection/enumeration, `parseTerm`, the rewriting family (mutation, counters), `match`, `search`, serialization. |
+| [`research/worker-behavior.md`](research/worker-behavior.md) | Streams (stdout vs stderr, ANSI), hung reductions and pool recovery, per-call cost, executor reuse. |
+| [`research/probes/`](research/probes/) | `probe_term_ops.py`, `probe_streams.py`, `probe_modules.py`, `probe_timeout.py`, `probe_call_cost.py`, `probe_stdout_flush.py` plus transcripts and a README. |
+| [`design/detailed-design.md`](design/detailed-design.md) | Standalone design: requirements R1–R16, architecture, components, data models, errors, testing, appendices. |
+| [`implementation/plan.md`](implementation/plan.md) | Six TDD steps with checklist, tests and demos per step. |
+| [`summary.md`](summary.md) | This file. |
 
-No code was changed in `harold-mcp` or in `improve-rag`; no Maude probes were run.
+## Design in one paragraph
 
-## Decision
+`maude_run` runs a bounded Maude interpreter session in one call: it loads one file into a fresh
+worker process (sibling `load`/`in` dependencies resolve automatically), selects an explicit
+module, and executes an ordered list of `reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search`
+steps with REPL-style current-term threading. Every call is hermetic; callers carry state across
+calls by re-submitting a saved result term or writing a wrapper module. The worker op
+(`maude/session.py`) reuses `MaudeExecutor` (fresh process, crash/timeout recovery) and a new
+shared capture helper (`maude/capture.py`) that captures **both** stdout and stderr — which also
+closes a latent diagnostics bug where a loaded file's `red` output could reach the MCP stdio
+transport. Results carry load warnings, per-phase captured output (truncated to a setting), and
+per-step outcomes (`ok`, `parse-error`, `too-large`) that stop at the first failure. All caps and
+both timeout knobs are `HAROLD_*` settings, and the tool description documents the semantics for
+the agent.
 
-- **The capability is worth having**: evaluating terms against a loaded file (parse → reduce →
-  value, with per-term outcomes) is the semantic half of Harold's feedback loop and the seed of
-  goal #2, "run Maude programs". Today nothing in Harold runs a term, so every claim about
-  behaviour is left to the model's reasoning.
-- **It does not belong in `maude_program_diagnostics`**: the tool's contract is `{path}` in,
-  problems with that file out (v1 R2, LP4, LP8); term outcomes are data about a
-  *(file, terms)* pair, have no position, and would give `success`/`summary`/`DiagnosticSource` a
-  second meaning.
-- **A new tool is the home**: one new worker op reusing `MaudeExecutor` for isolation, crash and
-  timeout recovery; its own result models; `harold_tags(INTERPRETER)`; `diagnostics/` untouched
-  (recommended shape in [`research/placement.md`](research/placement.md) §3.1).
-- **Deferred**: not implemented now (see [`idea-honing.md`](idea-honing.md) Q1).
+## Key decisions
+
+- **New tool, not a diagnostics provider** (Q1): term outcomes are data, not problems.
+- **One tool with a step list** (Q2): subsumes a single-command tool; one fresh interpreter per
+  session.
+- **All six commands in v1** (Q3): adding them after the first tests the interface.
+- **REPL-style threading** (Q4): matches the Maude manual; no re-sending of intermediate terms.
+- **Always evaluate; report load warnings** (Q5).
+- **Caps as settings** (Q6): 200 steps, 1000 rewrite bound, 200 solutions/matches, 100k term
+  length, 1M result length, 1M captured output per stream — all ×10 the initial proposal.
+- **Timeouts** (Q7): `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` (renamed) and
+  `HAROLD_INTERPRETER_TIMEOUT_SECS`, both best effort and covering interpreter startup, plus a
+  per-call `timeout_secs` override.
+- **Name and metadata** (Q8): `maude_run`, `INTERPRETER` tag, read-only annotation profile.
+- **Output** (Q9): `{stdout, stderr}` per phase.
+- **Outcomes** (Q10): `ok`/`parse-error`/`too-large`, stop at the first failure, one outcome per
+  executed step.
+- **Whole-call errors** (Q11): missing path, load false, module not defined, worker crash/timeout.
+- **Binding bounds are exposed** (user review): `bound`, `gas`, `depth`; no deprecated
+  `withExtension` (use `depth=0`).
+- **IO lockdown retained** (R14): `setAllowDir/File/Processes(False)` in `init_maude`.
+
+## Research highlights that changed the design
+
+- `maude.load` returns `True` even for broken files; `getModule(name)` (case-sensitive) is the
+  reliable check, and a `getModules()` diff lists the modules a file defined.
+- `reduce`/`rewrite`/`frewrite` mutate in place and return the rewrite **counter** (which includes
+  equational rewrites); `erewrite` returns `(Term, count)` and leaves the original intact.
+- `str(term)` is the user-facing serialization (mixfix + numbers); `prettyPrint(0)` is internal.
+- `match`/`search` iterators are lazy, so the solution cap can stop them.
+- Maude's stdout is captured inside the fd-1 redirect (no explicit flush needed); Maude colorizes
+  stderr even when redirected, so ANSI stripping is mandatory.
+- A hung `reduce` is contained by the existing executor timeout + `kill_workers`, but recovery
+  kills the whole pool (best effort, documented).
+
+## Implementation plan
+
+1. Settings and stream-capture foundation (diagnostics behavior unchanged; leak regression tests).
+2. Worker session engine and executor (`reduce` only).
+3. `maude_run` tool end to end (`reduce` only).
+4. Rewriting family and current-thread threading.
+5. `match` and `search`, final tool description.
+6. Documentation, release bookkeeping, full validation.
 
 ## Next steps
 
-To resume, start with the Phase 2 probes (they settle the questions that block the design), then
-run the requirements step, then design and plan. Nothing below is committed work yet.
+1. Implement the plan starting at Step 1.
+2. After the implementation lands: refresh `.agents/summary/` and `AGENTS.md` (new modules, timeout
+   rename, worker-op split), update `README.md`/`CHANGELOG.md`, and bump the version (proposal
+   `0.1.0`).
+3. Consider follow-ups outside this project: strategy commands (`srewrite`), `parseStrategy`,
+   unification/variants, and a friendlier `match`-depth vocabulary.
 
-### Phase 2 research — `research/worker-term-evaluation.md` (+ `research/probes/`)
+## Areas that may need refinement during implementation
 
-Follow the precedent of `port-linter.py/research/` (`probes/` scripts plus the recorded
-transcript next to the findings). Probes can run with `harold-mcp/.venv/bin/python` (the `maude`
-bindings import fine there) against the local Maude tree at
-`/home/juanrh/systems/maude/Maude-3.5.1-linux-x86_64`; sandboxed `make`/`uv` runs need
-`UV_CACHE_DIR=/tmp/uv-cache`.
-
-- [ ] **P1 — hard-failure signal.** Fresh interpreter, `maude.init(advise=False)`, then compare
-      `maude.load(...)`'s bool with `getCurrentModule()` and `getModule("HELLO-WORLD")` for:
-      `tests/integration/fixtures/broken-non-recoverable.maude`, `hello.maude`, and
-      `no_new_module.maude` (a legitimate program that defines no modules — v1's counter-example
-      against module-set heuristics). **Why:** `maude_eval.py` uses `getCurrentModule() is None`
-      to declare the module invalid, and today `InterpreterDiagnosticProvider` reports a wholly
-      unparseable file as plain warnings with no `error` (v1 research §2). Either this probe
-      yields a *diagnostics* improvement (a real hard-failure case), or it extends the v1 "no
-      module heuristics" rejection to the current module. Decide which with the data.
-- [ ] **P2 — term-phase stderr.** Does `parseTerm` (and `search`/`rewrite` in the `rlapp`-style
-      paths) write to fd 2? Record exact formats for: a term that does not parse, an undeclared
-      operator, a successful parse/reduce, and a reduction that warns. **Why:** decides between a
-      `===TERMES===`-style sentinel, fd-2 capture scoped to each phase, or nothing.
-- [ ] **P3 — value fidelity.** Confirm `Term.reduce()` returns the step count (not the value) and
-      that `str(term)` / `prettyPrint(0)` is the value; check whether the sort is reachable
-      (`getSort()`); record what a term that reduces to itself prints. **Why:** the result model's
-      per-term value representation.
-- [ ] **P4 — hang and timeout cost.** Reduce a non-terminating term and observe
-      `MaudeWorkerTimeoutError` plus pool replacement, including whether a concurrent call on the
-      same pool is affected. **Why:** decides per-term budget vs whole-call timeout
-      ([`research/placement.md`](research/placement.md) §4.1).
-- [ ] **P5 — module selection and history.** After loading two files, determine which module is
-      current; compare current-module `parseTerm` with explicit `getModule(name).parseTerm`; check
-      the effect of a preceding diagnostics-style load. **Why:** whether the tool needs an explicit
-      `module` parameter for deterministic results (`placement.md` §4.2).
-
-### Requirements step (continue `idea-honing.md` with Q2+)
-
-- [ ] Term scope: plain reduction only, or also `rewrite`/`search` (option B vs D in
-      [`research/placement.md`](research/placement.md) §3).
-- [ ] Tool name and description (working name `maude_evaluate_terms`); annotation profile.
-- [ ] Input model: path + terms list; is an explicit `module` parameter required? Are term lists
-      capped (length, value size)?
-- [ ] Load policy: is a file whose load produced warnings still evaluated, and how are those
-      warnings reported? (The harness says "not usable"; an LLM-facing tool probably should not.)
-- [ ] Failure semantics: per-term outcome vocabulary (e.g. `reduced` / `parse-error` /
-      `not-reduced` / `timed-out`) and where a whole-call failure (crash, timeout) lands.
-- [ ] Interaction with `maude_program_diagnostics`: same worker pool, so loaded-module state is
-      shared — confirm that this is acceptable and document it in both tool descriptions.
-- [ ] Whether the P1 finding (if it holds) is ported into `InterpreterDiagnosticProvider`
-      independently of this tool.
-
-### Design step — `design/detailed-design.md`
-
-- [ ] Per the PDD structure (Overview, Detailed Requirements, Architecture, Components and
-      Interfaces, Data Models, Error Handling, Testing Strategy, Appendices), starting from the
-      recommended shape in [`research/placement.md`](research/placement.md) §3.1: worker op
-      (`maude/worker.py`) → executor method (`MaudeExecutor._run_task`) → value types
-      (`maude/evaluation.py`) → tool + wire models (`server/tools/evaluation.py`) →
-      `harold_tags(INTERPRETER)` → `docs/modules.md` entry.
-- [ ] Reuse the established conventions: fd-2 capture in the worker, `MaudeWorkerError` →
-      tool-level error mapping, pydantic result models with attribute docstrings, `Depends` with
-      `# noqa: B008`, mypy strict, basedpyright unused-result discipline.
-
-### Implementation step — `implementation/plan.md`
-
-- [ ] TDD, incremental steps, each ending wired end-to-end (a demoable tool call), e.g.:
-      (1) worker op + executor method + a minimal tool returning per-term values behind a fake
-      executor in unit tests and the real interpreter in integration tests;
-      (2) module selection / load-warning reporting;
-      (3) timeouts, caps and error semantics;
-      (4) documentation, README tool list, `CHANGELOG.md` entry and version bump, knowledge-base
-      refresh. Test files need distinct basenames across `tests/unit/` and `tests/integration/`.
-
-### Prerequisite
-
-- [ ] The target architecture this research assumes (the provider seam and the ported heuristic
-      linter) is still being implemented by `port-linter.py/implementation/plan.md`; resume this
-      project once that work has landed, so the new tool is built against the finished layout.
-
-### Housekeeping
-
-- Nothing to release for this cycle: no code changed, so no `CHANGELOG.md` entry, no version bump,
-  and `.agents/summary/` stays accurate as is. The release bookkeeping above applies when the tool
-  is actually implemented.
+- `search` type `BRANCH` is exposed as Maude defines it but was only smoke-tested (iteration and
+  empty results).
+- `gas` is passed through only when supplied; the binding default (`-1`) is used otherwise, which
+  the manual describes as 1 per position — verify against the bindings while implementing.
+- The `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` → `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` rename is a breaking
+  env-var change; it is acceptable pre-1.0 but must be prominent in the CHANGELOG.
+- The parent-stdout leak integration test may need to run in a child process if pytest's own
+  fd-level capture interferes.
