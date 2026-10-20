@@ -41,6 +41,16 @@ point them at two temp files, run the callable, restore, read and lossily decode
 ANSI before parsing. Return `{stdout, stderr}` per phase: once around the load, once per step
 (Q9). The worker stays single-threaded, so no locking is needed.
 
+A follow-up probe (`probes/probe_stdout_flush.py`) checked whether Maude's stdout survives the
+fd restore: with and without an explicit `fflush(NULL)`, `maude.load`'s output of an embedded
+`red` command was captured inside the redirect window, so no flush is required.
+
+**Why this also matters for diagnostics.** `load_diagnostics` currently redirects only fd 2. A
+diagnosed file with embedded REPL commands prints to the worker's stdout, which it inherits from
+the server process — and in production that is the MCP stdio transport. Capturing fd 1 as well
+(and discarding it for diagnostics) closes that latent protocol-corruption path without changing
+the diagnostics result.
+
 ## 2. Non-terminating evaluation, timeouts and pool recovery
 
 `probes/probe_timeout.out.txt` reproduces the executor's pool configuration (spawn context,
@@ -100,7 +110,7 @@ sequenceDiagram
     participant W as "fresh worker process"
     participant M as "Maude interpreter"
     T->>E: run(load_path, module, steps, timeout)
-    E->>W: submit(worker.run_session, ...)
+    E->>W: submit(session.run_session, request)
     W->>M: init_maude (initializer)
     W->>M: load(path) [capture stdout+stderr]
     W->>M: getModule(module)

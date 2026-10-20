@@ -12,6 +12,8 @@ Run from the `harold-mcp` directory:
 .venv/bin/python .agents/planning/port-maude_eval.py/research/probes/probe_streams.py
 .venv/bin/python .agents/planning/port-maude_eval.py/research/probes/probe_modules.py
 .venv/bin/python .agents/planning/port-maude_eval.py/research/probes/probe_timeout.py
+.venv/bin/python .agents/planning/port-maude_eval.py/research/probes/probe_call_cost.py
+.venv/bin/python .agents/planning/port-maude_eval.py/research/probes/probe_stdout_flush.py flush
 ```
 
 | Script | Answers |
@@ -21,5 +23,6 @@ Run from the `harold-mcp` directory:
 | `probe_modules.py` | `getCurrentModule` vs `getModule`, module enumeration/diffing, dependency and broken-file loads. |
 | `probe_timeout.py` | A non-terminating reduction: timeout, `kill_workers`, pool replacement, queued/concurrent calls. |
 | `probe_call_cost.py` | Real per-call cost through `MaudeExecutor` (spawn + prelude init + task). |
+| `probe_stdout_flush.py` | Whether `maude.load`'s stdout lands inside an fd-1 capture or is buffered past the restore. |
 
 The captured transcripts live next to each script as `probe_*.out.txt`.

@@ -1,0 +1,6 @@
+MARKER-BEFORE-REPORT
+flush while redirected: False
+load ok: True
+captured stdout: '==========================================\nreduce in NAT : 1 + 2 .\nrewrites: 1 in 0ms cpu (0ms real) (~ rewrites/second)\nresult NzNat: 3\n'
+captured stderr: ''
+MARKER-AFTER-REPORT
