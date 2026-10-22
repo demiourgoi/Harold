@@ -10,7 +10,7 @@
 
 - [x] **Step 1** — Settings and stream-capture foundation
 - [x] **Step 2** — Worker session engine and executor (reduce only)
-- [ ] **Step 3** — `maude_run` tool end to end (reduce only)
+- [x] **Step 3** — `maude_run` tool end to end (reduce only)
 - [ ] **Step 4** — Rewriting family and current-term threading
 - [ ] **Step 5** — `match` and `search`, final tool description
 - [ ] **Step 6** — Documentation, release bookkeeping, full validation
@@ -269,6 +269,63 @@ only command for now.
 
 **Demo.** An MCP client (or `tests/integration` call) invokes `maude_run` with
 `[{"command": "reduce", "term": "f"}]` and receives `term="2"`, `completed=true`, and the load info.
+
+### Implementation notes (Step 3)
+
+**What landed.**
+
+- `server/tools/interpreter.py`: `ReduceStep` (the input union for now), the result
+  models (`MaudeCapturedOutput`, `MaudeLoadWarning`, `MaudeLoadInfo`,
+  `MaudeStepOutcome`, `MaudeRunResult`), `MaudeRunError`, `_resolve_path`,
+  `_validate_steps`, `_to_request`, the adapters, and the `maude_run` tool with
+  `harold_tags(INTERPRETER)` and the read-only annotation profile.
+- Whole-call errors: missing/unreadable path, `load_ok=false` (with the stripped load
+  stderr), module not found (naming the module, the file and the defined modules and
+  pointing at `maude_program_diagnostics`), theory module, worker failure
+  (`MaudeWorkerError` chained) and a safety-net mapping for any other exception.
+- The timeout is chosen explicitly: `timeout_secs` when supplied, else
+  `settings.interpreter_timeout_secs`.
+- Registration: `server/tools/__init__.py` imports `maude_run`; the `INTERPRETER`
+  tag comment no longer says "planned".
+- Tests: 18 unit tests in `tests/unit/test_interpreter_tool.py` (path and input
+  validation, request/caps/timeout mapping, adapter for ok/parse-error/too-large,
+  every error path with chained causes) and 3 integration tests in
+  `tests/integration/test_maude_run_integration.py` (end-to-end reduce, missing
+  module listing, broken file).
+
+**Deviations and decisions.**
+
+1. Empty step lists are guarded twice: the parameter is
+   `Annotated[list[MaudeStep], Field(min_length=1)]` (the MCP schema shows
+   `minItems: 1`), and `_validate_steps` also raises `MaudeRunError` because direct
+   tool calls (tests, in-process clients) bypass FastMCP's validation.
+2. `MaudeStepOutcome` carries only the reduce-relevant fields for now
+   (`term`, `rewrites`, `message`, `limit`, `output`); `matches`, `solutions` and
+   `truncated` arrive with Steps 4–5. Its `command` field already uses the full
+   six-command `Literal` from design §5.3, so the output schema does not widen later.
+3. `MaudeLoadWarning.line` is `int` as designed; the adapter casts
+   `WarningDict.line` (`int | None`) because `parse_warnings` only emits positioned
+   warnings today.
+4. Theory module types are a local `frozenset({2, 3, 7, 11})` with the binding names
+   in a comment: importing `maude.Module` in the server process is forbidden.
+5. `_resolve_path` resolves with `expanduser().resolve()` and raises the tool's
+   `MaudeRunError`, deliberately not reusing `diagnostics.SourceFile` (no coupling to
+   the diagnostics seam).
+6. The `steps` parameter is named `steps` in the schema; `timeout_secs` renders as
+   `int|null` with `exclusiveMinimum: 0` and is excluded from the required set.
+   Verified against the FastMCP tools documentation (Annotated/Field constraints,
+   docstring descriptions, `Depends` exclusion) and the served schema.
+7. The description is the reduce-only slice of design §4.8; Step 5 replaces it with
+   the final six-command text as planned.
+8. `tests/integration/test_diagnostics_integration.py::test_mcp_smoke` now expects
+   two tools: it switched to a name-keyed dict and additionally asserts the
+   `maude_run` input properties, description and read-only annotations.
+
+**Implications for later steps.** Step 4 widens `MaudeStep` to the discriminated
+union, fills `bound`/`gas` in `_to_step_request`, adds the bound cap and the
+`match`/`search` threading rules to `_validate_steps`, and relies on the session
+engine's stop-at-first-failure. Step 5 adds the match/search result fields and the
+final description; the adapter's `Literal` casts already accept every command.
 
 ---
 

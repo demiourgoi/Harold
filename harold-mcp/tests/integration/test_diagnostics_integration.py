@@ -505,11 +505,13 @@ def test_mcp_smoke() -> None:
 
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         tools = _recv(proc, 2)["result"]["tools"]
-        assert [tool["name"] for tool in tools] == ["maude_program_diagnostics"]
-        assert sorted(tools[0]["inputSchema"]["properties"]) == ["path"]
+        tools_by_name = {tool["name"]: tool for tool in tools}
+        assert set(tools_by_name) == {"maude_program_diagnostics", "maude_run"}
+        diagnostics_tool = tools_by_name["maude_program_diagnostics"]
+        assert sorted(diagnostics_tool["inputSchema"]["properties"]) == ["path"]
 
         # The description explains both diagnostic sources and their severity meanings.
-        description = tools[0]["description"]
+        description = diagnostics_tool["description"]
         assert '"interpreter"' in description
         assert '"heuristic-linter"' in description
         assert "prelude-sort-redeclared" in description
@@ -522,11 +524,23 @@ def test_mcp_smoke() -> None:
         # server-side categorization for visibility control (`mcp.disable(tags=...)`)
         # and are not serialized to clients; see tests/unit/test_tags.py for the
         # vocabulary itself.
-        annotations = tools[0]["annotations"]
+        annotations = diagnostics_tool["annotations"]
         assert annotations["readOnlyHint"] is True
         assert annotations["destructiveHint"] is False
         assert annotations["idempotentHint"] is True
         assert annotations["openWorldHint"] is False
+
+        # The interpreter tool exposes its own schema and the same read-only profile.
+        run_tool = tools_by_name["maude_run"]
+        assert sorted(run_tool["inputSchema"]["properties"]) == ["module", "path", "steps", "timeout_secs"]
+        run_description = run_tool["description"]
+        assert "hermetic" in run_description
+        assert "reduce" in run_description
+        run_annotations = run_tool["annotations"]
+        assert run_annotations["readOnlyHint"] is True
+        assert run_annotations["destructiveHint"] is False
+        assert run_annotations["idempotentHint"] is True
+        assert run_annotations["openWorldHint"] is False
 
         _send(
             proc,

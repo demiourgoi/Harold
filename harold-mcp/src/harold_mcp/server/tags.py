@@ -26,7 +26,7 @@ MAUDE = "maude"
 PROGRAMMING = "programming"
 
 DIAGNOSTICS = "diagnostics"  # static analysis of Maude programs (maude_program_diagnostics)
-INTERPRETER = "interpreter"  # running Maude programs in the interpreter (planned)
+INTERPRETER = "interpreter"  # running Maude programs in the interpreter (maude_run)
 DOCS = "docs"  # Maude documentation search/RAG (planned)
 
 
