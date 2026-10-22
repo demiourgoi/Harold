@@ -77,6 +77,39 @@ Opening a separate project for `tests/integration/fixtures` is useful for testin
 $ ln -s ~/git/demiourgoi/Harold/harold-mcp/tests/integration/fixtures .
 ```
 
+### Zed agent permissions
+
+Zed asks for confirmation before the agent runs a terminal command. To auto-approve only this project's build commands while keeping confirmation for everything else, add the following to the **local** `~/.config/zed/settings.json` (merge it into the existing `agent.tool_permissions.tools` object if you already have one):
+
+```json
+{
+  "agent": {
+    "tool_permissions": {
+      "tools": {
+        "terminal": {
+          "default": "confirm",
+          "always_allow": [
+            {
+              "pattern": "(^|\\s)make\\s+(check|test|test-unit|test-integration|release)(\\s|$)"
+            },
+            {
+              "pattern": "(^|\\s)uv\\s+run\\s+(python\\s+-m\\s+)?pytest\\b[^;&|]*\\btests/(unit|integration)/"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+The first pattern matches the build commands recommended for agents in [`AGENTS.md`](AGENTS.md) — `make check`, `make test`, `make test-unit`, `make test-integration`, and `make release`, which mirror the `Makefile` targets — so they run without a prompt, while `default: "confirm"` keeps every other command gated. The second pattern lets the agent run a single test (for example while debugging a failure): it permits `pytest` through `uv` as long as it targets a test under `tests/`, so it matches `uv run python -m pytest tests/unit/test_lexical.py::test_mask` and `uv run pytest tests/integration -k diagnostics`, with or without flags before the path. Requiring `tests/(unit|integration)/` keeps it from auto-approving pytest runs against arbitrary paths; a bare `pytest` or a path outside the test trees still prompts. If you want to allow any pytest invocation through `uv`, drop the path requirement and use `(^|\s)uv\s+run\s+(python\s+-m\s+)?pytest\b` instead (less scoped). The leading `(^|\s)` in both patterns is intentional: it matches whether or not Zed keeps a leading environment assignment (such as `UV_CACHE_DIR=/tmp/uv-cache`) in the command it checks, and it also matches the command after a shell separator.
+
+Gotchas:
+
+- **Agent permissions cannot live in project settings.** Do not put this block in the repository's `.zed/settings.json`: Zed's project-settings schema does not allow the `agent` key (the editor reports "Property agent is not allowed"), and the rules are ignored. Only the user settings file is supported for `agent.tool_permissions`.
+- **Remote development uses the local machine's user settings.** When the project runs on a remote host (SSH or WSL), edit the `~/.config/zed/settings.json` of the machine running the Zed UI, **not** the remote host's file at the same path. The agent panel runs locally, so the remote copy is not read for these permissions.
+
 ### Recommendations
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.

@@ -199,6 +199,18 @@ not only the split targets.
 
 (This is harmless in normal environments too, but there it is not needed.)
 
+To run a single test or a filtered subset, there is no Makefile target: call pytest
+through `uv` and include a path under `tests/`. These invocations are pre-approved by
+the Zed terminal permission rules documented in `DEVELOPER_GUIDE.md`:
+
+```sh
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/unit/test_lexical.py::test_mask
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest tests/integration -k diagnostics
+```
+
+A bare `pytest`, or a path outside `tests/unit/` and `tests/integration/`, is not
+auto-approved and will require confirmation.
+
 ### References
 
 - [FastMCP](https://gofastmcp.com/llms.txt)
