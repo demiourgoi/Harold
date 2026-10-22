@@ -1,0 +1,7 @@
+fmod WARNS-AND-PRINTS
+    pr NAT .
+    op f : -> Nat .
+    eq f = 1 * 2 .
+endfm
+
+red in WARNS-AND-PRINTS : f .

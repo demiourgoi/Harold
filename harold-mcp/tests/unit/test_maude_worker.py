@@ -1,17 +1,19 @@
-"""Unit tests for `harold_mcp.maude.worker` helpers (no interpreter involved).
+"""Unit tests for `harold_mcp.maude.worker` (no interpreter involved).
 
-Both the warning parser and the `init_maude` sequence are exercised with the
-`maude` SWIG bindings mocked out: the worker lazy-imports them, so a fake
-module in `sys.modules` is enough and the tests stay hermetic.
+Both the `init_maude` sequence and `load_diagnostics` are exercised with the
+`maude` SWIG bindings mocked out: the worker lazy-imports them, so a fake module
+in `sys.modules` is enough and the tests stay hermetic. The warning-parser cases
+live in `test_maude_capture.py`, next to the parser.
 """
 
+import os
 import sys
 import types
 
 import pytest
 
 from harold_mcp.maude import worker as worker_module
-from harold_mcp.maude.worker import WorkerInitError, _parse_warnings
+from harold_mcp.maude.worker import WorkerInitError
 
 
 class _FakeMaude(types.ModuleType):
@@ -45,9 +47,26 @@ class _FakeMaude(types.ModuleType):
         self.allow_processes_calls.append(allow)
 
 
-def _patch_maude(monkeypatch: pytest.MonkeyPatch, *, init_result: bool = True) -> _FakeMaude:
-    """Make `init_maude`'s lazy `import maude` resolve to a scriptable fake."""
-    fake = _FakeMaude(init_result=init_result)
+class _FakeLoadMaude(_FakeMaude):
+    """Fake bindings whose `load` writes to both streams, like the real one."""
+
+    def __init__(self, *, load_result: bool = True) -> None:
+        super().__init__()
+        self._load_result = load_result
+        self.load_paths: list[str] = []
+
+    def load(self, path: str) -> bool:
+        self.load_paths.append(path)
+        _ = os.write(2, b'Warning: "warns_and_prints.maude", line 2 (fmod WARNS-AND-PRINTS): missing is keyword.\n')
+        # Warning-shaped stdout text must never reach the parser.
+        _ = os.write(1, b'Warning: "warns_and_prints.maude", line 99: printed, not warned\n')
+        return self._load_result
+
+
+def _patch_maude(monkeypatch: pytest.MonkeyPatch, fake: _FakeMaude | None = None) -> _FakeMaude:
+    """Make the worker's lazy `import maude` resolve to a scriptable fake."""
+    if fake is None:
+        fake = _FakeMaude()
     monkeypatch.setitem(sys.modules, "maude", fake)
     monkeypatch.setattr(worker_module, "_maude_initialized", False)
     return fake
@@ -70,7 +89,7 @@ def test_init_maude_disables_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_init_maude_failed_init_skips_io_lockdown(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed `maude.init` raises and never touches the IO guards."""
-    fake = _patch_maude(monkeypatch, init_result=False)
+    fake = _patch_maude(monkeypatch, _FakeMaude(init_result=False))
 
     with pytest.raises(WorkerInitError):
         worker_module.init_maude()
@@ -83,62 +102,21 @@ def test_init_maude_failed_init_skips_io_lockdown(monkeypatch: pytest.MonkeyPatc
     assert worker_module._maude_initialized is False
 
 
-def test_quoted_file_format() -> None:
-    text = 'Warning: "hello.maude", line 3: skipped unexpected token: f'
-    assert _parse_warnings(text) == [{"file": "hello.maude", "line": 3, "message": "skipped unexpected token: f"}]
+def test_load_diagnostics_parses_only_the_stderr_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warning-shaped stdout text is captured and discarded, never parsed as a warning."""
+    fake = _FakeLoadMaude()
+    _patch_maude(monkeypatch, fake)
+
+    result = worker_module.load_diagnostics("warns_and_prints.maude")
+
+    assert fake.load_paths == ["warns_and_prints.maude"]
+    assert result == {
+        "ok": True,
+        "warnings": [{"file": "warns_and_prints.maude", "line": 2, "message": "missing is keyword."}],
+    }
 
 
-def test_context_fragment_format() -> None:
-    text = 'Warning: "broken-recoverable.maude", line 2 (fmod HELLO-WORLD): missing is keyword.'
-    assert _parse_warnings(text) == [{"file": "broken-recoverable.maude", "line": 2, "message": "missing is keyword."}]
+def test_load_diagnostics_forwards_the_load_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_maude(monkeypatch, _FakeLoadMaude(load_result=False))
 
-
-def test_context_fragment_with_space_before_the_colon() -> None:
-    """Some warnings print `(fmod X) :` with a space before the colon (they used to be dropped)."""
-    text = 'Warning: "dep.maude", line 4 (fmod DEP) : unexpected end of tokens.'
-    assert _parse_warnings(text) == [{"file": "dep.maude", "line": 4, "message": "unexpected end of tokens."}]
-
-
-def test_standard_input_format() -> None:
-    text = "Warning: <standard input>, line 1: skipped unexpected token: fmo"
-    assert _parse_warnings(text) == [
-        {"file": "<standard input>", "line": 1, "message": "skipped unexpected token: fmo"}
-    ]
-
-
-def test_multiple_warnings_keep_order() -> None:
-    text = "\n".join([
-        'Warning: "a.maude", line 1: first',
-        "Warning: <standard input>, line 2: second",
-        'Warning: "a.maude", line 5 (fmod X): third',
-    ])
-    assert _parse_warnings(text) == [
-        {"file": "a.maude", "line": 1, "message": "first"},
-        {"file": "<standard input>", "line": 2, "message": "second"},
-        {"file": "a.maude", "line": 5, "message": "third"},
-    ]
-
-
-def test_unmatched_lines_are_ignored() -> None:
-    text = "\n".join([
-        "Something else entirely",
-        'Warning: "a.maude", line 1: real warning',
-        "    continuation line that does not match",
-    ])
-    assert _parse_warnings(text) == [{"file": "a.maude", "line": 1, "message": "real warning"}]
-
-
-def test_ansi_colorized_warning_is_parsed() -> None:
-    """Maude colorizes stderr when it sees a TTY at init time."""
-    text = '\x1b[31mWarning: \x1b[0m"broken-recoverable.maude", line 2 (fmod HELLO-WORLD): missing \x1b[35mis\x1b[0m keyword.'
-    assert _parse_warnings(text) == [{"file": "broken-recoverable.maude", "line": 2, "message": "missing is keyword."}]
-
-
-def test_empty_text_yields_no_warnings() -> None:
-    assert _parse_warnings("") == []
-
-
-def test_advisory_lines_are_ignored() -> None:
-    """Advisories (e.g. module redefinitions) are suppressed by advise=False;
-    if one ever leaks into the capture, the parser must not treat it as a warning."""
-    assert _parse_warnings("Advisory: redefining module HELLO-WORLD.\n") == []
+    assert worker_module.load_diagnostics("missing.maude")["ok"] is False

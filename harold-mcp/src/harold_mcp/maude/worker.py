@@ -12,24 +12,11 @@ No thread locking is required because the worker process only runs a single thre
 """
 
 import os
-import re
-import tempfile
 import time
 from pathlib import Path
 from typing import TypedDict
 
-
-class WarningDict(TypedDict):
-    """A single parsed Maude warning.
-
-    `file` is the name Maude printed for the file the warning belongs to — the
-    diagnosed file, a file it loaded via `load`/`in`, or `<standard input>` for
-    some first-line warnings. The provider uses it to attribute the warning.
-    """
-
-    file: str
-    line: int | None
-    message: str
+from harold_mcp.maude.capture import WarningDict, capture_streams, parse_warnings
 
 
 class LoadDiagnosticsResult(TypedDict):
@@ -107,64 +94,25 @@ def rendezvous_pid(directory: str, timeout: float = 30.0) -> int:
     raise TimeoutError(f"no peer task arrived in {directory!r} within {timeout}s")  # noqa: TRY003 - test support
 
 
-# `(fmod X) :` (space before the colon) is a real Maude spelling; requiring `):`
-# used to drop those warnings silently. A message may contain colons, so the
-# message group is greedy and last.
-_WARNING_RE = re.compile(r'Warning:\s+"?([^",]+)"?,\s+line\s+(\d+)\s*(?:\([^)]*\))?\s*:\s*(.*)')
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-
-
-def _strip_ansi(text: str) -> str:
-    """Remove ANSI CSI escape sequences (Maude colorizes stderr on a TTY)."""
-    return _ANSI_ESCAPE_RE.sub("", text)
-
-
-def _parse_warnings(text: str) -> list[WarningDict]:
-    """Parse `Warning:` lines from captured stderr into structured diagnostics.
-
-    ANSI escapes are stripped first: Maude decides at init time whether stderr
-    is a TTY and then colorizes its output, so captures can contain CSI
-    sequences around `Warning:` and inside messages. The embedded file name is
-    kept (`WarningDict.file`) so the provider can attribute warnings Maude
-    raised about other files (dependencies) instead of pinning them on the
-    diagnosed file.
-    """
-    warnings_out: list[WarningDict] = []
-    for line in _strip_ansi(text).splitlines():
-        match = _WARNING_RE.match(line)
-        if match:
-            warnings_out.append({"file": match.group(1), "line": int(match.group(2)), "message": match.group(3)})
-        # Unmatched lines are ignored for v1; hardening is a final-testing item.
-    return warnings_out
-
-
 def load_diagnostics(path: str) -> LoadDiagnosticsResult:
-    """Load `path` in the interpreter, capturing Maude's stderr output.
+    """Load `path` in the interpreter, capturing Maude's stdout and stderr.
 
-    Maude writes its `Warning:` lines to fd 2 directly from C++, so fd 2 is
-    redirected to a temp file around `maude.load` (a regular file, not a pipe:
-    no pipe-buffer blocking, and the worker is single-threaded). Nothing may
-    be logged or printed while fd 2 is redirected.
+    Maude writes its `Warning:` lines to fd 2 and the output of commands
+    embedded in the loaded file (for example a top-level `red`) to fd 1,
+    directly from C++. Both fds are redirected to temp files around
+    `maude.load` (regular files, not pipes: no pipe-buffer blocking, and the
+    worker is single-threaded). The stderr capture is parsed for warnings; the
+    stdout capture is discarded, which keeps that output away from the server's
+    MCP stdio transport. Nothing may be logged or printed while both fds are
+    redirected.
     """
     # Lazy import: this module is also imported by the server process (for the
     # function references the pool pickles), and loading the SWIG bindings there
     # would break the "interpreter only lives in the worker" invariant (R17).
     import maude
 
-    with tempfile.TemporaryFile(mode="w+b") as capture:
-        saved_fd = os.dup(2)
-        try:
-            _ = os.dup2(capture.fileno(), 2)
-            ok = bool(maude.load(path))
-        finally:
-            _ = os.dup2(saved_fd, 2)
-            os.close(saved_fd)
-        _ = capture.seek(0)
-        captured_bytes = capture.read()
-    # Maude writes raw C++ bytes (it may echo the file's contents into
-    # warnings); decode lossily so arbitrary input cannot crash the parser.
-    captured_text = captured_bytes.decode("utf-8", errors="replace")
-    return {"ok": ok, "warnings": _parse_warnings(captured_text)}
+    ok, captured = capture_streams(lambda: bool(maude.load(path)))
+    return {"ok": ok, "warnings": parse_warnings(captured["stderr"])}
 
 
 def _crash() -> None:

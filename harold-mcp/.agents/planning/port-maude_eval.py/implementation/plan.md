@@ -8,7 +8,7 @@
 
 ## Checklist
 
-- [ ] **Step 1** — Settings and stream-capture foundation
+- [x] **Step 1** — Settings and stream-capture foundation
 - [ ] **Step 2** — Worker session engine and executor (reduce only)
 - [ ] **Step 3** — `maude_run` tool end to end (reduce only)
 - [ ] **Step 4** — Rewriting family and current-term threading
@@ -81,6 +81,59 @@ existing diagnostics tool, provider and tests must stay green.
 
 **Demo.** `make test-unit` green; an integration run shows the `red` output captured (not leaked)
 and the warning set unchanged.
+
+### Implementation notes (Step 1)
+
+**What landed.**
+
+- `Settings`: `maude_worker_timeout_secs` → `diagnostics_timeout_secs` (env
+  `HAROLD_DIAGNOSTICS_TIMEOUT_SECS`, breaking rename) and the seven new
+  `interpreter_*` fields, all `gt=0`. `MaudeExecutor` (log line, init pings,
+  `_run_task`) now reads `diagnostics_timeout_secs`.
+- `maude/capture.py`: `WarningDict`, `CapturedOutput`, `strip_ansi`,
+  `parse_warnings` (moved verbatim from the worker), `capture_streams`, and
+  `truncate_output`. Stdlib-only; safe to import in the server process.
+- `worker.load_diagnostics` is built on `capture_streams`: fd 2 is parsed, fd 1
+  is captured and discarded (closing the latent MCP-stdio leak); its docstring
+  states that nothing may be logged or printed while both fds are redirected.
+- Tests: parser cases moved to `tests/unit/test_maude_capture.py`;
+  `test_maude_worker.py` keeps init + fake-`load` tests; new fixture
+  `warns_and_prints.maude`; integration coverage for exact warnings and the
+  parent-stdout leak regression.
+
+**Deviations and decisions.**
+
+1. `truncate_output` appends the marker *after* the retained prefix, so a
+   truncated string is `max_length + len(marker)` long. The design wording did
+   not say whether the marker counts toward the cap; the docstring now states
+   the choice explicitly (the cap bounds interpreter output, not the marker).
+   Step 2 must use this helper as-is when building `CapturedOutput`.
+2. Added the public `TRUNCATION_MARKER` constant (`... [output truncated]`) so
+   tests and the session engine share one spelling.
+3. `capture_streams` uses PEP 695 type parameters (`def capture_streams[T]`),
+   required by ruff `UP047`; the planned `TypeVar` was removed.
+4. The leak regression test creates a **dedicated pool inside the fd-1
+   redirect** (a module-scoped pool would not catch a leak: its workers
+   inherited the original stdout when spawned). It reads the pipe
+   non-blocking: multiprocessing's resource tracker can also inherit the write
+   end, and a blocking read-to-EOF hung when the test ran in isolation.
+   Verified by temporarily restoring the old stderr-only capture: the test
+   fails on the leaked `reduce in WARNS-AND-PRINTS` text.
+5. Added `test_legacy_worker_timeout_env_var_is_ignored`, pinning the breaking
+   rename (the old env var now configures nothing).
+6. README/docs were intentionally left for Step 6 per the plan, so the README
+   env-var table is temporarily stale about the rename.
+
+**Implications for later steps.** Forced by the design; recorded here because
+later steps depend on them:
+
+- `capture_streams` returns the callable's result plus already-decoded,
+  ANSI-stripped `stdout`/`stderr`; the session engine must parse the **full**
+  `stderr` before applying `truncate_output` to the returned strings.
+- `diagnostics_timeout_secs` is now the worker subsystem default; Step 2 adds
+  the `timeout` parameter to `_run_task` without changing `diagnostics()`.
+- The new `interpreter_*` settings are intentionally unused until Steps 2–5;
+  `CHANGELOG.md` must call out the env-var rename when Step 6 lands.
 
 ---
 

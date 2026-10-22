@@ -100,7 +100,7 @@ class MaudeExecutor(Logging):
         self._log.info(
             "Launching new process pool for %s workers with a timeout of %s seconds",
             self._settings.maude_workers,
-            self._settings.maude_worker_timeout_secs,
+            self._settings.diagnostics_timeout_secs,
         )
         return ProcessPoolExecutor(
             max_workers=self._settings.maude_workers,
@@ -153,7 +153,7 @@ class MaudeExecutor(Logging):
             self._log.info("Pinging Maude workers...")
             futures = [executor.submit(worker.ping) for _ in range(self._settings.maude_workers)]
             for future in futures:
-                future.result(timeout=self._settings.maude_worker_timeout_secs)
+                future.result(timeout=self._settings.diagnostics_timeout_secs)
         except (BrokenProcessPool, TimeoutError) as exc:
             self._reset_executor(replace=False, failed=executor)
             raise MaudeInitError() from exc
@@ -193,7 +193,7 @@ class MaudeExecutor(Logging):
         # Reset here too: submit only sees failures at submission time, not a
         # worker that dies mid-task.
         try:
-            return cast(T, future.result(timeout=self._settings.maude_worker_timeout_secs))
+            return cast(T, future.result(timeout=self._settings.diagnostics_timeout_secs))
         except BrokenProcessPool as exc:
             self._reset_executor(failed=executor)
             raise MaudeWorkerCrashedError() from exc

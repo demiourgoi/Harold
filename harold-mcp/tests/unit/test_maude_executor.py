@@ -62,7 +62,7 @@ class FakeExecutor:
 
 def make_executor(factory: Any, *, settings: Settings | None = None) -> MaudeExecutor:
     return MaudeExecutor(
-        settings=settings or Settings(maude_workers=1, maude_worker_timeout_secs=60),
+        settings=settings or Settings(maude_workers=1, diagnostics_timeout_secs=60),
         executor_factory=factory,
     )
 
@@ -237,5 +237,5 @@ def test_concurrent_crash_detection_replaces_exactly_once() -> None:
 
 
 def test_get_maude_executor_returns_singleton() -> None:
-    resolved = Settings(maude_workers=1, maude_worker_timeout_secs=60)
+    resolved = Settings(maude_workers=1, diagnostics_timeout_secs=60)
     assert get_maude_executor(resolved) is get_maude_executor(resolved)
