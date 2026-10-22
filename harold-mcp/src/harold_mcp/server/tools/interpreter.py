@@ -16,12 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from harold_mcp.maude import (
     CapturedOutput,
+    CommandName,
     MaudeExecutor,
     MaudeWorkerError,
     SessionRequest,
     SessionResult,
     StepOutcomeDict,
     StepRequest,
+    StepStatus,
     WarningDict,
     get_maude_executor,
 )
@@ -32,9 +34,6 @@ from harold_mcp.settings import Settings, get_settings
 # `maude.Module` theory types: FUNCTIONAL_THEORY, SYSTEM_THEORY, STRATEGY_THEORY and
 # OBJECT_ORIENTED_THEORY. Spelled out because the server process never imports `maude`.
 _THEORY_MODULE_TYPES = frozenset({2, 3, 7, 11})
-
-_CommandName = Literal["reduce", "rewrite", "frewrite", "erewrite", "match", "search"]
-_StepStatus = Literal["ok", "parse-error", "too-large"]
 
 
 class MaudeRunError(RuntimeError):
@@ -63,6 +62,20 @@ class _StepBase(_ResultModel):
     """Term text; omitted means the current term (invalid for the first step)."""
 
 
+class _BoundedStep(_StepBase):
+    """Fields shared by the rewriting commands that accept a rewrite bound."""
+
+    bound: Annotated[int | None, Field(ge=0)] = None
+    """Maximum rule rewrites; omitted means unbounded (the interpreter default)."""
+
+
+class _GassedStep(_BoundedStep):
+    """Fields shared by the rewriting commands that accept a per-position gas."""
+
+    gas: Annotated[int | None, Field(ge=0)] = None
+    """Maximum rule rewrites per position; omitted means the bindings' default."""
+
+
 class ReduceStep(_StepBase):
     """Reduce a term to normal form with the module's equations."""
 
@@ -70,8 +83,32 @@ class ReduceStep(_StepBase):
     """The command to execute."""
 
 
-MaudeStep = ReduceStep
-"""Input step union; more commands are added as they are implemented."""
+class RewriteStep(_BoundedStep):
+    """Rewrite a term with the default strategy, up to `bound` rule rewrites."""
+
+    command: Literal["rewrite"]
+    """The command to execute."""
+
+
+class FrewriteStep(_GassedStep):
+    """Rewrite a term with the fair strategy, with an optional per-position gas."""
+
+    command: Literal["frewrite"]
+    """The command to execute."""
+
+
+class ErewriteStep(_GassedStep):
+    """Rewrite like `frewrite`, with external-object support; the original term is kept."""
+
+    command: Literal["erewrite"]
+    """The command to execute."""
+
+
+MaudeStep = Annotated[
+    ReduceStep | RewriteStep | FrewriteStep | ErewriteStep,
+    Field(discriminator="command"),
+]
+"""Input steps: a tagged union on `command`; more commands are added as they are implemented."""
 
 
 class MaudeCapturedOutput(_ResultModel):
@@ -113,10 +150,10 @@ class MaudeStepOutcome(_ResultModel):
     index: int
     """0-based position of the step in the input list."""
 
-    command: _CommandName
+    command: CommandName
     """The command that produced this outcome."""
 
-    status: _StepStatus
+    status: StepStatus
     """`"ok"`, `"parse-error"` (the term did not parse), or `"too-large"` (the result exceeded the limit)."""
 
     term: str | None
@@ -172,8 +209,9 @@ def _resolve_path(path: str) -> Path:
 def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
     """Enforce the step caps and the current-term threading rules.
 
-    `reduce` always needs a subject (its own term or the current term) and produces
-    one. The first step must therefore provide a term.
+    The rewriting commands (`reduce`, `rewrite`, `frewrite`, `erewrite`) all need a
+    subject (their own term or the current term) and produce one. The first step must
+    therefore provide a term.
     """
     if not steps:
         raise MaudeRunError("steps must contain at least one command")  # noqa: TRY003
@@ -187,6 +225,14 @@ def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
             raise MaudeRunError(  # noqa: TRY003
                 f"Step {index}: term is {len(step.term)} characters long "
                 f"(maximum {settings.interpreter_max_term_length})"
+            )
+        if (
+            isinstance(step, _BoundedStep)
+            and step.bound is not None
+            and step.bound > settings.interpreter_max_rewrite_bound
+        ):
+            raise MaudeRunError(  # noqa: TRY003
+                f"Step {index}: bound is {step.bound} (maximum {settings.interpreter_max_rewrite_bound})"
             )
         if step.term is None and not has_current:
             raise MaudeRunError(  # noqa: TRY003
@@ -202,8 +248,8 @@ def _to_step_request(step: MaudeStep) -> StepRequest:
         "term": step.term,
         "pattern": None,
         "subject": None,
-        "bound": None,
-        "gas": None,
+        "bound": step.bound if isinstance(step, _BoundedStep) else None,
+        "gas": step.gas if isinstance(step, _GassedStep) else None,
         "depth": None,
         "search_type": None,
     }
@@ -239,8 +285,8 @@ def _to_step_outcome(outcome: StepOutcomeDict) -> MaudeStepOutcome:
     """Adapt one worker outcome to the wire model."""
     return MaudeStepOutcome(
         index=outcome["index"],
-        command=cast(_CommandName, outcome["command"]),
-        status=cast(_StepStatus, outcome["status"]),
+        command=outcome["command"],
+        status=outcome["status"],
         term=outcome["term"],
         rewrites=outcome["rewrites"],
         message=outcome["message"],
@@ -326,13 +372,19 @@ def maude_run(
     Steps and the current term
     --------------------------
     Commands run as in the Maude interpreter on a current term that threads through the
-    pipeline: when a step omits its term, it uses the previous step's result. `reduce`
-    replaces the current term with its result. The first step must provide an explicit
-    term, because the session starts with no current term.
+    pipeline: when a step omits its term, it uses the previous step's result. `reduce`,
+    `rewrite`, `frewrite` and `erewrite` replace the current term with their result. The
+    first step must provide an explicit term, because the session starts with no current
+    term.
 
     Commands
     --------
     - `reduce`: reduce the term to normal form with the module's equations.
+    - `rewrite`: apply rewrite rules with the default strategy, up to `bound` rule
+      rewrites (unbounded when omitted).
+    - `frewrite`: the same with the fair strategy; `gas` bounds rewrites per position.
+    - `erewrite`: the same as `frewrite` with external-object support; the original term
+      is kept.
 
     Load problems and step failures
     -------------------------------
@@ -381,6 +433,8 @@ def maude_run(
 
 
 __all__ = [
+    "ErewriteStep",
+    "FrewriteStep",
     "MaudeCapturedOutput",
     "MaudeLoadInfo",
     "MaudeLoadWarning",
@@ -389,5 +443,6 @@ __all__ = [
     "MaudeStep",
     "MaudeStepOutcome",
     "ReduceStep",
+    "RewriteStep",
     "maude_run",
 ]

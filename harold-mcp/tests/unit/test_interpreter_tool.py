@@ -9,10 +9,18 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from harold_mcp.maude import MaudeWorkerTimeoutError
 from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict
-from harold_mcp.server.tools.interpreter import MaudeRunError, ReduceStep, maude_run
+from harold_mcp.server.tools.interpreter import (
+    ErewriteStep,
+    FrewriteStep,
+    MaudeRunError,
+    ReduceStep,
+    RewriteStep,
+    maude_run,
+)
 from harold_mcp.settings import Settings
 
 
@@ -143,6 +151,64 @@ def test_later_step_may_omit_its_term(maude_file: Path) -> None:
     assert [step.term for step in result.steps] == ["2", "2"]
 
 
+def test_rewriting_steps_forward_bound_and_gas(maude_file: Path) -> None:
+    executor = FakeExecutor(
+        result=_session_result(
+            outcomes=[
+                _outcome(command="rewrite", term="c(0)", rewrites=0),
+                _outcome(index=1, command="frewrite", term="c(1)", rewrites=2),
+                _outcome(index=2, command="erewrite", term="c(1)", rewrites=2),
+            ]
+        )
+    )
+    steps = [
+        RewriteStep(command="rewrite", term="c(0)", bound=0),
+        FrewriteStep(command="frewrite", term="c(0)", bound=3, gas=7),
+        ErewriteStep(command="erewrite", term="c(0)"),
+    ]
+
+    _ = maude_run(str(maude_file), "M", steps, executor=executor, settings=_settings())
+
+    request = executor.calls[0][0]
+    assert [(step["command"], step["bound"], step["gas"]) for step in request["steps"]] == [
+        ("rewrite", 0, None),
+        ("frewrite", 3, 7),
+        ("erewrite", None, None),
+    ]
+
+
+def test_rewriting_steps_may_omit_the_term_after_the_first(maude_file: Path) -> None:
+    executor = FakeExecutor(
+        result=_session_result(
+            outcomes=[_outcome(term="2", rewrites=2), _outcome(index=1, command="erewrite", term="2", rewrites=0)]
+        )
+    )
+    steps = [RewriteStep(command="rewrite", term="f"), ErewriteStep(command="erewrite")]
+
+    result = maude_run(str(maude_file), "M", steps, executor=executor, settings=_settings())
+
+    assert result.completed is True
+    assert [step.term for step in result.steps] == ["2", "2"]
+
+
+def test_bound_above_the_cap_is_rejected(maude_file: Path) -> None:
+    executor = FakeExecutor()
+    settings = _settings(interpreter_max_rewrite_bound=5)
+    steps = [RewriteStep(command="rewrite", term="f", bound=6)]
+
+    with pytest.raises(MaudeRunError, match="bound is 6"):
+        _ = maude_run(str(maude_file), "M", steps, executor=executor, settings=settings)
+
+    assert executor.calls == []
+
+
+def test_negative_bound_or_gas_is_rejected_by_the_model() -> None:
+    with pytest.raises(ValidationError):
+        _ = RewriteStep(command="rewrite", term="f", bound=-1)
+    with pytest.raises(ValidationError):
+        _ = FrewriteStep(command="frewrite", term="f", gas=-1)
+
+
 def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None:
     executor = FakeExecutor(result=_session_result(outcomes=[_outcome(), _outcome(term="2", rewrites=0)]))
     settings = _settings(
@@ -220,6 +286,23 @@ def test_ok_result_is_adapted(maude_file: Path) -> None:
     assert (outcome.index, outcome.command, outcome.status) == (0, "reduce", "ok")
     assert (outcome.term, outcome.rewrites, outcome.message, outcome.limit) == ("2", 3, None, None)
     assert outcome.output.model_dump() == {"stdout": "step out", "stderr": "step err"}
+
+
+@pytest.mark.parametrize(
+    ("step", "command"),
+    [
+        (RewriteStep(command="rewrite", term="c(0)"), "rewrite"),
+        (FrewriteStep(command="frewrite", term="c(0)"), "frewrite"),
+        (ErewriteStep(command="erewrite", term="c(0)"), "erewrite"),
+    ],
+)
+def test_rewriting_outcome_is_adapted(maude_file: Path, step: Any, command: str) -> None:
+    session = _session_result(outcomes=[_outcome(command=command, term="c(1)", rewrites=4)])
+
+    result = maude_run(str(maude_file), "M", [step], executor=FakeExecutor(session), settings=_settings())
+
+    outcome = result.steps[0]
+    assert (outcome.command, outcome.term, outcome.rewrites) == (command, "c(1)", 4)
 
 
 def test_parse_error_outcome_is_adapted(maude_file: Path) -> None:

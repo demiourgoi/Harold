@@ -1,0 +1,6 @@
+mod COUNTER is
+    pr NAT .
+    op c : Nat -> Nat .
+    var N : Nat .
+    rl [inc] : c(N) => c(N + 1) .
+endm

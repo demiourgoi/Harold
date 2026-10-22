@@ -11,7 +11,7 @@
 - [x] **Step 1** — Settings and stream-capture foundation
 - [x] **Step 2** — Worker session engine and executor (reduce only)
 - [x] **Step 3** — `maude_run` tool end to end (reduce only)
-- [ ] **Step 4** — Rewriting family and current-term threading
+- [x] **Step 4** — Rewriting family and current-term threading
 - [ ] **Step 5** — `match` and `search`, final tool description
 - [ ] **Step 6** — Documentation, release bookkeeping, full validation
 
@@ -357,6 +357,68 @@ gains the three commands.
 
 **Demo.** A pipeline `reduce f` → `rewrite` (term omitted, uses the previous result) returns both
 intermediate terms; a failing middle step stops the run.
+
+### Implementation notes (Step 4)
+
+**What landed.**
+
+- Session engine: `_run_rewriting` dispatches `reduce`/`rewrite`/`frewrite`/`erewrite`
+  after a shared subject resolution; `_run_step` accepts exactly those commands.
+  Omitted `bound`/`gas` become `-1` (the bindings' unbounded default) only via
+  explicit `is not None` checks, so an explicit `0` survives. `reduce`/`rewrite`/
+  `frewrite` serialize the mutated subject; `erewrite` serializes the returned term.
+- Tool models: `RewriteStep`, `FrewriteStep`, `ErewriteStep` (pydantic `ge=0`), and
+  `MaudeStep` is now the discriminated union on `command`.
+  `_to_step_request` forwards `bound`/`gas`; `_validate_steps` enforces the
+  `interpreter_max_rewrite_bound` cap.
+- Description: the three commands are documented and the threading paragraph now
+  covers all four rewriting commands.
+- Tests: unit coverage for bound/gas forwarding (including `bound=0`), the bound cap,
+  model-level rejection of negative values, the adapter for every rewriting command,
+  and threading with rewriting steps. Integration: new `counter.maude` fixture
+  (`mod` with `rl [inc] : c(N) => c(N + 1)`), values/counters for all four commands,
+  `bound=0` unchanged, `erewrite` → next-step threading, and tool-level pipelines
+  (reduce → rewrite, rewrite → rewrite, failing middle step).
+
+**Deviations and decisions.**
+
+1. The design's inheritance chain (`FrewriteStep(RewriteStep)`, ...) fails mypy strict:
+   narrowing `command` from `Literal["rewrite"]` to `Literal["frewrite"]` is an
+   incompatible override. The models now use field-holding intermediate bases
+   (`_BoundedStep`, `_GassedStep`) with flat concrete classes; the schema, field
+   constraints and discriminated-union behavior are unchanged (verified by parsing a
+   client-style dict list into all four classes).
+2. `bound`/`gas` forwarding and the cap check use `isinstance(step, _BoundedStep)` /
+   `_GassedStep`, which keeps mypy narrowing without `getattr`.
+3. `rewrites` was verified against the real interpreter: on the counter fixture each
+   rule step reports 2 (the equational rewrite of `N + 1` is included), so `bound=3`
+   reports 6. The field docstring already states the counter includes equations.
+4. `erewrite`'s non-mutation of the original is exercised through its consequence:
+   the session keeps only term text, so the next step threading from the **returned**
+   `c(3)` (not the original `c(0)`) is the observable guarantee.
+5. `gas`'s `ge=0` is enforced by the pydantic model (as designed); direct in-process
+   calls bypass FastMCP/pydantic validation, like the other model constraints, and
+   `bound` additionally has the runtime cap check.
+6. The new `counter.maude` fixture is picked up by the parallel-diagnostics glob; it
+   is warning-free, so it needed no special-casing.
+
+**User review — typing and naming (2026-10-22).** The worker protocol no longer uses
+raw `str` for command/status fields: `session.py` defines `CommandName` (all six
+commands), `RewritingCommand` (the four implemented ones) and `StepStatus`, used by
+`StepRequest.command`, `StepOutcomeDict.command/status`, `_outcome` and
+`_run_rewriting`. `harold_mcp.maude` exports `CommandName`/`StepStatus`, and the
+tool's wire models reuse them, which removed the duplicated aliases and the
+`cast` calls in the adapter. `_run_step` narrows the command with a `match`
+or-pattern, so `_run_rewriting` receives `RewritingCommand` (mypy-verified). The
+subject parameter is `term_str` (term text) while the parsed Maude object is the
+`term` local inside the capture, so the text-vs-object distinction is visible in
+the code.
+
+**Implications for later steps.** Step 5 adds `match`/`search`: their subject
+resolution differs (`subject` field), they do not update the current term (the
+`outcome["term"] is not None` update already leaves it unchanged), `max_solutions`
+starts being used, the outcome models gain `matches`/`solutions`/`truncated`, and the
+tool description is replaced with the final six-command text.
 
 ---
 

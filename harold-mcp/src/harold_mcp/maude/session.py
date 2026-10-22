@@ -10,9 +10,18 @@ caller carries state across sessions by re-submitting a saved result term or by
 writing a wrapper module.
 """
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict, capture_streams, parse_warnings, truncate_output
+
+CommandName = Literal["reduce", "rewrite", "frewrite", "erewrite", "match", "search"]
+"""Every step command; `match`/`search` are not implemented yet."""
+
+RewritingCommand = Literal["reduce", "rewrite", "frewrite", "erewrite"]
+"""The rewriting commands the session engine implements today."""
+
+StepStatus = Literal["ok", "parse-error", "too-large"]
+"""Outcome status: a successful step or one of the two per-step failures."""
 
 # Reported in `SessionResult.module_type` when no module was found. Real module types
 # start at 0 (`FUNCTIONAL_MODULE`); the tool checks `module_found` before using it.
@@ -26,7 +35,7 @@ class StepRequest(TypedDict):
     dict shape is stable across commands.
     """
 
-    command: str
+    command: CommandName
     term: str | None
     pattern: str | None
     subject: str | None
@@ -66,8 +75,8 @@ class StepOutcomeDict(TypedDict):
     """The outcome of one executed step (per-step failures are data, not exceptions)."""
 
     index: int
-    command: str
-    status: str
+    command: CommandName
+    status: StepStatus
     term: str | None
     rewrites: int | None
     matches: list[list[BindingDict]] | None
@@ -101,8 +110,8 @@ def _truncate_capture(captured: CapturedOutput, max_length: int) -> CapturedOutp
 def _outcome(
     *,
     index: int,
-    command: str,
-    status: str,
+    command: CommandName,
+    status: StepStatus,
     output: CapturedOutput,
     term: str | None = None,
     rewrites: int | None = None,
@@ -128,43 +137,63 @@ def _outcome(
     }
 
 
-def _reduce(
+def _run_rewriting(
     module: Any,
     index: int,
-    subject: str,
+    command: RewritingCommand,
+    term_str: str,
+    step: StepRequest,
     max_result_length: int,
     max_output_length: int,
 ) -> StepOutcomeDict:
-    """Parse `subject` in `module`, reduce it, and build the outcome.
+    """Parse `term_str`, run one rewriting command, and build the outcome.
 
-    Parsing and the reduction share one capture: a parse failure writes Maude's
+    Parsing and the command share one capture: a parse failure writes Maude's
     `Warning:` lines to stderr, which become the `parse-error` message. The full
     stderr is parsed before the returned capture is truncated.
+
+    `reduce`, `rewrite` and `frewrite` mutate the parsed term; `erewrite` leaves it
+    untouched and returns a new term. The reported counter is the interpreter's
+    rewrite count, which includes equational rewrites. Omitted bounds are passed as
+    `-1` (the bindings' unbounded default); an explicit `0` stays `0`.
     """
 
     def execute() -> tuple[int | None, str | None]:
-        term = module.parseTerm(subject)
+        term = module.parseTerm(term_str)
         if term is None:
             return None, None
-        rewrites = int(term.reduce())
-        return rewrites, str(term)
+        bound = step["bound"] if step["bound"] is not None else -1
+        gas = step["gas"] if step["gas"] is not None else -1
+        match command:
+            case "reduce":
+                rewrites = term.reduce()
+            case "rewrite":
+                rewrites = term.rewrite(bound)
+            case "frewrite":
+                rewrites = term.frewrite(bound, gas)
+            case "erewrite":
+                term, rewrites = term.erewrite(bound, gas)
+            case _:
+                # Defensive: `_run_step` only dispatches rewriting commands.
+                raise ValueError(f"unsupported command {command!r}")  # noqa: TRY003 - programming error
+        return int(rewrites), str(term)
 
     (rewrites, rendered), captured = capture_streams(execute)
     output = _truncate_capture(captured, max_output_length)
     if rendered is None:
         message = "\n".join(warning["message"] for warning in parse_warnings(captured["stderr"]))
-        return _outcome(index=index, command="reduce", status="parse-error", message=message, output=output)
+        return _outcome(index=index, command=command, status="parse-error", message=message, output=output)
     if len(rendered) > max_result_length:
         return _outcome(
             index=index,
-            command="reduce",
+            command=command,
             status="too-large",
             limit=max_result_length,
             output=output,
         )
     return _outcome(
         index=index,
-        command="reduce",
+        command=command,
         status="ok",
         term=rendered,
         rewrites=rewrites,
@@ -179,16 +208,28 @@ def _run_step(
     current: str | None,
     request: SessionRequest,
 ) -> StepOutcomeDict:
-    """Execute one step against the current term; only `reduce` exists so far."""
+    """Execute one step against the current term (rewriting commands only so far)."""
     command = step["command"]
-    if command != "reduce":
-        # Server-side validation only admits implemented commands; a mismatch is a
-        # programming error, not a user error.
-        raise ValueError(f"unsupported command {command!r} in step {index}")  # noqa: TRY003 - programming error
-    subject = step["term"] if step["term"] is not None else current
-    if subject is None:
-        raise ValueError(f"step {index} has no term and there is no current term")  # noqa: TRY003 - programming error
-    return _reduce(module, index, subject, request["max_result_length"], request["max_output_length"])
+    match command:
+        case "reduce" | "rewrite" | "frewrite" | "erewrite":
+            term_str = step["term"] if step["term"] is not None else current
+            if term_str is None:
+                raise ValueError(  # noqa: TRY003 - programming error
+                    f"step {index} has no term and there is no current term"
+                )
+            return _run_rewriting(
+                module,
+                index,
+                command,
+                term_str,
+                step,
+                request["max_result_length"],
+                request["max_output_length"],
+            )
+        case _:
+            # Server-side validation only admits implemented commands; a mismatch is a
+            # programming error, not a user error.
+            raise ValueError(f"unsupported command {command!r} in step {index}")  # noqa: TRY003 - programming error
 
 
 def run_session(request: SessionRequest) -> SessionResult:

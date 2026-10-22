@@ -15,10 +15,18 @@ from harold_mcp.maude.executor import (
     get_maude_executor,
 )
 from harold_mcp.maude.provider import InterpreterDiagnosticProvider
-from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict, StepRequest
+from harold_mcp.maude.session import (
+    CommandName,
+    SessionRequest,
+    SessionResult,
+    StepOutcomeDict,
+    StepRequest,
+    StepStatus,
+)
 
 __all__ = [
     "CapturedOutput",
+    "CommandName",
     "InterpreterDiagnosticProvider",
     "MaudeError",
     "MaudeExecutor",
@@ -30,6 +38,7 @@ __all__ = [
     "SessionResult",
     "StepOutcomeDict",
     "StepRequest",
+    "StepStatus",
     "WarningDict",
     "get_maude_executor",
 ]

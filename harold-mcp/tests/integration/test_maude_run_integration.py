@@ -11,7 +11,14 @@ from pathlib import Path
 import pytest
 
 from harold_mcp.maude import MaudeExecutor
-from harold_mcp.server.tools.interpreter import MaudeRunError, MaudeRunResult, ReduceStep, maude_run
+from harold_mcp.server.tools.interpreter import (
+    MaudeRunError,
+    MaudeRunResult,
+    MaudeStep,
+    ReduceStep,
+    RewriteStep,
+    maude_run,
+)
 from harold_mcp.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -32,7 +39,7 @@ def _run(
     environment: tuple[MaudeExecutor, Settings],
     fixture_name: str,
     module: str,
-    steps: list[ReduceStep],
+    steps: list[MaudeStep],
 ) -> MaudeRunResult:
     executor, settings = environment
     return maude_run(
@@ -72,3 +79,50 @@ def test_missing_module_error_lists_the_defined_modules(environment: tuple[Maude
 def test_broken_file_fails_as_a_whole_call(environment: tuple[MaudeExecutor, Settings]) -> None:
     with pytest.raises(MaudeRunError, match="not defined"):
         _ = _run(environment, "broken-non-recoverable.maude", "HELLO-WORLD", [ReduceStep(command="reduce", term="f")])
+
+
+def test_reduce_then_rewrite_pipeline_threads_the_current_term(
+    environment: tuple[MaudeExecutor, Settings],
+) -> None:
+    result = _run(
+        environment,
+        "counter.maude",
+        "COUNTER",
+        [ReduceStep(command="reduce", term="2 * 3"), RewriteStep(command="rewrite", bound=0)],
+    )
+
+    assert result.completed is True
+    assert [step.term for step in result.steps] == ["6", "6"]
+    assert [step.rewrites for step in result.steps] == [1, 0]
+
+
+def test_rewrite_pipeline_uses_each_previous_result(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(
+        environment,
+        "counter.maude",
+        "COUNTER",
+        [RewriteStep(command="rewrite", term="c(0)", bound=1), RewriteStep(command="rewrite", bound=1)],
+    )
+
+    assert result.completed is True
+    assert [step.term for step in result.steps] == ["c(1)", "c(2)"]
+    assert [step.rewrites for step in result.steps] == [2, 2]
+
+
+def test_failing_middle_step_stops_the_run(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(
+        environment,
+        "counter.maude",
+        "COUNTER",
+        [
+            ReduceStep(command="reduce", term="2 * 3"),
+            ReduceStep(command="reduce", term="nope("),
+            ReduceStep(command="reduce", term="1"),
+        ],
+    )
+
+    assert result.completed is False
+    assert len(result.steps) == 2
+    assert [step.status for step in result.steps] == ["ok", "parse-error"]
+    assert result.steps[1].message is not None
+    assert "no parse for term." in result.steps[1].message

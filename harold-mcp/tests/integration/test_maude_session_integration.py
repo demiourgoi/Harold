@@ -35,17 +35,27 @@ def _run(executor: MaudeExecutor, request: SessionRequest) -> SessionResult:
     return executor.run_session(request, timeout=CALL_TIMEOUT_SECS)
 
 
-def _reduce(term: str | None) -> StepRequest:
+def _step(
+    command: str,
+    term: str | None = None,
+    *,
+    bound: int | None = None,
+    gas: int | None = None,
+) -> StepRequest:
     return {
-        "command": "reduce",
+        "command": command,
         "term": term,
         "pattern": None,
         "subject": None,
-        "bound": None,
-        "gas": None,
+        "bound": bound,
+        "gas": gas,
         "depth": None,
         "search_type": None,
     }
+
+
+def _reduce(term: str | None) -> StepRequest:
+    return _step("reduce", term)
 
 
 def _request(
@@ -166,3 +176,45 @@ def test_sessions_are_hermetic(executor: MaudeExecutor) -> None:
     second = _run(executor, _request("warns_and_prints.maude", "HELLO-WORLD", []))
     assert second["module_found"] is False
     assert second["defined_modules"] == ["WARNS-AND-PRINTS"]
+
+
+def test_rewriting_family_values_and_counters(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("reduce", "2 * 3"),
+                _step("rewrite", "c(0)", bound=3),
+                _step("frewrite", "c(0)", bound=3),
+                _step("erewrite", "c(0)", bound=3),
+            ],
+        ),
+    )
+
+    outcomes = result["outcomes"]
+    assert [outcome["status"] for outcome in outcomes] == ["ok"] * 4
+    assert [outcome["term"] for outcome in outcomes] == ["6", "c(3)", "c(3)", "c(3)"]
+    # The counter includes equational rewrites: each rule step costs 2 here.
+    assert [outcome["rewrites"] for outcome in outcomes] == [1, 6, 6, 6]
+
+
+def test_rewrite_bound_zero_leaves_the_term_unchanged(executor: MaudeExecutor) -> None:
+    result = _run(executor, _request("counter.maude", "COUNTER", [_step("rewrite", "c(0)", bound=0)]))
+
+    outcome = _single_outcome(result)
+    assert (outcome["status"], outcome["term"], outcome["rewrites"]) == ("ok", "c(0)", 0)
+
+
+def test_erewrite_threads_the_returned_term(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request("counter.maude", "COUNTER", [_step("erewrite", "c(0)", bound=3), _step("rewrite", bound=1)]),
+    )
+
+    outcomes = result["outcomes"]
+    # `erewrite` leaves its subject untouched and returns a new term; the next step
+    # starts from that returned term (`c(3)`), not from the original `c(0)`.
+    assert [outcome["term"] for outcome in outcomes] == ["c(3)", "c(4)"]
+    assert [outcome["rewrites"] for outcome in outcomes] == [6, 2]
