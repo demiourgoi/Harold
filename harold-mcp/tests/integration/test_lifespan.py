@@ -16,11 +16,13 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 class FakeExecutor:
     def __init__(self) -> None:
         self.start_called = 0
+        self.start_timeout: float | None = None
         self.shutdown_called = 0
         self.fail_start = False
 
-    def start(self) -> None:
+    def start(self, timeout: float) -> None:
         self.start_called += 1
+        self.start_timeout = timeout
         if self.fail_start:
             raise MaudeInitError()
 
@@ -43,6 +45,7 @@ def test_lifespan_starts_and_shuts_down_the_pool(fake_executor: FakeExecutor) ->
 
     asyncio.run(_exercise())
     assert fake_executor.start_called == 1
+    assert fake_executor.start_timeout == get_settings().diagnostics_timeout_secs
     assert fake_executor.shutdown_called == 1
 
 

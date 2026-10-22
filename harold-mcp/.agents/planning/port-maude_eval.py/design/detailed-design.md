@@ -251,16 +251,25 @@ Details that encode research findings:
 ### 4.4 Executor changes (`src/harold_mcp/maude/executor.py`)
 
 ```python
-def _run_task(self, fn: Callable[..., T], *args: Any, timeout: float | None = None) -> T:
-    effective_timeout = timeout if timeout is not None else self._settings.diagnostics_timeout_secs
+def _run_task(self, fn: Callable[..., T], *args: Any, timeout: float) -> T:
+    # The timeout is always chosen by the caller; the executor is not tied to a
+    # tool's setting.
     ...
-    return cast(T, future.result(timeout=effective_timeout))
+    return cast(T, future.result(timeout=timeout))
 
-def run_session(self, request: SessionRequest, timeout: float | None = None) -> SessionResult:
+def diagnostics(self, path: str) -> LoadDiagnosticsResult:
+    return self._run_task(worker.load_diagnostics, path,
+                          timeout=self._settings.diagnostics_timeout_secs)
+
+def run_session(self, request: SessionRequest, timeout: float) -> SessionResult:
     return self._run_task(session.run_session, request, timeout=timeout)
 ```
 
-- `diagnostics()` and `start()` are unchanged (default timeout = `diagnostics_timeout_secs`).
+- **No implicit timeout in `_run_task`.** `diagnostics()` passes the diagnostics setting
+explicitly; the lifespan calls `start(settings.diagnostics_timeout_secs)` for the init
+pings; `run_session` requires the interpreter timeout (or the per-call override) from the
+tool. This keeps the executor decoupled from any one tool's timeout policy (user review
+2026-10-22).
 - The timeout covers submission to completion, i.e. spawn + `init_maude` + work. On expiry the
   pool is replaced (existing `_reset_executor`); the failed call is never retried (R11/Q11).
 - The executor remains the only component that knows about pools, crashes and timeouts.

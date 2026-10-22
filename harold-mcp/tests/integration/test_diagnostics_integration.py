@@ -31,8 +31,9 @@ REPO_ROOT = Path(__file__).parents[2]
 
 @pytest.fixture(scope="module")
 def executor() -> Iterator[MaudeExecutor]:
-    executor = MaudeExecutor(settings=Settings(maude_workers=1))
-    executor.start()
+    settings = Settings(maude_workers=1)
+    executor = MaudeExecutor(settings=settings)
+    executor.start(settings.diagnostics_timeout_secs)
     try:
         yield executor
     finally:
@@ -230,8 +231,9 @@ def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
     spawn).
     """
     concurrent = 4
-    parallel = MaudeExecutor(settings=Settings(maude_workers=concurrent))
-    parallel.start()
+    settings = Settings(maude_workers=concurrent)
+    parallel = MaudeExecutor(settings=settings)
+    parallel.start(settings.diagnostics_timeout_secs)
     try:
         fixtures = sorted(FIXTURES_DIR.glob("*.maude"))
         with ThreadPoolExecutor(max_workers=concurrent) as pool:
@@ -434,8 +436,9 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
 
 
 def test_tool_reports_crash_and_recovers() -> None:
-    executor = MaudeExecutor(settings=Settings(maude_workers=1))
-    executor.start()
+    settings = Settings(maude_workers=1)
+    executor = MaudeExecutor(settings=settings)
+    executor.start(settings.diagnostics_timeout_secs)
     try:
         with pytest.raises(BrokenProcessPool):
             executor.submit(worker._crash).result(timeout=60)

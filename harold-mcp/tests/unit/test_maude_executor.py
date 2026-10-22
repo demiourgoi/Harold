@@ -14,11 +14,32 @@ from harold_mcp.maude import (
     MaudeWorkerTimeoutError,
     get_maude_executor,
 )
+from harold_mcp.maude import session as session_module
 from harold_mcp.maude import worker as worker_module
+from harold_mcp.maude.session import SessionRequest, SessionResult
 from harold_mcp.maude.worker import LoadDiagnosticsResult, ping
 from harold_mcp.settings import Settings
 
 OK_RESULT: LoadDiagnosticsResult = {"ok": True, "warnings": []}
+
+SESSION_REQUEST: SessionRequest = {
+    "path": "hello.maude",
+    "module": "HELLO-WORLD",
+    "steps": [],
+    "max_solutions": 200,
+    "max_result_length": 1_000_000,
+    "max_output_length": 1_000_000,
+}
+
+SESSION_RESULT: SessionResult = {
+    "load_ok": True,
+    "module_found": True,
+    "module_type": 0,
+    "defined_modules": ["HELLO-WORLD"],
+    "warnings": [],
+    "load_output": {"stdout": "", "stderr": ""},
+    "outcomes": [],
+}
 
 
 class FakeFuture:
@@ -27,8 +48,10 @@ class FakeFuture:
     def __init__(self, result: Any = None, exc: BaseException | None = None) -> None:
         self._result = result
         self._exc = exc
+        self.timeouts: list[float | None] = []
 
     def result(self, timeout: float | None = None) -> Any:
+        self.timeouts.append(timeout)
         if self._exc is not None:
             raise self._exc
         return self._result
@@ -84,6 +107,40 @@ def test_diagnostics_lazily_starts_executor() -> None:
     executor = make_executor(lambda: fake)
 
     assert executor.diagnostics("hello.maude") == OK_RESULT
+
+
+def test_diagnostics_uses_the_diagnostics_timeout() -> None:
+    future = FakeFuture(result=OK_RESULT)
+    executor = make_executor(
+        lambda: FakeExecutor(futures=[future]),
+        settings=Settings(maude_workers=1, diagnostics_timeout_secs=42),
+    )
+
+    assert executor.diagnostics("hello.maude") == OK_RESULT
+    assert future.timeouts == [42]
+
+
+def test_run_session_delegates_with_the_request_and_timeout() -> None:
+    future = FakeFuture(result=SESSION_RESULT)
+    fake = FakeExecutor(futures=[future])
+    executor = make_executor(lambda: fake)
+
+    result = executor.run_session(SESSION_REQUEST, timeout=7.5)
+
+    assert result == SESSION_RESULT
+    fn, args = fake.submit_calls[0]
+    assert fn is session_module.run_session
+    assert args == (SESSION_REQUEST,)
+    assert future.timeouts == [7.5]
+
+
+def test_run_session_uses_the_explicit_timeout() -> None:
+    future = FakeFuture(result=SESSION_RESULT)
+    executor = make_executor(lambda: FakeExecutor(futures=[future]))
+
+    _ = executor.run_session(SESSION_REQUEST, timeout=33)
+
+    assert future.timeouts == [33]
 
 
 def test_submit_on_broken_pool_replaces_and_raises() -> None:
@@ -164,7 +221,7 @@ def test_start_warms_up_one_ping_per_worker() -> None:
     fake = FakeExecutor()
     executor = make_executor(lambda: fake, settings=Settings(maude_workers=2))
 
-    executor.start()
+    executor.start(60)
 
     assert len(fake.submit_calls) == 2
     assert all(fn is ping for fn, _ in fake.submit_calls)
@@ -181,7 +238,7 @@ def test_start_init_failure_raises_maude_init_error() -> None:
     executor = make_executor(factory)
 
     with pytest.raises(MaudeInitError):
-        executor.start()
+        executor.start(60)
     # The failed pool is discarded and killed, not eagerly replaced with a doomed worker.
     assert calls["n"] == 1
     assert failed.killed
@@ -191,14 +248,14 @@ def test_start_timeout_raises_maude_init_error() -> None:
     executor = make_executor(lambda: FakeExecutor(futures=[FakeFuture(exc=TimeoutError())]))
 
     with pytest.raises(MaudeInitError):
-        executor.start()
+        executor.start(60)
 
 
 def test_shutdown_is_idempotent() -> None:
     fake = FakeExecutor()
     executor = make_executor(lambda: fake)
 
-    executor.start()
+    executor.start(60)
     executor.shutdown()
     executor.shutdown()
 

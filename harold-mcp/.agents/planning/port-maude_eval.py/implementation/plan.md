@@ -9,7 +9,7 @@
 ## Checklist
 
 - [x] **Step 1** — Settings and stream-capture foundation
-- [ ] **Step 2** — Worker session engine and executor (reduce only)
+- [x] **Step 2** — Worker session engine and executor (reduce only)
 - [ ] **Step 3** — `maude_run` tool end to end (reduce only)
 - [ ] **Step 4** — Rewriting family and current-term threading
 - [ ] **Step 5** — `match` and `search`, final tool description
@@ -175,6 +175,60 @@ path is untouched.
 
 **Demo.** A direct executor call returns a session result reducing `f` to `2`, and a second call
 proves hermeticity.
+
+### Implementation notes (Step 2)
+
+**What landed.**
+
+- `maude/session.py`: the §5.4 TypedDicts (`StepRequest`, `SessionRequest`,
+  `BindingDict`, `SolutionDict`, `StepOutcomeDict`, `SessionResult`) and
+  `run_session` with the load → module selection → step loop. `_reduce` parses
+  and reduces under one capture, emits `ok` / `parse-error` / `too-large`,
+  applies `max_result_length` and truncates the returned capture to
+  `max_output_length`; warnings and parse-error messages are parsed from the
+  full stderr first. The current term threads through `reduce` steps.
+- `MaudeExecutor._run_task(..., timeout=None)` resolves `None` to
+  `diagnostics_timeout_secs`; `diagnostics()` and `start()` keep that default.
+  `run_session(request, timeout=None)` delegates to `session.run_session`.
+- `harold_mcp.maude` exports `SessionRequest`, `SessionResult`, `StepRequest`,
+  `StepOutcomeDict` (plus `CapturedOutput` and `WarningDict` for the tool).
+- Tests: executor unit tests record the timeout passed to `future.result`
+  (default and explicit, session delegation); new
+  `tests/integration/test_maude_session_integration.py` covers reduce, current
+  term threading, parse-error, missing module with defined modules, warnings
+  plus evaluation, embedded `red` in `load_output.stdout`, `too-large`, output
+  truncation and hermeticity.
+
+**Deviations and decisions.**
+
+1. `module_type` is `UNKNOWN_MODULE_TYPE = -1` when the load failed or the
+   module is missing (real types start at `FUNCTIONAL_MODULE = 0`). The tool
+   checks `module_found` before using the value.
+2. The `parse-error` message joins the parsed warning messages with `\n`; the
+   design only said "joined". A failure that prints no `Warning:` lines yields
+   an empty message (no observed case).
+3. `_run_step` raises `ValueError` (with `# noqa: TRY003`) for an unsupported
+   command or a missing subject: both are programming errors that Step 3's
+   validation prevents, not user errors.
+4. The executor is decoupled from the diagnostics timeout (user review,
+   2026-10-22): `_run_task` and `run_session` now require an explicit `timeout`,
+   `diagnostics()` passes `diagnostics_timeout_secs` itself, and the lifespan
+   passes the same setting to `start(timeout)`. **Step 3 must pass** the
+   settings' `interpreter_timeout_secs` (or the per-call override) explicitly to
+   `run_session`.
+5. `SessionRequest.max_solutions` is carried but unused until Step 5, and
+   `_outcome` sets the `matches`/`solutions`/`truncated` fields to `None` until
+   the corresponding commands land.
+6. Added an integration test for `reduce` current-term threading (the loop
+   already maintained the current term, so the behavior needed pinning).
+7. No unit tests mock the session engine: the `maude` module is `Any`, so a fake
+   would only re-assert the dict plumbing; the integration suite exercises the
+   real parse/reduce behavior where it matters.
+
+**Implications for later steps.** Steps 4–5 extend `_run_step`/`_outcome` and
+consume `max_solutions`; the Step 3 adapter can rely on `UNKNOWN_MODULE_TYPE`
+only after a `module_found` check and on exactly one outcome per executed step
+(stop-at-first-failure is implemented in `run_session`).
 
 ---
 

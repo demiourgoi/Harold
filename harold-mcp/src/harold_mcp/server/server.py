@@ -30,9 +30,10 @@ async def app_lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, Any] | None
     aborts server startup. Teardown always runs, even if the warm-up was
     interrupted.
     """
-    executor = get_maude_executor(get_settings())
+    settings = get_settings()
+    executor = get_maude_executor(settings)
     try:
-        executor.start()
+        executor.start(settings.diagnostics_timeout_secs)
         _LOG.info("Harold initialized with success!")
         yield None
     finally:

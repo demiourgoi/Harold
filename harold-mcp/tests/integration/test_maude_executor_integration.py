@@ -15,8 +15,9 @@ from harold_mcp.settings import Settings
 
 
 def test_two_workers_are_used_for_parallel_diagnostics(tmp_path: Path) -> None:
-    parallel = MaudeExecutor(settings=Settings(maude_workers=2))
-    parallel.start()
+    settings = Settings(maude_workers=2)
+    parallel = MaudeExecutor(settings=settings)
+    parallel.start(settings.diagnostics_timeout_secs)
     try:
         # Both tasks complete only once a peer task is running concurrently (marker
         # rendezvous), so completion proves the pool used two processes; a pool that

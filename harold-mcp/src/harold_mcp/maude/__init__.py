@@ -4,6 +4,7 @@ The Maude interpreter runs in a dedicated worker process; importing this
 package never imports the SWIG `maude` bindings.
 """
 
+from harold_mcp.maude.capture import CapturedOutput, WarningDict
 from harold_mcp.maude.executor import (
     MaudeError,
     MaudeExecutor,
@@ -14,8 +15,10 @@ from harold_mcp.maude.executor import (
     get_maude_executor,
 )
 from harold_mcp.maude.provider import InterpreterDiagnosticProvider
+from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict, StepRequest
 
 __all__ = [
+    "CapturedOutput",
     "InterpreterDiagnosticProvider",
     "MaudeError",
     "MaudeExecutor",
@@ -23,5 +26,10 @@ __all__ = [
     "MaudeWorkerCrashedError",
     "MaudeWorkerError",
     "MaudeWorkerTimeoutError",
+    "SessionRequest",
+    "SessionResult",
+    "StepOutcomeDict",
+    "StepRequest",
+    "WarningDict",
     "get_maude_executor",
 ]

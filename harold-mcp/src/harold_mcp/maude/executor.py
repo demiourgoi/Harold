@@ -14,7 +14,7 @@ from typing import Any, TypeVar, cast
 from fastmcp.dependencies import Depends
 
 from harold_mcp.logging import Logging
-from harold_mcp.maude import worker
+from harold_mcp.maude import session, worker
 from harold_mcp.settings import Settings, get_settings
 
 
@@ -98,9 +98,8 @@ class MaudeExecutor(Logging):
 
     def _default_executor(self) -> ProcessPoolExecutor:
         self._log.info(
-            "Launching new process pool for %s workers with a timeout of %s seconds",
+            "Launching new process pool for %s workers",
             self._settings.maude_workers,
-            self._settings.diagnostics_timeout_secs,
         )
         return ProcessPoolExecutor(
             max_workers=self._settings.maude_workers,
@@ -135,14 +134,15 @@ class MaudeExecutor(Logging):
             old.kill_workers()
             self._log.info("Old process pool killed")
 
-    def start(self) -> None:
+    def start(self, timeout: float) -> None:
         """Create the pool and verify every worker can initialize Maude.
 
         Submits one `worker.ping` per worker (forcing spawn + `init_maude` in
-        each) and awaits them with the configured timeout. Raises
-        `MaudeInitError` on failure, discarding the failed pool so a later call
-        can retry lazily. With one task per process the pings are recycled right
-        away: this is a fail-fast initialization check, not a warm-up.
+        each) and awaits them with `timeout`, supplied by the caller (the
+        lifespan passes the diagnostics timeout). Raises `MaudeInitError` on
+        failure, discarding the failed pool so a later call can retry lazily.
+        With one task per process the pings are recycled right away: this is a
+        fail-fast initialization check, not a warm-up.
         """
         self._reset_executor()
         with self._executor_lock:
@@ -153,7 +153,7 @@ class MaudeExecutor(Logging):
             self._log.info("Pinging Maude workers...")
             futures = [executor.submit(worker.ping) for _ in range(self._settings.maude_workers)]
             for future in futures:
-                future.result(timeout=self._settings.diagnostics_timeout_secs)
+                future.result(timeout=timeout)
         except (BrokenProcessPool, TimeoutError) as exc:
             self._reset_executor(replace=False, failed=executor)
             raise MaudeInitError() from exc
@@ -182,18 +182,20 @@ class MaudeExecutor(Logging):
                 self._reset_executor(failed=self._executor)
                 raise MaudeWorkerCrashedError() from exc
 
-    def _run_task(self, fn: Callable[..., T], *args: Any) -> T:
+    def _run_task(self, fn: Callable[..., T], *args: Any, timeout: float) -> T:
         """Run a worker task to completion, mapping crash/timeout failures.
 
-        Raises `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`; the pool
-        is replaced so the next call works. Other worker exceptions propagate
+        `timeout` is the whole-call budget and is always chosen by the caller:
+        the executor itself is not tied to any tool's timeout setting. Raises
+        `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`; the pool is
+        replaced so the next call works. Other worker exceptions propagate
         unchanged.
         """
         executor, future = self._submit(fn, *args)
         # Reset here too: submit only sees failures at submission time, not a
         # worker that dies mid-task.
         try:
-            return cast(T, future.result(timeout=self._settings.diagnostics_timeout_secs))
+            return cast(T, future.result(timeout=timeout))
         except BrokenProcessPool as exc:
             self._reset_executor(failed=executor)
             raise MaudeWorkerCrashedError() from exc
@@ -203,7 +205,20 @@ class MaudeExecutor(Logging):
 
     def diagnostics(self, path: str) -> worker.LoadDiagnosticsResult:
         """Run `load_diagnostics` in the worker, with crash/timeout mapping."""
-        return self._run_task(worker.load_diagnostics, path)
+        return self._run_task(
+            worker.load_diagnostics,
+            path,
+            timeout=self._settings.diagnostics_timeout_secs,
+        )
+
+    def run_session(self, request: session.SessionRequest, timeout: float) -> session.SessionResult:
+        """Run a bounded interpreter session in a fresh worker.
+
+        `timeout` is the whole-call budget (spawn + prelude initialization +
+        work); the interpreter tool supplies the settings' interpreter timeout
+        or its per-call override.
+        """
+        return self._run_task(session.run_session, request, timeout=timeout)
 
 
 _executor: MaudeExecutor | None = None
