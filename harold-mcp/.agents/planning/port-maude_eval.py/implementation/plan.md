@@ -29,6 +29,11 @@
 - **Fixtures:** reuse `tests/integration/fixtures/`; new fixtures are added by the step that first
   needs them.
 
+Proceed step by step:
+
+- After each step ask me for confirmation before completing the step
+- When completing a step, add a new subsection "Implementation notes" to the step section in the plan, with a summary of what we did, focusing on the deviations from the plan, explaining why we did them and the implications for subsequent steps
+
 ---
 
 ## Step 1: Settings and stream-capture foundation
