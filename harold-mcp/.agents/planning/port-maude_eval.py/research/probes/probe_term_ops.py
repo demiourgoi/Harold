@@ -77,6 +77,21 @@ result, steps = t.erewrite(3)
 print("erewrite(3)       | steps:", steps, "| original:", repr(str(t)), "| result:", repr(str(result)))
 print("erewrite result type:", type(result).__name__)
 
+for gas in (0, 1, 2):
+    t = counter.parseTerm("c(0)")
+    steps = t.frewrite(3, gas)
+    print(f"frewrite(3, gas={gas}) | steps:", steps, "| term after:", repr(str(t)))
+    t = counter.parseTerm("c(0)")
+    result, steps = t.erewrite(3, gas)
+    print(
+        f"erewrite(3, gas={gas}) | steps:",
+        steps,
+        "| original:",
+        repr(str(t)),
+        "| result:",
+        repr(str(result)),
+    )
+
 section("match")
 subject = counter.parseTerm("c(5)")
 pattern = counter.parseTerm("c(N)")

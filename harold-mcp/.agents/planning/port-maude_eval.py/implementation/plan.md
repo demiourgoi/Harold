@@ -414,11 +414,22 @@ subject parameter is `term_str` (term text) while the parsed Maude object is the
 `term` local inside the capture, so the text-vs-object distinction is visible in
 the code.
 
+**Step 4 review rev1 fixes (2026-10-22).** `test_explicit_gas_reaches_the_interpreter`
+now sends `gas=0` through the worker for `frewrite` and `erewrite` and asserts the
+unchanged term and zero rewrites (a dropped `gas` would default to 1 and yield
+`c(3)` with 6 rewrites). `probe_term_ops.py` gained the explicit gas matrix (its
+transcript was regenerated) and the probes README documents it. The session
+integration docstring no longer claims the engine only supports `reduce`, and the
+Step 4 implications note now records that `_validate_steps` needs the `subject`
+field and must not set `has_current` after `match`/`search`.
+
 **Implications for later steps.** Step 5 adds `match`/`search`: their subject
 resolution differs (`subject` field), they do not update the current term (the
 `outcome["term"] is not None` update already leaves it unchanged), `max_solutions`
-starts being used, the outcome models gain `matches`/`solutions`/`truncated`, and the
-tool description is replaced with the final six-command text.
+`starts being used, the outcome models gain `matches`/`solutions`/`truncated`, and the
+tool description is replaced with the final six-command text. `_validate_steps` must
+learn the `subject` field and must not set `has_current` after `match`/`search` steps
+(implemented in Step 5).
 
 ---
 

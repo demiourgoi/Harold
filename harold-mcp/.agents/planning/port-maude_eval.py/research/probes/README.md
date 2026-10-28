@@ -19,7 +19,7 @@ Run from the `harold-mcp` directory:
 
 | Script | Answers |
 | --- | --- |
-| `probe_term_ops.py` | Return values, in-place mutation, step counts, `match`/`search` iteration, `parseTerm` failures, pretty-print fidelity and round-tripping. |
+| `probe_term_ops.py` | Return values, in-place mutation, step counts (including explicit `frewrite`/`erewrite` `gas`), `match`/`search` iteration, `parseTerm` failures, pretty-print fidelity and round-tripping. |
 | `probe_match_search.py` | Substitution serialization (`str(variable)` prints the name only, not the sort), `maxDepth` modes on an assoc module (`-1`/`0`/`UNBOUNDED`), the five search types plus ground `=>1` targets, and that the iterators are lazy. |
 | `probe_streams.py` | What each operation writes to fd 1 / fd 2 (parse errors, successful commands, loads). |
 | `probe_modules.py` | `getCurrentModule` vs `getModule`, module enumeration/diffing, dependency and broken-file loads. |

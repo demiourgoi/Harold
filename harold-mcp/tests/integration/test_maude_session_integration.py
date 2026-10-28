@@ -2,8 +2,8 @@
 
 Every call goes through `MaudeExecutor`, so these tests exercise the real spawned
 worker, interpreter initialization, file loading and the per-call hermeticity
-guarantee (`max_tasks_per_child=1`). The session engine itself only supports
-`reduce` for now.
+guarantee (`max_tasks_per_child=1`). The session engine supports the rewriting family
+and the `match`/`search` commands.
 """
 
 from collections.abc import Iterator
@@ -210,6 +210,26 @@ def test_rewrite_bound_zero_leaves_the_term_unchanged(executor: MaudeExecutor) -
 
     outcome = _single_outcome(result)
     assert (outcome["status"], outcome["term"], outcome["rewrites"]) == ("ok", "c(0)", 0)
+
+
+def test_explicit_gas_reaches_the_interpreter(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("frewrite", "c(0)", bound=3, gas=0),
+                _step("erewrite", "c(0)", bound=3, gas=0),
+            ],
+        ),
+    )
+
+    outcomes = result["outcomes"]
+    assert [outcome["status"] for outcome in outcomes] == ["ok", "ok"]
+    # gas=0 allows no rewrites per position, so the term stays unchanged. If the
+    # value were dropped (bindings default 1), both would reach c(3) with 6 rewrites.
+    assert [(outcome["term"], outcome["rewrites"]) for outcome in outcomes] == [("c(0)", 0), ("c(0)", 0)]
 
 
 def test_erewrite_threads_the_returned_term(executor: MaudeExecutor) -> None:

@@ -27,6 +27,12 @@ rewrite(0)        | steps: 0 | term after: 'c(0)'
 frewrite(3)       | steps: 6 | term after: 'c(3)'
 erewrite(3)       | steps: 6 | original: 'c(0)' | result: 'c(3)'
 erewrite result type: Term
+frewrite(3, gas=0) | steps: 0 | term after: 'c(0)'
+erewrite(3, gas=0) | steps: 0 | original: 'c(0)' | result: 'c(0)'
+frewrite(3, gas=1) | steps: 6 | term after: 'c(3)'
+erewrite(3, gas=1) | steps: 6 | original: 'c(0)' | result: 'c(3)'
+frewrite(3, gas=2) | steps: 6 | term after: 'c(3)'
+erewrite(3, gas=2) | steps: 6 | original: 'c(0)' | result: 'c(3)'
 
 === match ===
 subject: c(5) | pattern: c(N)
