@@ -16,9 +16,11 @@ from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeD
 from harold_mcp.server.tools.interpreter import (
     ErewriteStep,
     FrewriteStep,
+    MatchStep,
     MaudeRunError,
     ReduceStep,
     RewriteStep,
+    SearchStep,
     maude_run,
 )
 from harold_mcp.settings import Settings
@@ -209,6 +211,93 @@ def test_negative_bound_or_gas_is_rejected_by_the_model() -> None:
         _ = FrewriteStep(command="frewrite", term="f", gas=-1)
 
 
+def test_match_step_requires_a_pattern() -> None:
+    with pytest.raises(ValidationError):
+        _ = MatchStep(command="match")
+
+
+def test_search_step_requires_a_pattern_and_a_search_type() -> None:
+    with pytest.raises(ValidationError):
+        _ = SearchStep(command="search", search_type="any-steps")
+    with pytest.raises(ValidationError):
+        _ = SearchStep(command="search", pattern="X")
+
+
+def test_first_match_without_a_subject_is_rejected(maude_file: Path) -> None:
+    executor = FakeExecutor()
+
+    with pytest.raises(MaudeRunError, match="Step 0 has no subject"):
+        _ = maude_run(
+            str(maude_file), "M", [MatchStep(command="match", pattern="X")], executor=executor, settings=_settings()
+        )
+
+    assert executor.calls == []
+
+
+def test_match_does_not_create_a_current_term(maude_file: Path) -> None:
+    executor = FakeExecutor()
+    steps = [MatchStep(command="match", pattern="X", subject="1"), ReduceStep(command="reduce")]
+
+    with pytest.raises(MaudeRunError, match="Step 1 has no term"):
+        _ = maude_run(str(maude_file), "M", steps, executor=executor, settings=_settings())
+
+    assert executor.calls == []
+
+
+def test_pattern_and_subject_lengths_are_capped(maude_file: Path) -> None:
+    settings = _settings(interpreter_max_term_length=3)
+
+    with pytest.raises(MaudeRunError, match="pattern"):
+        _ = maude_run(
+            str(maude_file),
+            "M",
+            [MatchStep(command="match", pattern="abcd")],
+            executor=FakeExecutor(),
+            settings=settings,
+        )
+
+    with pytest.raises(MaudeRunError, match="subject"):
+        _ = maude_run(
+            str(maude_file),
+            "M",
+            [MatchStep(command="match", pattern="x", subject="abcd")],
+            executor=FakeExecutor(),
+            settings=settings,
+        )
+
+
+def test_search_step_forwards_pattern_subject_depth_and_type(maude_file: Path) -> None:
+    executor = FakeExecutor(
+        result=_session_result(
+            outcomes=[
+                _outcome(
+                    command="search",
+                    term=None,
+                    rewrites=None,
+                    solutions=[],
+                    truncated=False,
+                )
+            ]
+        )
+    )
+    step = SearchStep(command="search", pattern="c(N)", subject="c(0)", depth=2, search_type="any-steps")
+
+    _ = maude_run(str(maude_file), "M", [step], executor=executor, settings=_settings())
+
+    assert executor.calls[0][0]["steps"] == [
+        {
+            "command": "search",
+            "term": None,
+            "pattern": "c(N)",
+            "subject": "c(0)",
+            "bound": None,
+            "gas": None,
+            "depth": 2,
+            "search_type": "any-steps",
+        }
+    ]
+
+
 def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None:
     executor = FakeExecutor(result=_session_result(outcomes=[_outcome(), _outcome(term="2", rewrites=0)]))
     settings = _settings(
@@ -303,6 +392,75 @@ def test_rewriting_outcome_is_adapted(maude_file: Path, step: Any, command: str)
 
     outcome = result.steps[0]
     assert (outcome.command, outcome.term, outcome.rewrites) == (command, "c(1)", 4)
+
+
+def test_match_outcome_is_adapted(maude_file: Path) -> None:
+    session = _session_result(
+        outcomes=[
+            _outcome(
+                command="match",
+                term=None,
+                rewrites=None,
+                matches=[[{"variable": "N", "value": "5"}], []],
+                truncated=False,
+            )
+        ]
+    )
+
+    result = maude_run(
+        str(maude_file),
+        "M",
+        [MatchStep(command="match", pattern="c(N)", subject="c(5)")],
+        executor=FakeExecutor(session),
+        settings=_settings(),
+    )
+
+    outcome = result.steps[0]
+    assert outcome.term is None
+    assert outcome.rewrites is None
+    assert outcome.truncated is False
+    assert [match.model_dump() for match in outcome.matches or []] == [
+        {"bindings": [{"variable": "N", "value": "5"}]},
+        {"bindings": []},
+    ]
+
+
+def test_search_outcome_is_adapted(maude_file: Path) -> None:
+    session = _session_result(
+        outcomes=[
+            _outcome(
+                command="search",
+                term=None,
+                rewrites=None,
+                solutions=[
+                    {
+                        "term": "c(1)",
+                        "rewrites": 2,
+                        "bindings": [{"variable": "N", "value": "1"}],
+                    }
+                ],
+                truncated=True,
+            )
+        ]
+    )
+
+    result = maude_run(
+        str(maude_file),
+        "M",
+        [SearchStep(command="search", pattern="c(N)", subject="c(0)", search_type="any-steps")],
+        executor=FakeExecutor(session),
+        settings=_settings(),
+    )
+
+    outcome = result.steps[0]
+    assert outcome.truncated is True
+    assert [solution.model_dump() for solution in outcome.solutions or []] == [
+        {
+            "term": "c(1)",
+            "rewrites": 2,
+            "bindings": [{"variable": "N", "value": "1"}],
+        }
+    ]
 
 
 def test_parse_error_outcome_is_adapted(maude_file: Path) -> None:

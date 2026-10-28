@@ -1,0 +1,8 @@
+fmod ASSOC-MATCH is
+    pr NAT .
+    sort Seq .
+    subsorts Nat < Seq .
+    op _;_ : Seq Seq -> Seq [assoc] .
+    op wrap : Seq -> Seq [ctor] .
+    var X : Seq .
+endfm

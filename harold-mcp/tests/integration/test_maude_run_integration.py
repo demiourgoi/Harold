@@ -12,11 +12,13 @@ import pytest
 
 from harold_mcp.maude import MaudeExecutor
 from harold_mcp.server.tools.interpreter import (
+    MatchStep,
     MaudeRunError,
     MaudeRunResult,
     MaudeStep,
     ReduceStep,
     RewriteStep,
+    SearchStep,
     maude_run,
 )
 from harold_mcp.settings import Settings
@@ -126,3 +128,29 @@ def test_failing_middle_step_stops_the_run(environment: tuple[MaudeExecutor, Set
     assert [step.status for step in result.steps] == ["ok", "parse-error"]
     assert result.steps[1].message is not None
     assert "no parse for term." in result.steps[1].message
+
+
+def test_match_and_search_thread_without_changing_the_current_term(
+    environment: tuple[MaudeExecutor, Settings],
+) -> None:
+    result = _run(
+        environment,
+        "counter.maude",
+        "COUNTER",
+        [
+            RewriteStep(command="rewrite", term="c(0)", bound=2),
+            MatchStep(command="match", pattern="c(N)"),
+            SearchStep(command="search", pattern="c(N)", depth=2, search_type="any-steps"),
+        ],
+    )
+
+    assert result.completed is True
+    match_outcome = result.steps[1]
+    assert match_outcome.term is None
+    assert match_outcome.matches is not None
+    assert [match.model_dump() for match in match_outcome.matches] == [{"bindings": [{"variable": "N", "value": "2"}]}]
+    search_outcome = result.steps[2]
+    assert search_outcome.solutions is not None
+    # The search starts from the current term set by the rewrite (c(2)).
+    assert [solution.term for solution in search_outcome.solutions] == ["c(2)", "c(3)", "c(4)"]
+    assert search_outcome.truncated is False

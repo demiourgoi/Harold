@@ -10,18 +10,32 @@ caller carries state across sessions by re-submitting a saved result term or by
 writing a wrapper module.
 """
 
+from itertools import islice
 from typing import Any, Literal, TypedDict
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict, capture_streams, parse_warnings, truncate_output
 
 CommandName = Literal["reduce", "rewrite", "frewrite", "erewrite", "match", "search"]
-"""Every step command; `match`/`search` are not implemented yet."""
+"""Every step command."""
 
 RewritingCommand = Literal["reduce", "rewrite", "frewrite", "erewrite"]
-"""The rewriting commands the session engine implements today."""
+"""The rewriting commands the session engine implements."""
+
+MatchingCommand = Literal["match", "search"]
+"""The pattern commands the session engine implements."""
 
 StepStatus = Literal["ok", "parse-error", "too-large"]
 """Outcome status: a successful step or one of the two per-step failures."""
+
+# Maude's search-type constants (`maude.ONE_STEP`, ...). Spelled out so this module
+# can be imported by the server process without touching the bindings.
+_SEARCH_TYPES: dict[str, int] = {
+    "one-step": 0,  # maude.ONE_STEP
+    "at-least-one-step": 1,  # maude.AT_LEAST_ONE_STEP
+    "any-steps": 2,  # maude.ANY_STEPS
+    "normal-form": 3,  # maude.NORMAL_FORM
+    "branch": 4,  # maude.BRANCH
+}
 
 # Reported in `SessionResult.module_type` when no module was found. Real module types
 # start at 0 (`FUNCTIONAL_MODULE`); the tool checks `module_found` before using it.
@@ -57,7 +71,7 @@ class SessionRequest(TypedDict):
 
 
 class BindingDict(TypedDict):
-    """A variable binding (`variable` is Maude's name-plus-sort text)."""
+    """A variable binding (`variable` is the name Maude printed, e.g. `N`)."""
 
     variable: str
     value: str
@@ -115,22 +129,22 @@ def _outcome(
     output: CapturedOutput,
     term: str | None = None,
     rewrites: int | None = None,
+    matches: list[list[BindingDict]] | None = None,
+    solutions: list[SolutionDict] | None = None,
+    truncated: bool | None = None,
     message: str | None = None,
     limit: int | None = None,
 ) -> StepOutcomeDict:
-    """Build a flat step outcome; fields that do not apply are `None`.
-
-    `match`/`search` payloads stay `None` until those commands are implemented.
-    """
+    """Build a flat step outcome; fields that do not apply are `None`."""
     return {
         "index": index,
         "command": command,
         "status": status,
         "term": term,
         "rewrites": rewrites,
-        "matches": None,
-        "solutions": None,
-        "truncated": None,
+        "matches": matches,
+        "solutions": solutions,
+        "truncated": truncated,
         "message": message,
         "limit": limit,
         "output": output,
@@ -201,6 +215,86 @@ def _run_rewriting(
     )
 
 
+def _bindings(substitution: Any) -> list[BindingDict]:
+    """Serialize one Maude substitution as variable/value term pairs.
+
+    Iterating a substitution yields `(variable, value)` term pairs; `str(variable)`
+    prints the variable's name (Maude adds a sort suffix only when disambiguating).
+    """
+    return [{"variable": str(variable), "value": str(value)} for variable, value in substitution]
+
+
+def _run_match_or_search(
+    module: Any,
+    index: int,
+    command: MatchingCommand,
+    subject_str: str,
+    step: StepRequest,
+    max_solutions: int,
+    max_output_length: int,
+) -> StepOutcomeDict:
+    """Parse the subject and pattern, run `match` or `search`, and build the outcome.
+
+    Both iterations are capped at `max_solutions`; `truncated` is true when one more
+    item existed. The iterators are lazy, so the extra item is consumed only to detect
+    the overflow. Parsing and the operation share one capture, so a parse failure's
+    `Warning:` lines become the `parse-error` message.
+    """
+
+    def execute() -> tuple[list[Any], bool] | None:
+        subject = module.parseTerm(subject_str)
+        if subject is None:
+            return None
+        pattern_text = step["pattern"]
+        if pattern_text is None:
+            raise ValueError(f"step {index} is a {command} without a pattern")  # noqa: TRY003 - programming error
+        pattern = module.parseTerm(pattern_text)
+        if pattern is None:
+            return None
+        depth = step["depth"] if step["depth"] is not None else -1
+        if command == "match":
+            matched = list(islice(subject.match(pattern, maxDepth=depth), max_solutions + 1))
+            return (
+                [_bindings(substitution) for substitution, _context in matched[:max_solutions]],
+                len(matched) > max_solutions,
+            )
+        search_type_name = step["search_type"]
+        if search_type_name is None or search_type_name not in _SEARCH_TYPES:
+            raise ValueError(  # noqa: TRY003 - programming error
+                f"step {index} has no valid search_type"
+            )
+        found = list(islice(subject.search(_SEARCH_TYPES[search_type_name], pattern, depth=depth), max_solutions + 1))
+        solutions: list[SolutionDict] = [
+            {"term": str(solution), "rewrites": int(rewrites), "bindings": _bindings(substitution)}
+            for solution, substitution, _path, rewrites in found[:max_solutions]
+        ]
+        return solutions, len(found) > max_solutions
+
+    result, captured = capture_streams(execute)
+    output = _truncate_capture(captured, max_output_length)
+    if result is None:
+        message = "\n".join(warning["message"] for warning in parse_warnings(captured["stderr"]))
+        return _outcome(index=index, command=command, status="parse-error", message=message, output=output)
+    items, truncated = result
+    if command == "match":
+        return _outcome(
+            index=index,
+            command=command,
+            status="ok",
+            matches=items,
+            truncated=truncated,
+            output=output,
+        )
+    return _outcome(
+        index=index,
+        command=command,
+        status="ok",
+        solutions=items,
+        truncated=truncated,
+        output=output,
+    )
+
+
 def _run_step(
     module: Any,
     index: int,
@@ -208,7 +302,7 @@ def _run_step(
     current: str | None,
     request: SessionRequest,
 ) -> StepOutcomeDict:
-    """Execute one step against the current term (rewriting commands only so far)."""
+    """Execute one step against the current term."""
     command = step["command"]
     match command:
         case "reduce" | "rewrite" | "frewrite" | "erewrite":
@@ -224,6 +318,21 @@ def _run_step(
                 term_str,
                 step,
                 request["max_result_length"],
+                request["max_output_length"],
+            )
+        case "match" | "search":
+            subject_str = step["subject"] if step["subject"] is not None else current
+            if subject_str is None:
+                raise ValueError(  # noqa: TRY003 - programming error
+                    f"step {index} has no subject and there is no current term"
+                )
+            return _run_match_or_search(
+                module,
+                index,
+                command,
+                subject_str,
+                step,
+                request["max_solutions"],
                 request["max_output_length"],
             )
         case _:
@@ -282,6 +391,8 @@ def run_session(request: SessionRequest) -> SessionResult:
         outcomes.append(outcome)
         if outcome["status"] != "ok":
             break
+        # Rewriting outcomes carry the new current term; match/search outcomes have
+        # `term=None` and leave the current term unchanged.
         if outcome["term"] is not None:
             current = outcome["term"]
     return {

@@ -12,7 +12,7 @@
 - [x] **Step 2** — Worker session engine and executor (reduce only)
 - [x] **Step 3** — `maude_run` tool end to end (reduce only)
 - [x] **Step 4** — Rewriting family and current-term threading
-- [ ] **Step 5** — `match` and `search`, final tool description
+- [x] **Step 5** — `match` and `search`, final tool description
 - [ ] **Step 6** — Documentation, release bookkeeping, full validation
 
 ## Working agreements
@@ -453,6 +453,62 @@ description matches the implemented behavior.
 
 **Demo.** One call matches a pattern against the current term and then searches from the original
 term; a capped search returns `truncated=true`.
+
+### Implementation notes (Step 5)
+
+**What landed.**
+
+- Session engine: `_run_match_or_search` parses the subject and pattern under one
+  capture, maps `depth` to `maxDepth` (`-1` when omitted), runs `match` or
+  `search`, and caps both with `islice(limit + 1)` to set `truncated`. `_bindings`
+  serializes substitutions as `{variable, value}` pairs. `match`/`search` never set
+  the current term.
+- Tool models: `_PatternStep` base, `MatchStep`, `SearchStep` (required `pattern`,
+  optional `subject`/`depth`, required `search_type` for search), the extended
+  `MaudeStep` union, `MaudeBinding`/`MaudeMatch`/`MaudeSearchSolution`, and the
+  `matches`/`solutions`/`truncated` outcome fields.
+- Validation: pattern/subject length caps, subject threading (match/search need an
+  explicit subject or an existing current term and do not create one), and the
+  rule that a match/search step cannot supply a current term to a later rewriting
+  step. `_validate_steps` was split into length/threading helpers to stay under the
+  C901 complexity limit.
+- Final tool description from design §4.8 (all six commands, threading, load
+  warnings, stop-at-first-failure, output caps, timeout semantics), with the
+  **absolute path** requirement stated in the prose and in `Args:` (user request).
+  The diagnostics tool's description was aligned to the same absolute-path wording.
+- Research: new `research/probes/probe_match_search.py` plus its transcript,
+  documented in the probes `README.md` and summarized in `term-api.md` §4. It
+  records substitution serialization, `maxDepth` modes on the assoc fixture, all
+  five search types, ground `=>1` targets, and lazy iteration.
+- Fixtures: `assoc_match.maude` (assoc sequence plus a `wrap` wrapper for the
+  anywhere-match assertion).
+- Tests: unit coverage for required pattern/search type, subject/threading rules,
+  pattern/subject caps, request forwarding and the match/search adapters; session
+  integration for hit/miss, depth modes, current-term invariance, all five search
+  types, ground `=>1` targets and both truncation caps; tool integration for a
+  rewrite → match → search pipeline; the MCP smoke test asserts the absolute-path
+  wording.
+
+**Deviations and decisions.**
+
+1. `SearchStep(MatchStep)` (design §5.1) fails mypy for the same narrowed-`command`
+   reason as Step 4; a shared `_PatternStep` base keeps the fields shared without an
+   incompatible override.
+2. The probe shows `str(variable)` prints only the name (`N`), not name-plus-sort.
+   `BindingDict.variable`/`MaudeBinding.variable` are documented accordingly (Maude
+   adds a sort suffix only when disambiguating).
+3. Search-type constants are spelled out (`0..4`) in `_SEARCH_TYPES` because the
+   module is imported by the server process; the probe pinned their values.
+4. Truncation consumes `cap + 1` items from the lazy iterator and reports
+   `truncated=true`; an assoc "anywhere" match can legitimately produce several
+   solutions for one ground subterm (documented by the probe), so tests assert the
+   presence/cap rather than assuming uniqueness.
+5. `depth` is unconstrained (`-1`, `0`, `2147483647` are meaningful); `withExtension`
+   is not exposed, as designed.
+
+**Implications for later steps.** Step 6 is documentation/release only: update
+README (tool list and env table), `docs/modules.md`, `CHANGELOG.md`, bump the version,
+and run the full `make release` validation.
 
 ---
 

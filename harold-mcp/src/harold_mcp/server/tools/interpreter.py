@@ -15,12 +15,14 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from harold_mcp.maude import (
+    BindingDict,
     CapturedOutput,
     CommandName,
     MaudeExecutor,
     MaudeWorkerError,
     SessionRequest,
     SessionResult,
+    SolutionDict,
     StepOutcomeDict,
     StepRequest,
     StepStatus,
@@ -104,11 +106,42 @@ class ErewriteStep(_GassedStep):
     """The command to execute."""
 
 
+class _PatternStep(_ResultModel):
+    """Fields shared by the pattern commands (`match`, `search`)."""
+
+    pattern: str
+    """Pattern text to match against the subject (or the search target)."""
+
+    subject: str | None = None
+    """Subject term text; omitted means the current term."""
+
+    depth: int | None = None
+    """Maude's matching/search depth: -1 = on top without extension, 0 = on top with
+    extension, 2147483647 = anywhere in the term; omitted means -1."""
+
+
+class MatchStep(_PatternStep):
+    """Match `pattern` against the subject and return the substitutions."""
+
+    command: Literal["match"]
+    """The command to execute."""
+
+
+class SearchStep(_PatternStep):
+    """Search from the subject for states matching `pattern`."""
+
+    command: Literal["search"]
+    """The command to execute."""
+
+    search_type: Literal["one-step", "at-least-one-step", "any-steps", "normal-form", "branch"]
+    """The Maude search type: `=>1`, `=>+`, `=>*`, `=>!` or `=>#`."""
+
+
 MaudeStep = Annotated[
-    ReduceStep | RewriteStep | FrewriteStep | ErewriteStep,
+    ReduceStep | RewriteStep | FrewriteStep | ErewriteStep | MatchStep | SearchStep,
     Field(discriminator="command"),
 ]
-"""Input steps: a tagged union on `command`; more commands are added as they are implemented."""
+"""Input steps: a tagged union on `command`."""
 
 
 class MaudeCapturedOutput(_ResultModel):
@@ -144,6 +177,36 @@ class MaudeLoadInfo(_ResultModel):
     """Output captured during the load (including commands embedded in the file)."""
 
 
+class MaudeBinding(_ResultModel):
+    """One variable binding in a match or search solution."""
+
+    variable: str
+    """The variable name Maude printed (usually just the base name; see the probe notes)."""
+
+    value: str
+    """The term the variable is bound to."""
+
+
+class MaudeMatch(_ResultModel):
+    """One substitution produced by a `match` step."""
+
+    bindings: list[MaudeBinding]
+    """The variable/value pairs of the substitution (empty for a ground match)."""
+
+
+class MaudeSearchSolution(_ResultModel):
+    """One solution produced by a `search` step."""
+
+    term: str
+    """The state the search reached."""
+
+    rewrites: int
+    """The interpreter's rewrite counter for this solution (includes equational rewrites)."""
+
+    bindings: list[MaudeBinding]
+    """The variable/value pairs that make the target match this state."""
+
+
 class MaudeStepOutcome(_ResultModel):
     """The outcome of one executed step."""
 
@@ -162,6 +225,15 @@ class MaudeStepOutcome(_ResultModel):
     rewrites: int | None
     """The interpreter's rewrite counter (`"ok"` only); it includes equational rewrites, so it is
     not the number of rule applications."""
+
+    matches: list[MaudeMatch] | None
+    """The substitutions found by a `match` step (`"ok"` only)."""
+
+    solutions: list[MaudeSearchSolution] | None
+    """The solutions found by a `search` step (`"ok"` only)."""
+
+    truncated: bool | None
+    """`true` when a `match`/`search` hit the configured solution cap (`"ok"` only)."""
 
     message: str | None
     """The interpreter's message (`"parse-error"` only)."""
@@ -206,26 +278,52 @@ def _resolve_path(path: str) -> Path:
     return resolved
 
 
-def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
-    """Enforce the step caps and the current-term threading rules.
+def _validate_step_lengths(index: int, step: MaudeStep, max_length: int) -> None:
+    """Reject a step input longer than the configured term-length cap."""
+    if isinstance(step, _PatternStep):
+        for field_name, value in (("pattern", step.pattern), ("subject", step.subject)):
+            if value is not None and len(value) > max_length:
+                raise MaudeRunError(  # noqa: TRY003
+                    f"Step {index}: {field_name} is {len(value)} characters long (maximum {max_length})"
+                )
+    elif step.term is not None and len(step.term) > max_length:
+        raise MaudeRunError(  # noqa: TRY003
+            f"Step {index}: term is {len(step.term)} characters long (maximum {max_length})"
+        )
 
-    The rewriting commands (`reduce`, `rewrite`, `frewrite`, `erewrite`) all need a
-    subject (their own term or the current term) and produce one. The first step must
-    therefore provide a term.
+
+def _validate_step_threading(index: int, step: MaudeStep, has_current: bool) -> bool:
+    """Reject a step without a subject, and report whether a current term now exists.
+
+    Rewriting commands need a term and produce one; `match`/`search` need a subject and
+    leave the current term unchanged.
     """
+    if isinstance(step, _PatternStep):
+        if step.subject is None and not has_current:
+            raise MaudeRunError(  # noqa: TRY003
+                f"Step {index} has no subject and there is no current term: "
+                "the first match/search step must provide an explicit subject"
+            )
+        return has_current
+    if step.term is None and not has_current:
+        raise MaudeRunError(  # noqa: TRY003
+            f"Step {index} has no term and there is no current term: the first step must provide an explicit term"
+        )
+    return True
+
+
+def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
+    """Enforce the input caps and the current-term threading rules."""
     if not steps:
         raise MaudeRunError("steps must contain at least one command")  # noqa: TRY003
     if len(steps) > settings.interpreter_max_steps:
         raise MaudeRunError(  # noqa: TRY003
             f"Too many steps: {len(steps)} (maximum {settings.interpreter_max_steps})"
         )
+    max_length = settings.interpreter_max_term_length
     has_current = False
     for index, step in enumerate(steps):
-        if step.term is not None and len(step.term) > settings.interpreter_max_term_length:
-            raise MaudeRunError(  # noqa: TRY003
-                f"Step {index}: term is {len(step.term)} characters long "
-                f"(maximum {settings.interpreter_max_term_length})"
-            )
+        _validate_step_lengths(index, step, max_length)
         if (
             isinstance(step, _BoundedStep)
             and step.bound is not None
@@ -234,24 +332,20 @@ def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
             raise MaudeRunError(  # noqa: TRY003
                 f"Step {index}: bound is {step.bound} (maximum {settings.interpreter_max_rewrite_bound})"
             )
-        if step.term is None and not has_current:
-            raise MaudeRunError(  # noqa: TRY003
-                f"Step {index} has no term and there is no current term: the first step must provide an explicit term"
-            )
-        has_current = True
+        has_current = _validate_step_threading(index, step, has_current)
 
 
 def _to_step_request(step: MaudeStep) -> StepRequest:
     """Map one wire step to the worker-side flat request shape."""
     return {
         "command": step.command,
-        "term": step.term,
-        "pattern": None,
-        "subject": None,
+        "term": step.term if isinstance(step, _StepBase) else None,
+        "pattern": step.pattern if isinstance(step, _PatternStep) else None,
+        "subject": step.subject if isinstance(step, _PatternStep) else None,
         "bound": step.bound if isinstance(step, _BoundedStep) else None,
         "gas": step.gas if isinstance(step, _GassedStep) else None,
-        "depth": None,
-        "search_type": None,
+        "depth": step.depth if isinstance(step, _PatternStep) else None,
+        "search_type": step.search_type if isinstance(step, SearchStep) else None,
     }
 
 
@@ -281,6 +375,28 @@ def _to_load_warning(warning: WarningDict) -> MaudeLoadWarning:
     )
 
 
+def _to_bindings(bindings: list[BindingDict]) -> list[MaudeBinding]:
+    """Adapt worker bindings to the wire model."""
+    return [MaudeBinding(variable=binding["variable"], value=binding["value"]) for binding in bindings]
+
+
+def _to_matches(matches: list[list[BindingDict]]) -> list[MaudeMatch]:
+    """Adapt worker match substitutions to the wire model."""
+    return [MaudeMatch(bindings=_to_bindings(bindings)) for bindings in matches]
+
+
+def _to_solutions(solutions: list[SolutionDict]) -> list[MaudeSearchSolution]:
+    """Adapt worker search solutions to the wire model."""
+    return [
+        MaudeSearchSolution(
+            term=solution["term"],
+            rewrites=solution["rewrites"],
+            bindings=_to_bindings(solution["bindings"]),
+        )
+        for solution in solutions
+    ]
+
+
 def _to_step_outcome(outcome: StepOutcomeDict) -> MaudeStepOutcome:
     """Adapt one worker outcome to the wire model."""
     return MaudeStepOutcome(
@@ -289,6 +405,9 @@ def _to_step_outcome(outcome: StepOutcomeDict) -> MaudeStepOutcome:
         status=outcome["status"],
         term=outcome["term"],
         rewrites=outcome["rewrites"],
+        matches=_to_matches(outcome["matches"]) if outcome["matches"] is not None else None,
+        solutions=_to_solutions(outcome["solutions"]) if outcome["solutions"] is not None else None,
+        truncated=outcome["truncated"],
         message=outcome["message"],
         limit=outcome["limit"],
         output=_to_output(outcome["output"]),
@@ -354,17 +473,20 @@ def maude_run(
     # FastMCP uses only the free-form text above `Args:` as the MCP tool description;
     # sections like `Returns`, `Raises`, and `Example` are excluded from the
     # description (https://gofastmcp.com/servers/tools#docstring-descriptions), so
-    # everything a client needs belongs in the prose above `Args:`. This description
-    # covers the commands implemented so far; it grows with the tool.
+    # everything a client needs belongs in the prose above `Args:`.
     """Run a bounded Maude interpreter session: load one Maude file into a fresh
-    interpreter, select a module, and execute an ordered list of commands, returning
-    every intermediate result.
+    interpreter, select a module, and execute an ordered list of interpreter commands,
+    returning every intermediate result.
 
     Each call is hermetic. A new interpreter process loads the file from scratch, so
     nothing (loaded modules, the current term, parser state) survives from one call to
     the next. To carry state across calls, save a term from a result and pass it as the
-    term of a later call, or write a wrapper module whose equations and rules compute
-    everything in one load.
+    term or subject of a later call, or write a wrapper module whose equations and rules
+    compute everything in one load.
+
+    The `path` argument must be an absolute path: a relative path is resolved against
+    the server's working directory, which is not the client's, so it would usually point
+    at the wrong file.
 
     The file's load/in commands pull in its dependencies automatically (they resolve
     against the file's own directory), so pass only the main file.
@@ -372,10 +494,11 @@ def maude_run(
     Steps and the current term
     --------------------------
     Commands run as in the Maude interpreter on a current term that threads through the
-    pipeline: when a step omits its term, it uses the previous step's result. `reduce`,
-    `rewrite`, `frewrite` and `erewrite` replace the current term with their result. The
-    first step must provide an explicit term, because the session starts with no current
-    term.
+    pipeline: when a step omits its term or subject, it uses the previous step's result.
+    `reduce`, `rewrite`, `frewrite` and `erewrite` replace the current term with their
+    result; `match` and `search` inspect the current term and leave it unchanged. The
+    first step must provide an explicit term (or subject), because the session starts
+    with no current term.
 
     Commands
     --------
@@ -385,6 +508,12 @@ def maude_run(
     - `frewrite`: the same with the fair strategy; `gas` bounds rewrites per position.
     - `erewrite`: the same as `frewrite` with external-object support; the original term
       is kept.
+    - `match`: match `pattern` against the current term (or `subject`) and return the
+      substitutions; `depth` is Maude's matching depth (-1 = on top without extension,
+      0 = on top with extension, 2147483647 = anywhere in the term).
+    - `search`: search from the current term (or `subject`) for states matching `pattern`
+      using `search_type` (one-step, at-least-one-step, any-steps, normal-form, branch)
+      and an optional `depth`.
 
     Load problems and step failures
     -------------------------------
@@ -392,25 +521,28 @@ def maude_run(
     `load`, but evaluation still proceeds; use maude_program_diagnostics for a full
     diagnosis.
 
-    Steps stop at the first failure: `parse-error` when a term does not parse in the
-    module, `too-large` when a result exceeds the configured length limit. The result
-    keeps the outcomes of every executed step and sets `completed` to false; the
-    remaining steps are not run. A missing path, a load that fails outright, a module
-    that is not defined after the load, a theory module, or a worker crash/timeout
-    fails the whole call.
+    Steps stop at the first failure: `parse-error` when a term, pattern or subject does
+    not parse in the module, `too-large` when a result exceeds the configured length
+    limit. The result keeps the outcomes of every executed step and sets `completed` to
+    false; the remaining steps are not run. A missing path, a load that fails outright,
+    a module that is not defined after the load, a theory module, or a worker
+    crash/timeout fails the whole call.
 
     Output and limits
     -----------------
     The load phase and every step report the interpreter's captured stdout and stderr
-    (color codes stripped; a stream longer than the configured output limit is
-    truncated and marked). The whole call is bounded by timeout_secs (default: the
-    server's interpreter timeout). The timeout covers interpreter startup and is best
-    effort: a non-terminating reduction fails the call and replaces the worker pool, so
-    allow more time for long evaluations.
+    (color codes stripped; a stream longer than the configured output limit is truncated
+    and marked). A search step returns at most the configured number of solutions and a
+    match step at most the configured number of substitutions; `truncated` is true when
+    the cap was reached. The whole call is bounded by timeout_secs (default: the server's
+    interpreter timeout). The timeout covers interpreter startup and is best effort: a
+    non-terminating reduction fails the call and replaces the worker pool, so allow more
+    time for long evaluations.
 
     Args:
-        path: Path to the Maude source file to load (typically `.maude`); relative
-            paths are resolved against the server's working directory.
+        path: Absolute path to the Maude source file to load (typically `.maude`). Pass
+            an absolute path: a relative path would be resolved against the server's
+            working directory, which is not the client's.
         module: Name of the module to evaluate in; it must be defined by the file or
             one of its dependencies. Case-sensitive; a theory cannot be used because
             terms are parsed in modules.
@@ -435,14 +567,19 @@ def maude_run(
 __all__ = [
     "ErewriteStep",
     "FrewriteStep",
+    "MatchStep",
+    "MaudeBinding",
     "MaudeCapturedOutput",
     "MaudeLoadInfo",
     "MaudeLoadWarning",
+    "MaudeMatch",
     "MaudeRunError",
     "MaudeRunResult",
+    "MaudeSearchSolution",
     "MaudeStep",
     "MaudeStepOutcome",
     "ReduceStep",
     "RewriteStep",
+    "SearchStep",
     "maude_run",
 ]

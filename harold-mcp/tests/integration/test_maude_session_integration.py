@@ -39,18 +39,22 @@ def _step(
     command: str,
     term: str | None = None,
     *,
+    pattern: str | None = None,
+    subject: str | None = None,
     bound: int | None = None,
     gas: int | None = None,
+    depth: int | None = None,
+    search_type: str | None = None,
 ) -> StepRequest:
     return {
         "command": command,
         "term": term,
-        "pattern": None,
-        "subject": None,
+        "pattern": pattern,
+        "subject": subject,
         "bound": bound,
         "gas": gas,
-        "depth": None,
-        "search_type": None,
+        "depth": depth,
+        "search_type": search_type,
     }
 
 
@@ -63,6 +67,7 @@ def _request(
     module: str,
     steps: list[StepRequest],
     *,
+    max_solutions: int = 200,
     max_result_length: int = 1_000_000,
     max_output_length: int = 1_000_000,
 ) -> SessionRequest:
@@ -70,7 +75,7 @@ def _request(
         "path": str(FIXTURES_DIR / fixture_name),
         "module": module,
         "steps": steps,
-        "max_solutions": 200,
+        "max_solutions": max_solutions,
         "max_result_length": max_result_length,
         "max_output_length": max_output_length,
     }
@@ -218,3 +223,141 @@ def test_erewrite_threads_the_returned_term(executor: MaudeExecutor) -> None:
     # starts from that returned term (`c(3)`), not from the original `c(0)`.
     assert [outcome["term"] for outcome in outcomes] == ["c(3)", "c(4)"]
     assert [outcome["rewrites"] for outcome in outcomes] == [6, 2]
+
+
+def test_match_hit_and_miss(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("match", pattern="c(N)", subject="c(5)"),
+                _step("match", pattern="c(6)", subject="c(5)"),
+            ],
+        ),
+    )
+
+    hit, miss = result["outcomes"]
+    assert hit["status"] == "ok"
+    assert hit["matches"] == [[{"variable": "N", "value": "5"}]]
+    assert hit["truncated"] is False
+    assert hit["term"] is None
+    assert hit["rewrites"] is None
+    assert miss["matches"] == []
+    assert miss["truncated"] is False
+
+
+def test_match_depth_modes_on_an_assoc_module(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "assoc_match.maude",
+            "ASSOC-MATCH",
+            [
+                _step("match", pattern="2 ; X", subject="1 ; 2 ; 3"),
+                _step("match", pattern="2 ; X", subject="1 ; 2 ; 3", depth=0),
+                _step("match", pattern="1 ; 2 ; 3", subject="wrap(1 ; 2 ; 3)"),
+                _step("match", pattern="1 ; 2 ; 3", subject="wrap(1 ; 2 ; 3)", depth=2_147_483_647),
+            ],
+        ),
+    )
+
+    outcomes = result["outcomes"]
+    # -1 matches on top without extension; 0 enables extension matching.
+    assert outcomes[0]["matches"] == []
+    assert outcomes[1]["matches"] == [[{"variable": "X", "value": "3"}]]
+    # 2147483647 (maude.UNBOUNDED) also matches subterms anywhere.
+    assert outcomes[2]["matches"] == []
+    assert outcomes[3]["matches"] == [[]]
+
+
+def test_match_does_not_change_the_current_term(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("rewrite", "c(0)", bound=1),
+                _step("match", pattern="c(N)"),
+                _step("rewrite", bound=1),
+            ],
+        ),
+    )
+
+    outcomes = result["outcomes"]
+    assert [outcome["term"] for outcome in outcomes] == ["c(1)", None, "c(2)"]
+    assert outcomes[1]["matches"] == [[{"variable": "N", "value": "1"}]]
+    # The match left the current term at c(1), so the last rewrite reaches c(2).
+    assert outcomes[2]["rewrites"] == 2
+
+
+def test_search_types_and_ground_targets(executor: MaudeExecutor) -> None:
+    result = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="one-step"),
+                _step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="at-least-one-step"),
+                _step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="any-steps"),
+                _step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="normal-form"),
+                _step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="branch"),
+            ],
+        ),
+    )
+
+    one_step, at_least_one, any_steps, normal_form, branch = result["outcomes"]
+    assert one_step["solutions"] == [{"term": "c(1)", "rewrites": 2, "bindings": [{"variable": "N", "value": "1"}]}]
+    assert [solution["term"] for solution in at_least_one["solutions"]] == ["c(1)", "c(2)"]
+    # =>* includes the initial state, with a zero rewrite count.
+    assert [solution["term"] for solution in any_steps["solutions"]] == ["c(0)", "c(1)", "c(2)"]
+    assert any_steps["solutions"][0]["rewrites"] == 0
+    assert normal_form["solutions"] == []
+    assert branch["solutions"] == []
+    assert all(outcome["term"] is None for outcome in result["outcomes"])
+    assert all(outcome["truncated"] is False for outcome in result["outcomes"])
+
+    ground = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("search", pattern="c(3)", subject="c(2)", depth=2, search_type="one-step"),
+                _step("search", pattern="c(3)", subject="c(0)", depth=2, search_type="one-step"),
+            ],
+        ),
+    )
+    assert ground["outcomes"][0]["solutions"] == [{"term": "c(3)", "rewrites": 2, "bindings": []}]
+    assert ground["outcomes"][1]["solutions"] == []
+
+
+def test_match_and_search_caps_set_the_truncation_flag(executor: MaudeExecutor) -> None:
+    matched = _run(
+        executor,
+        _request(
+            "assoc_match.maude",
+            "ASSOC-MATCH",
+            [_step("match", pattern="X", subject="1 ; 2 ; 3", depth=2_147_483_647)],
+            max_solutions=2,
+        ),
+    )
+    match_outcome = _single_outcome(matched)
+    assert match_outcome["truncated"] is True
+    assert len(match_outcome["matches"]) == 2
+
+    searched = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [_step("search", pattern="c(N)", subject="c(0)", depth=5, search_type="any-steps")],
+            max_solutions=1,
+        ),
+    )
+    search_outcome = _single_outcome(searched)
+    assert search_outcome["truncated"] is True
+    assert len(search_outcome["solutions"]) == 1

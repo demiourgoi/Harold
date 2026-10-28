@@ -98,6 +98,13 @@ the term. Probe: `c(c(5))` matched against `c(N)` with `UNBOUNDED` yields two ma
 `N=c(5)` at the top and `N=5` in the subterm — with corresponding contexts `c(99)` and
 `c(c(99))`.
 
+A Step 5 probe (`probes/probe_match_search.py`, on `tests/integration/fixtures/assoc_match.maude`)
+confirms the depth modes on an assoc module: subject `1 ; 2 ; 3` with pattern `2 ; X`
+has **no** match at `maxDepth=-1` and one match (`X=3`) at `0`, while `UNBOUNDED` also
+matches a ground pattern anywhere (`2` matches inside the sequence). Iterating a
+substitution yields `(variable Term, value Term)`; `str(variable)` prints the variable
+name alone (`N`), not name-plus-sort, so the tool's `variable` field is a plain name.
+
 **Implications.** The step outcome is `{matched: bool, matches: [{variable: termString, ...}],
 truncated: bool}`; iteration stops at the configured solutions cap. Default: plain on-top
 matching (`maxDepth=-1`); v1 also offers an optional `with_extension` flag mapping to

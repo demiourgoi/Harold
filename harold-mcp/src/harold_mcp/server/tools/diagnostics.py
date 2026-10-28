@@ -254,9 +254,14 @@ def maude_program_diagnostics(
     (`range` plus `new_text`, `range.end` exclusive). This tool never modifies the file —
     applying the edits is up to the client.
 
+    The `path` argument must be an absolute path: a relative path is resolved against
+    the server's working directory, which is not the client's, so it would usually point
+    at the wrong file.
+
     Args:
-        path: Path to the Maude source file to diagnose (typically `.maude`); relative
-            paths are resolved against the server's working directory.
+        path: Absolute path to the Maude source file to diagnose (typically `.maude`).
+            Pass an absolute path: a relative path would be resolved against the
+            server's working directory, which is not the client's.
     """
     source = SourceFile.from_path(path)  # raises SourceFileNotFoundError
     diagnostics = collect_diagnostics(providers, source)  # raises DiagnosticCollectionError

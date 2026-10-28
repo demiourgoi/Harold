@@ -535,7 +535,9 @@ def test_mcp_smoke() -> None:
         assert sorted(run_tool["inputSchema"]["properties"]) == ["module", "path", "steps", "timeout_secs"]
         run_description = run_tool["description"]
         assert "hermetic" in run_description
+        assert "absolute path" in run_description
         assert "reduce" in run_description
+        assert "search" in run_description
         run_annotations = run_tool["annotations"]
         assert run_annotations["readOnlyHint"] is True
         assert run_annotations["destructiveHint"] is False

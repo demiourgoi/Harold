@@ -1,0 +1,36 @@
+
+=== substitution serialization ===
+str(substitution): 'N=5' | name/value pairs: [('N', '5')]
+
+=== match depth modes (assoc module) ===
+pattern 'X' depth -1 (on top, no extension): 1 matches | [('X=1 ; 2 ; 3', '1 ; 2 ; 3')]
+pattern 'X' depth 0 (on top, extension): 3 matches | [('X=1 ; 2', '(1 ; 2 ; 3) ; 3'), ('X=1 ; 2 ; 3', '1 ; 2 ; 3'), ('X=2 ; 3', '1 ; 1 ; 2 ; 3')]
+pattern 'X' depth UNBOUNDED (anywhere): 12 matches | [('X=1 ; 2', '(1 ; 2 ; 3) ; 3'), ('X=1 ; 2 ; 3', '1 ; 2 ; 3'), ('X=2 ; 3', '1 ; 1 ; 2 ; 3'), ('X=1', '(1 ; 2 ; 3) ; 2 ; 3'), ('X=2', '1 ; (1 ; 2 ; 3) ; 3'), ('X=1', '1 ; s (1 ; 2 ; 3) ; 3'), ('X=3', '1 ; 2 ; 1 ; 2 ; 3'), ('X=2', '1 ; 2 ; s (1 ; 2 ; 3)'), ('X=1', '1 ; 2 ; s_^2(1 ; 2 ; 3)'), ('X=0', 's (1 ; 2 ; 3) ; 2 ; 3'), ('X=0', '1 ; s_^2(1 ; 2 ; 3) ; 3'), ('X=0', '1 ; 2 ; s_^3(1 ; 2 ; 3)')]
+pattern '2 ; X' depth -1 (on top, no extension): 0 matches | []
+pattern '2 ; X' depth 0 (on top, extension): 1 matches | [('X=3', '1 ; 1 ; 2 ; 3')]
+pattern '2 ; X' depth UNBOUNDED (anywhere): 1 matches | [('X=3', '1 ; 1 ; 2 ; 3')]
+pattern '1 ; X' depth -1 (on top, no extension): 1 matches | [('X=2 ; 3', '1 ; 2 ; 3')]
+pattern '1 ; X' depth 0 (on top, extension): 2 matches | [('X=2', '(1 ; 2 ; 3) ; 3'), ('X=2 ; 3', '1 ; 2 ; 3')]
+pattern '1 ; X' depth UNBOUNDED (anywhere): 2 matches | [('X=2', '(1 ; 2 ; 3) ; 3'), ('X=2 ; 3', '1 ; 2 ; 3')]
+pattern '2' depth -1 (on top, no extension): 0 matches | []
+pattern '2' depth 0 (on top, extension): 0 matches | []
+pattern '2' depth UNBOUNDED (anywhere): 2 matches | [('empty', '1 ; (1 ; 2 ; 3) ; 3'), ('empty', '1 ; 2 ; s (1 ; 2 ; 3)')]
+
+=== match anywhere through an assoc subterm ===
+pattern '1 ; 2 ; 3' under wrap depth -1 (on top, no extension): 0 matches | []
+pattern '1 ; 2 ; 3' under wrap depth 0 (on top, extension): 0 matches | []
+pattern '1 ; 2 ; 3' under wrap depth UNBOUNDED (anywhere): 1 matches | [('empty', 'wrap(wrap(1 ; 2 ; 3))')]
+
+=== search types (counter, depth=2) ===
+ONE_STEP (depth=2): 1 shown | [('c(1)', 'N=1', 2, [('N', '1')])]
+AT_LEAST_ONE_STEP (depth=2): 2 shown | [('c(1)', 'N=1', 2, [('N', '1')]), ('c(2)', 'N=2', 4, [('N', '2')])]
+ANY_STEPS (depth=2): 3 shown | [('c(0)', 'N=0', 0, [('N', '0')]), ('c(1)', 'N=1', 2, [('N', '1')]), ('c(2)', 'N=2', 4, [('N', '2')])]
+NORMAL_FORM (depth=2): 0 shown | []
+BRANCH (depth=2): 0 shown | []
+
+=== ground search targets (=>1) ===
+c(2) =>1 c(3): [('c(3)', 'empty', 2, [])]
+c(0) =>1 c(3): []
+
+=== lazy iteration cap ===
+first two solutions of an unbounded-depth any-steps search: ['c(0)', 'c(1)']
