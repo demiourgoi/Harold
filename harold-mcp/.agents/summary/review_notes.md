@@ -2,12 +2,49 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-10-14 refresh covers the
-provider-registry FastMCP dependency; the 2026-10-12 refresh covers the
+Findings from the consistency and completeness review. The 2026-10-28 refresh covers the
+`maude_run` interpreter-session tool (new `maude/session.py`, `maude/capture.py`,
+`server/tools/interpreter.py`, new settings, tests and docs); the 2026-10-14 refresh covers
+the provider-registry FastMCP dependency; the 2026-10-12 refresh covers the
 `no_new_module_quirk` implementation (hermetic per-call interpreters, the new workers
 default, dependency-warning attribution, path absolutization, and the test-suite rework);
 the 2026-09-29 refresh covered the heuristic-linter port. Older resolved issues are kept
 for the record.
+
+## Changes absorbed into this refresh (2026-10-28)
+
+- **New `maude_run` tool.** `server/tools/interpreter.py` adds the MCP surface (discriminated
+  step union, pydantic result models, validation, adapter, `MaudeRunError`) and
+  `maude/session.py` adds the worker-side bounded session engine
+  (`reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search`, current-term threading,
+  per-step `ok`/`parse-error`/`too-large` outcomes, caps, output capture). The tool is
+  registered from `tools/__init__.py`, documented in `docs/modules.md`, and described in
+  `README.md`; it uses the `INTERPRETER` tag (no longer reserved). Design record:
+  `.agents/planning/port-maude_eval.py/` (the code now matches its design and
+  implementation plan).
+- **Shared capture helper.** `maude/capture.py` now owns the fd-1/fd-2 redirect, ANSI
+  stripping, lossy decoding, warning parsing (`WarningDict`) and output truncation.
+  `worker.load_diagnostics` uses it to parse stderr only; the diagnostics tool still
+  discards stdout. This closes a latent bug where output from a `red` embedded in a loaded
+  file could reach the MCP stdio transport.
+- **Settings rename and new caps.** `maude_worker_timeout_secs` became
+  `diagnostics_timeout_secs` (`HAROLD_DIAGNOSTICS_TIMEOUT_SECS`; the old env var is ignored
+  — a pre-1.0 breaking change). New fields: `interpreter_timeout_secs` and the
+  `interpreter_max_*` caps for steps, rewrite bound, solutions, term/result/output length.
+  `Settings` documentation, `README.md`, `interfaces.md` and `AGENTS.md` were updated.
+- **Executor and lifetime.** `MaudeExecutor.run_session(request, timeout)` is the new typed
+  worker op alongside `diagnostics`; the lifespan passes
+  `settings.diagnostics_timeout_secs` to `start()`. The pool remains shared, fresh per task.
+- **Tests and fixtures.** New unit suites `test_maude_capture.py` and
+  `test_interpreter_tool.py`; new integration suites `test_maude_session_integration.py`
+  and `test_maude_run_integration.py`; 3 new fixtures (`counter.maude`,
+  `assoc_match.maude`, `warns_and_prints.maude`), 29 total. `test_maude_worker.py` now
+  covers stderr-only warning parsing.
+- **Docs and planning.** `docs/modules.md` renders the three new modules; the knowledge
+  base adds this material. `port-repair.py/` is a new early planning record (no code yet).
+- **Mermaid fix.** The new `maude_run` sequence diagram had semicolons inside message text;
+  Mermaid treats `;` as a statement separator, so they were replaced with commas and the
+  diagram parses again.
 
 ## Changes absorbed into this refresh (2026-10-14)
 
@@ -124,11 +161,12 @@ for the record.
 ## Remaining issues
 
 1. **The synthesized `error` path has no end-to-end test.** `ok=False` only occurs for
-   missing/unreadable files (pre-checked away by the tool) — empirically `maude.load`
-   recovers from every parseable input. The path is unit-tested with a mocked worker
-   result; acceptable, but worth knowing it can only fire via TOCTOU races. The paused
-   `port-maude_eval.py` project has a probe (P1) to decide whether a real hard-failure
-   signal exists (`getCurrentModule()`).
+   missing/unreadable files (pre-checked away by the diagnostics tool) — empirically
+   `maude.load` recovers from every parseable input. The path is unit-tested with a mocked
+   worker result; acceptable, but worth knowing it can only fire via TOCTOU races. The
+   `maude_run` path, by contrast, treats `load_ok=False` as a whole-call failure and has a
+   real integration test (`test_broken_file_fails_as_a_whole_call`, which currently
+   surfaces as "module not defined" because Maude still returns `True` for that fixture).
 2. **Hard-kill orphan window.** A `kill -9` of the server skips the lifespan, so workers
    exit on their own via the queue pipe rather than being killed; a worker mid-`maude.load`
    lingers until the task finishes. `prctl(PR_SET_PDEATHSIG)` in the worker initializer
@@ -162,22 +200,31 @@ for the record.
    caught `MaudeFileNotFoundError` or `MaudeWorkerCrashedError` at the tool boundary must
    catch `SourceFileNotFoundError` / `DiagnosticCollectionError` instead (the Maude error
    stays reachable as the chained cause). Pre-1.0 API churn, recorded in `CHANGELOG.md`.
+10. **`maude_run` has no dedicated timeout integration test.** As with the diagnostics
+    timeout path, the mapping is unit-tested only; a real non-terminating reduction is the
+    documented way to trigger it, but no fixture/CI case does so.
+11. **`port-maude_eval.py/summary.md` status is stale.** Its banner still says
+    "implementation not started" while the code, tests and docs exist; the knowledge base
+    records the discrepancy. Update the planning record or move it to an implemented state.
+12. **`CHANGELOG.md` `[0.0.5]` is empty.** The `maude_run` feature, the capture refactor and
+    the `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` rename (breaking) are not yet recorded; the
+    release process requires a summary and entries before tagging.
 
 ## Completeness gaps
 
-1. **Only the diagnostics tool exists.** The planned run-Maude-programs and documentation
-   RAG tools are not implemented yet (`_run_task` and the worker op pattern are the
-   extension points; the provider seam is the diagnostics-tool extension point). Their
-   tag constants (`INTERPRETER`, `DOCS`) are already defined in `server/tags.py` and
-   currently unused. The `port-maude_eval.py` research record sketches the term-evaluation
-   tool that would seed the interpreter capability.
-2. **No timeout integration test.** The timeout mapping is unit-tested; a real hang needs
-   a deliberately-stuck worker (`worker.sleep` exists but no slow fixture triggers the
-   timeout path end-to-end).
+1. **The documentation RAG tool does not exist yet.** Both in-scope tools
+   (`maude_program_diagnostics`, `maude_run`) are implemented. The planned vector index is
+   not; its tag constant (`DOCS`) is defined in `server/tags.py` and currently unused. The
+   `port-repair.py/` planning record sketches a possible repair tool but has no design or
+   code.
+2. **Timeout integration coverage.** Both timeout mappings are unit-tested; a real hang
+   needs a deliberately-stuck worker (`worker.sleep` exists but no slow fixture triggers
+   the timeout path end-to-end for either tool).
 3. **Advisory/`<standard input>` hardening is mostly resolved.** ANSI stripping, binary
    input, `skipped:`/`unable to locate file:` formats and the `(fmod X) :` spelling are
    pinned; `<standard input>` warnings are attributed to the diagnosed file; multi-line
-   Maude warning messages are still not exercised (none observed).
+   Maude warning messages are still not exercised (none observed). The capture helper now
+   handles both streams; diagnostics intentionally ignores stdout.
 4. **The server CLI wiring is untested.** `main.py` (cyclopts app, `serve` subcommand,
    default command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
    The snapshot CLI, by contrast, has in-process tests in
@@ -192,9 +239,11 @@ for the record.
 
 ## Recommendations
 
-1. Keep `.agents/planning/` notes in sync with implementations — the diagnostics tool and
-   the linter port followed their PDD cycles; future tools should follow the same process
-   (the paused `port-maude_eval.py` record lists the probes to resume with).
+1. Keep `.agents/planning/` notes in sync with implementations — the diagnostics tool, the
+   linter port and `maude_run` followed their PDD cycles; future tools should follow the
+   same process (`port-repair.py/` is the next candidate). Update stale status banners.
 2. Add real tests as tools are implemented, and keep `docs/modules.md` current.
 3. Re-run the codebase-summary process after significant architecture changes so this
    knowledge base does not drift from the code.
+4. Record `maude_run` and the settings rename in `CHANGELOG.md`, then bump the version
+   (the session design proposed `0.1.0`) before the next release.

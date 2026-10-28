@@ -49,6 +49,40 @@
       and the result models' attribute docstrings become output-schema field descriptions
       (see `data_models.md`). The hermetic per-call and whole-load/dependency semantics are
       documented in that prose.
+  - `maude_run(path: str, module: str, steps: list[MaudeStep], timeout_secs: int | None
+    = None) -> MaudeRunResult` — runs a bounded Maude interpreter session. It loads one
+    file into a fresh worker (dependencies resolve as usual), selects an explicit
+    **module** (case-sensitive; a theory is rejected) and executes an ordered list of
+    steps:
+    - `reduce` (`term`), `rewrite` (`term`, optional `bound`), `frewrite` (`term`,
+      optional `bound`, `gas`), `erewrite` (same; the original term is kept).
+    - `match` (`pattern`, optional `subject`, `depth`) and `search` (`pattern`, optional
+      `subject`, `depth`, required `search_type` = `one-step` | `at-least-one-step` |
+      `any-steps` | `normal-form` | `branch`).
+    - The input is a discriminated union on `command`; all fields are optional except
+      where required. A step may omit its `term`/`subject` to use the current term: the
+      session starts with none (so the first step must provide one), rewriting commands
+      replace it, and `match`/`search` leave it unchanged. `bound`/`gas` are `>= 0`;
+      `depth` is `-1` (on top without extension, the default), `0` (on top with
+      extension) or `2147483647` (anywhere).
+    - The result reports the absolute `path`, the requested `module`, load `warnings` and
+      captured `load.output`, `completed` (all steps `ok`), and one outcome per executed
+      step (`index`, `command`, `status`, `term`, `rewrites`, `matches`/`solutions`,
+      `truncated`, `message`, `limit`, `output`). `status` is `ok`, `parse-error` or
+      `too-large`; the run stops at the first failure and later steps are not executed.
+    - Load warnings do not stop evaluation (use `maude_program_diagnostics` for a full
+      diagnosis). Whole-call failures raise `MaudeRunError`: missing/unreadable path, load
+      failure, module not defined (the message lists the modules the load defined), a
+      theory module, or a worker crash/timeout (the `MaudeWorkerError` is chained).
+    - All caps come from settings (step count, rewrite bound, solutions, term/result/
+      output length); `timeout_secs` overrides `HAROLD_INTERPRETER_TIMEOUT_SECS`. The
+      timeout covers interpreter startup and is best effort (a hung reduction fails the
+      call and replaces the pool). Each phase reports captured stdout/stderr with ANSI
+      codes stripped; over-long streams are truncated and marked.
+    - Annotated with the same full read-only profile and tagged
+      `tags=harold_tags(INTERPRETER)` (`{maude, programming, interpreter}`). Only the
+      prose above `Args:` becomes the description; field docstrings describe the output
+      schema.
 
 ```mermaid
 sequenceDiagram
@@ -62,11 +96,32 @@ sequenceDiagram
     T->>T: SourceFile.from_path pre-check and read
     T->>P: collect_diagnostics interpreter + heuristic, in order
     P->>W: interpreter provider: load_diagnostics task
-    W->>W: redirect fd 2 to tempfile, maude.load, parse warnings
+    W->>W: redirect both fds, maude.load, parse stderr warnings
     W-->>P: ok and warnings dict
     P->>P: heuristic provider: mask text, run rule registry
     P-->>T: merged diagnostics, ordered
     T-->>F: MaudeProgramDiagnosticsResult
+    F-->>C: structuredContent plus JSON text
+```
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant F as FastMCP server
+    participant T as maude_run tool
+    participant E as MaudeExecutor
+    participant W as Maude worker session
+    C->>F: tools/call maude_run path, module, steps
+    F->>T: run tool, inject executor and settings
+    T->>T: resolve path, validate caps and current-term threading
+    T->>E: run_session SessionRequest, timeout
+    E->>W: fresh process, init_maude, load file
+    W->>W: capture streams, diff getModules, parse warnings
+    W->>W: getModule, run steps until first failure
+    W-->>E: SessionResult (load info + outcomes)
+    E-->>T: SessionResult
+    T->>T: adapt outcomes to MaudeRunResult
+    T-->>F: MaudeRunResult
     F-->>C: structuredContent plus JSON text
 ```
 
@@ -94,7 +149,14 @@ sequenceDiagram
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `HAROLD_MAUDE_WORKERS` | `max(1, min(3, cpu_count // 2))` | bound on concurrently running Maude interpreters (workers are recycled after every call) |
-| `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | `60` | per-call timeout in seconds |
+| `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` | `60` | per-call timeout for `maude_program_diagnostics` (renamed from `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`; the startup ping uses it too) |
+| `HAROLD_INTERPRETER_TIMEOUT_SECS` | `60` | default per-call timeout for `maude_run` (`timeout_secs` overrides it) |
+| `HAROLD_INTERPRETER_MAX_STEPS` | `200` | maximum steps per `maude_run` call |
+| `HAROLD_INTERPRETER_MAX_REWRITE_BOUND` | `1000` | maximum accepted `bound` per rewrite step |
+| `HAROLD_INTERPRETER_MAX_SOLUTIONS` | `200` | maximum match substitutions / search solutions per step |
+| `HAROLD_INTERPRETER_MAX_TERM_LENGTH` | `100000` | maximum characters of a term, pattern or subject |
+| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | `1000000` | maximum characters of a returned term; longer results become `too-large` outcomes |
+| `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | `1000000` | maximum characters per captured stream per phase (longer captures are truncated and marked) |
 
 Invalid values fail fast at import (pydantic validation).
 
@@ -105,7 +167,7 @@ Invalid values fail fast at import (pydantic validation).
   `harold_mcp.server.server` (never the package `__init__` — cycle-proof).
 - `harold_mcp.server.tags` — the shared tool-tag vocabulary:
   - Constants: `MAUDE`/`PROGRAMMING` (domain tags), `DIAGNOSTICS`/`INTERPRETER`/`DOCS`
-    (functional categories; the latter two await their planned tools).
+    (functional categories; `DOCS` awaits its planned tool).
   - `harold_tags(*tags) -> set[str]` — builds a tool's tag set with the domain tags
     automatically added; pass it to `@mcp.tool(tags=...)`.
   - Effect/safety metadata stays in `ToolAnnotations`, not tags.
@@ -136,7 +198,8 @@ Invalid values fail fast at import (pydantic validation).
   - `PRELUDE_SORTS` / `PRELUDE_SORT_BASES` — the generated snapshot data.
   - `extract_prelude_sorts` / `render_snapshot_module` — the snapshot maintenance API
     behind the CLI.
-- `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton.
+- `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton
+  (workers, both timeouts, and the interpreter caps).
 - `harold_mcp.maude.MaudeExecutor` — the client wrapper (one task per process:
   `max_tasks_per_child=1`, so every call gets a fresh interpreter):
   - `start()` / `shutdown()` — pool lifecycle (start runs the fail-fast init pings).
@@ -144,7 +207,19 @@ Invalid values fail fast at import (pydantic validation).
     `MaudeWorkerCrashedError` on a broken pool.
   - `diagnostics(path) -> LoadDiagnosticsResult` — typed worker op; crash/timeout mapped
     to `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`, pool replaced.
-  - `_run_task(fn, *args) -> T` — generic submit-and-await runner for future worker ops.
+  - `run_session(request, timeout) -> SessionResult` — typed worker op for `maude_run`;
+    same crash/timeout mapping.
+  - `_run_task(fn, *args, timeout) -> T` — generic submit-and-await runner for worker ops.
+- `harold_mcp.maude.capture` — worker-side capture helpers: `capture_streams`,
+  `parse_warnings`, `strip_ansi`, `truncate_output`, `WarningDict`, `CapturedOutput`.
+- `harold_mcp.maude.session` — the bounded session engine and protocol: `run_session`,
+  `CommandName`, `StepStatus`, `StepRequest`, `SessionRequest`, `BindingDict`,
+  `SolutionDict`, `StepOutcomeDict`, `SessionResult`.
+- `harold_mcp.server.tools.interpreter` — `maude_run`, `MaudeRunError`, the step input
+  models (`ReduceStep`, `RewriteStep`, `FrewriteStep`, `ErewriteStep`, `MatchStep`,
+  `SearchStep`) and the result models (`MaudeRunResult`, `MaudeLoadInfo`,
+  `MaudeLoadWarning`, `MaudeCapturedOutput`, `MaudeStepOutcome`, `MaudeMatch`,
+  `MaudeSearchSolution`, `MaudeBinding`).
 - `harold_mcp.maude.InterpreterDiagnosticProvider(executor)` — the interpreter provider
   (warning mapping + synthesized whole-file error; own-file/`<standard input>` warnings
   keep their line, foreign-file warnings become whole-file dependency diagnostics naming
@@ -156,7 +231,8 @@ Invalid values fail fast at import (pydantic validation).
 - `harold_mcp.maude.worker` — worker-side module (imported by the worker process only in
   practice; safe to import anywhere): `init_maude`, `ping`, `sleep`, `rendezvous_pid`,
   `load_diagnostics`, `_crash`, and the `WarningDict` / `LoadDiagnosticsResult` TypedDicts
-  (`WarningDict` carries the `file` Maude attributed the warning to).
+  (`WarningDict` lives in `maude/capture.py` and carries the `file` Maude attributed the
+  warning to).
 - `harold_mcp.maude` error hierarchy — `MaudeError`, `MaudeInitError`,
   `MaudeWorkerError` (`MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`).
 - `harold_mcp.resources.HAROLD_ICON` — `mcp.types.Icon` used for server branding.
@@ -167,9 +243,9 @@ Invalid values fail fast at import (pydantic validation).
 Importing `harold_mcp.server`:
 
 1. Builds the global `mcp` server instance (in `harold_mcp.server.server`).
-2. Registers the tools (via `server/__init__.py` → `tools/__init__.py` →
-   `diagnostics.py`, which also imports the heuristic registry and the prelude snapshot
-   data).
+2. Registers both tools (via `server/__init__.py` → `tools/__init__.py` → `diagnostics.py`
+   and `interpreter.py`; the former also imports the heuristic registry and the prelude
+   snapshot data).
 3. Reads the `HAROLD_*` env vars once (pydantic-settings `Settings`).
 
 The Maude interpreter is **not** touched at import time: no `maude` import in the server

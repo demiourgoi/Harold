@@ -33,6 +33,8 @@
 
 ## Tool execution flow
 
+### `maude_program_diagnostics`
+
 ```mermaid
 flowchart TD
     A[harold-mcp console script] --> B[main.run]
@@ -44,7 +46,7 @@ flowchart TD
     G --> H{SourceFile.from_path<br>regular file?}
     H -->|no| I[SourceFileNotFoundError isError]
     H -->|yes| J[collect_diagnostics<br>providers in order, interpreter first]
-    J --> K[worker load_diagnostics<br>fd-2 capture, parse warnings]
+    J --> K[worker load_diagnostics<br>capture both fds, parse stderr warnings]
     J --> L[heuristic linter in-process<br>mask text, run rule registry]
     K --> M{any provider failed?}
     L --> M
@@ -57,15 +59,38 @@ flowchart TD
     S --> T[os._exit 0]
 ```
 
+### `maude_run`
+
+```mermaid
+flowchart TD
+    A[tool call maude_run path, module, steps] --> B{resolve path<br>regular file?}
+    B -->|no| C[MaudeRunError isError]
+    B -->|yes| D[validate caps and current-term threading]
+    D -->|invalid| C
+    D --> E[build SessionRequest]
+    E --> F[executor.run_session<br>fresh worker process]
+    F --> G[run_session: init, load, capture, warnings, getModules diff]
+    G --> H{load ok and module found<br>and not a theory?}
+    H -->|no| I[MaudeRunError isError<br>missing module lists defined modules]
+    H -->|yes| J[run steps until first failure]
+    J --> K[adapt to MaudeRunResult<br>load info plus step outcomes]
+    K --> L[structuredContent plus JSON text]
+```
+
 ### Failure semantics
 
-- A missing or unreadable input fails **before** any provider runs
-  (`SourceFileNotFoundError`, raised by the tool's pre-check/read).
-- Any provider failure fails the whole call with `DiagnosticCollectionError`: the message
-  names every failing provider and its reason, the first failure is chained
-  (`__cause__`), and the successful providers' findings are discarded (MCP cannot express
-  "error + content", so there are no partial results). A worker crash or timeout appears
-  as the interpreter provider's chained cause.
+- Diagnostics: a missing or unreadable input fails **before** any provider runs
+  (`SourceFileNotFoundError`, raised by the tool's pre-check/read). Any provider failure
+  fails the whole call with `DiagnosticCollectionError`: the message names every failing
+  provider and its reason, the first failure is chained (`__cause__`), and the successful
+  providers' findings are discarded (MCP cannot express "error + content", so there are
+  no partial results). A worker crash or timeout appears as the interpreter provider's
+  chained cause.
+- `maude_run`: per-step failures are **data**, not errors. A `parse-error` or `too-large`
+  outcome is returned with the outcomes of the steps that ran, `completed` is false, and
+  later steps are skipped. Whole-call conditions raise `MaudeRunError`: missing path, load
+  failure, module not defined (the message lists the modules the load defined), theory
+  module, or worker crash/timeout (chained).
 - A provider bug that is not a `DiagnosticProviderError` is reported with its exception
   type, so the message says what actually broke.
 
@@ -83,38 +108,49 @@ flowchart TD
 ### Hermetic calls (per-call interpreter isolation)
 
 - The pool recycles each worker after a single task (`max_tasks_per_child=1`), so every
-  `maude_program_diagnostics` call loads its file into a **fresh interpreter process**:
-  loaded modules and parser state never carry over between calls. This fixed the deferred
-  `q .` parser-residue contamination (a file with a top-level `q .`/`quit .` used to leave
-  the parser half-parsed and contaminate the *next* call; see
+  `maude_program_diagnostics` **and** `maude_run` call loads its file into a **fresh
+  interpreter process**: loaded modules and parser state never carry over between calls.
+  This fixed the deferred `q .` parser-residue contamination (a file with a top-level
+  `q .`/`quit .` used to leave the parser half-parsed and contaminate the *next* call; see
   `.agents/planning/no_new_module_quirk/`).
-- Consequences: there is no session state (`last load wins` is gone); each call pays
-  spawn + prelude init (≈1 s); `HAROLD_MAUDE_WORKERS` bounds concurrency (~100 MB per
-  running interpreter), not standing workers. `MaudeExecutor.start()` pings are a
-  fail-fast initialization check, not a warm-up.
-- Relative input paths are absolutized by `SourceFile.from_path` before the worker sees
-  them, because a fresh worker's working directory is not the client's; the result echoes
-  the resolved absolute path.
+- Consequences: there is no session state ("last load wins" and cross-call current terms
+  are gone); each call pays spawn + prelude init (≈1 s); `HAROLD_MAUDE_WORKERS` bounds
+  concurrency (~100 MB per running interpreter), not standing workers.
+  `MaudeExecutor.start()` pings are a fail-fast initialization check, not a warm-up. To
+  carry state across `maude_run` calls, re-submit a saved result term or write a wrapper
+  module.
+- Relative input paths are absolutized before the worker sees them, because a fresh
+  worker's working directory is not the client's: `SourceFile.from_path` does it for
+  diagnostics and `_resolve_path` for `maude_run`; both results echo the absolute path.
 - Interpreter warnings are attributed honestly: own-file (and `<standard input>`) warnings
   keep their line; a warning Maude attributed to a `load`/`in` dependency becomes a
   whole-file diagnostic naming the dependency and suggesting `maude_program_diagnostics`
-  on it.
+  on it. `maude_run` reports load warnings as data (with the file and line Maude printed)
+  and proceeds.
+- Output capture: `maude/capture.py` redirects both fds around the load and every step
+  (temp files, not pipes), strips ANSI codes, decodes lossily and truncates each stream at
+  the output cap. Diagnostics parses warnings from the full stderr and discards stdout; a
+  session returns both streams per phase.
 - Regression coverage: the isolation tests (each `q .` fixture followed by a clean
-  diagnosis), the dependency tests, and
+  diagnosis), the dependency tests,
   `test_parallel_diagnostics_do_not_share_interpreter_state` (4 concurrent workers, every
-  interpreter-clean fixture swept), plus the relative-path test.
+  interpreter-clean fixture swept), the relative-path test, and the session hermeticity
+  test (`test_sessions_are_hermetic`).
 
 ## Worker crash recovery
 
 ```mermaid
 flowchart TD
-    A[worker dies mid-task] --> B[BrokenProcessPool on future]
-    B --> C[MaudeWorkerError<br>pool replaced eagerly]
-    C --> D[provider wraps it in DiagnosticProviderError<br>aggregator raises DiagnosticCollectionError]
-    D --> E[client retries tool call]
-    E --> F[fresh worker serves the call]
-    F2[submit on known-broken pool] --> G[replace pool, raise MaudeWorkerCrashedError]
-    G --> E
+    A[worker dies mid-task or times out] --> B[BrokenProcessPool or TimeoutError]
+    B --> C[MaudeWorkerError<br>pool replaced eagerly, no retry]
+    C --> D{which tool?}
+    D -->|diagnostics| E[provider wraps in DiagnosticProviderError<br>aggregator raises DiagnosticCollectionError]
+    D -->|maude_run| F[tool raises MaudeRunError with the cause chained]
+    E --> G[client retries tool call]
+    F --> G
+    G --> H[fresh worker serves the call]
+    I[submit on known-broken pool] --> J[replace pool, raise MaudeWorkerCrashedError]
+    J --> G
 ```
 
 ## Prelude snapshot maintenance
@@ -144,11 +180,12 @@ flowchart TD
 
 ## Planning workflow
 
-- Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`
-  and `port-linter.py/` with `rough-idea.md`, `idea-honing.md`, `research/`, `design/`,
-  `implementation/`, `summary.md`). Design rationale for existing code is recorded there
-  too (e.g. `sigsegv-under-load/issue.md`). Consult these before implementing a planned
-  feature; `port-maude_eval.py/` is a research-only record paused at its decision point.
+- Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`,
+  `port-linter.py/` and `port-maude_eval.py/` with `rough-idea.md`, `idea-honing.md`,
+  `research/`, `design/`, `implementation/`, `summary.md`). Design rationale for existing
+  code is recorded there too (e.g. `sigsegv-under-load/issue.md`). `maude_run` followed
+  its PDD cycle (`port-maude_eval.py/`); `port-repair.py/` is an early record for a future
+  repair tool.
 
 ## Packaging and release
 
@@ -170,7 +207,9 @@ flowchart TD
 - `pytest-xdist` (dev group) powers `make test-integration`; the sequential `make test`
   remains what CI and `make release` run. `-n auto` is affinity-aware on Python 3.13+, so
   the same target fits workstations and small CI runners; cap it with
-  `PYTEST_XDIST_AUTO_NUM_WORKERS=<n>` on shared machines.
+  `PYTEST_XDIST_AUTO_NUM_WORKERS=<n>` on shared machines. The integration split includes
+  the interpreter-session suites (`test_maude_session_integration.py`,
+  `test_maude_run_integration.py`) in addition to the diagnostics suites.
 
 ## Related documents
 

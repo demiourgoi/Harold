@@ -7,8 +7,9 @@ around the Maude C++ interpreter) that `harold-mcp` depends on but does not vend
 **manually maintained** addition to this knowledge base: the code lives in the sibling
 `maude-bindings` checkout and its `subprojects/maudesmc` submodule, so codebase-summary
 cannot derive it from `src/harold_mcp`. For Harold's side of the story see `components.md`
-(`harold_mcp.maude.worker`, `harold_mcp.maude.executor`, `harold_mcp.maude.provider`) and
-`architecture.md`; for the dependency pin and its drift constraints see `dependencies.md`.
+(`harold_mcp.maude.worker`, `harold_mcp.maude.executor`, `harold_mcp.maude.provider`,
+`harold_mcp.maude.session`) and `architecture.md`; for the dependency pin and its drift
+constraints see `dependencies.md`.
 
 ## What the wheel contains
 
@@ -73,7 +74,7 @@ flowchart TD
     E -- not found --> G[stderr message; init returns False]
 ```
 
-## Is the prelude available with `InterpreterDiagnosticProvider`?
+## Is the prelude available with `InterpreterDiagnosticProvider` and `maude_run`?
 
 Yes, always. `harold_mcp.maude.worker.init_maude` is the worker-pool initializer
 (`initializer=worker.init_maude` in `harold_mcp.maude.executor`) and calls
@@ -81,18 +82,21 @@ Yes, always. `harold_mcp.maude.worker.init_maude` is the worker-pool initializer
 (`setAllowDir`/`setAllowFiles`/`setAllowProcesses(False)`). Consequently:
 
 - Every worker process has the full prelude loaded before `InterpreterDiagnosticProvider`
-  (via `MaudeExecutor.diagnostics` → `worker.load_diagnostics`) runs `maude.load(path)`.
-  Diagnosed programs may rely on prelude modules and sorts exactly as they would under the
-  `maude` CLI.
-- Freshness: the pool uses `max_tasks_per_child=1`, so each diagnostics call gets a fresh
-  process and the initializer (hence the prelude load) runs again per call; crash/timeout
-  pool replacement re-runs it too.
+  (via `MaudeExecutor.diagnostics` → `worker.load_diagnostics`) runs `maude.load(path)`,
+  and before `maude_run` (via `MaudeExecutor.run_session` → `session.run_session`) loads
+  its file and parses terms. Diagnosed and evaluated programs may rely on prelude modules
+  and sorts exactly as they would under the `maude` CLI.
+- Freshness: the pool uses `max_tasks_per_child=1`, so each diagnostics or interpreter
+  call gets a fresh process and the initializer (hence the prelude load) runs again per
+  call; crash/timeout pool replacement re-runs it too.
 - Fail-fast: a broken install (prelude not found) makes `init_maude` raise `WorkerInitError`,
   which surfaces as `MaudeInitError` during the lifespan's initialization check — the
   server refuses to start rather than silently running without a prelude.
-- Capture scope: the fd-2 capture in `load_diagnostics` wraps only
-  `maude.load(<diagnosed file>)`; anything the prelude prints while loading at init is
-  outside the diagnostics result.
+- Capture scope: the fd capture in `load_diagnostics` and in `session.run_session` wraps
+  only the `maude.load`/term work, through the shared `maude/capture.py` helper (both fds);
+  anything the prelude prints while loading at init is outside the tool results. The
+  diagnostics tool parses the captured stderr and discards the captured stdout; `maude_run`
+  returns both streams per phase.
 
 ## `MAUDE_LIB` and version matching
 

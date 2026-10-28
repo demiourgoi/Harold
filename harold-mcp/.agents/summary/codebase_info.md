@@ -4,7 +4,7 @@
 
 ## Identity
 
-- **Project**: `harold-mcp` v0.0.5.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.5]` section; `[0.0.4]` documents the heuristic-linter port and the hermetic-calls/isolation work)
+- **Project**: `harold-mcp` v0.0.5.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.5]` section that does not yet record the implemented `maude_run` tool or the settings rename; `[0.0.4]` documents the heuristic-linter port and the hermetic-calls/isolation work)
 - **Author**: Juan Rodriguez (`juanrh@pm.me`)
 - **Repository**: <https://github.com/demiourgoi/harold>
 - **Documentation site**: <https://demiourgoi.github.io/Harold/> (MkDocs, built from `docs/`)
@@ -25,7 +25,7 @@
   - `harold_mcp.server` — FastMCP instance, shared tag vocabulary, and the MCP tools;
   - `harold_mcp.diagnostics` — the provider-agnostic diagnostics seam: provider protocol, value types, error vocabulary, aggregation (stdlib-only, no interpreter);
   - `harold_mcp.heuristic` — the heuristic linter: lexical layer, rules, generated prelude-sort snapshot and its maintenance CLI (server process, never imports `maude`);
-  - `harold_mcp.maude` — worker executor client, the interpreter diagnostics provider, and the worker-side code.
+  - `harold_mcp.maude` — worker executor client, the interpreter diagnostics provider, the bounded session engine (`session.py`), the shared stream capture (`capture.py`), and the worker-side code.
 - Plus the flat modules `harold_mcp.main`, `harold_mcp.settings`, `harold_mcp.logging`, `harold_mcp.resources`.
 
 ## Dependency management
@@ -59,6 +59,7 @@ The heuristic linter and the diagnostics seam added **no** runtime dependencies:
 
 - Console script `harold-mcp` → `harold_mcp.main:app` (defined in `pyproject.toml` `[project.scripts]`). `main.py` builds a **cyclopts** CLI: the default command and the `serve` subcommand both run the MCP server over stdio (`--help`/`--version` come from cyclopts).
 - Console script `harold-update-prelude-sorts` → `harold_mcp.heuristic.prelude_extract:app` — regenerates (or verifies with `--check`) the bundled Maude prelude sort snapshot.
+- MCP tools: `maude_program_diagnostics` (interpreter load + heuristic linter) and `maude_run` (bounded interpreter sessions with `reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search`).
 - The Maude interpreter lives in a dedicated worker process; the heuristic linter runs in the server process.
 
 ## Related documents

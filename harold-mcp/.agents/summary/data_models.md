@@ -2,7 +2,7 @@
 
 <!-- tags: data-models, types -->
 
-## Result models (the tool's output schema)
+## Result models (the tools' output schemas)
 
 Defined in `harold_mcp.server.tools.diagnostics` (pydantic `BaseModel`s inheriting the
 private `_ResultModel` base — see below); FastMCP derives the output JSON Schema from the
@@ -30,10 +30,39 @@ return annotation and emits both `structuredContent` and a JSON text block.
 | | `summary` | `MaudeDiagnosticsSummary` | |
 | | `diagnostics` | `list[MaudeDiagnostic]` | file order: line, provider, column; whole-file last |
 
+### `maude_run` input and result models
+
+Defined in `harold_mcp.server.tools.interpreter` (same `_ResultModel` base). The input is a
+discriminated union on `command`:
+
+| Model | Fields | Notes |
+| --- | --- | --- |
+| `_StepBase` | `term: str \| None` | shared rewriting field; omitted means the current term |
+| `_BoundedStep` | + `bound: int \| None` (`>= 0`) | omitted means unbounded |
+| `_GassedStep` | + `gas: int \| None` (`>= 0`) | per-position fair-rewriting gas |
+| `_PatternStep` | `pattern: str`, `subject: str \| None`, `depth: int \| None` | depth `-1` … `2147483647` (Maude int32) |
+| `ReduceStep` / `RewriteStep` / `FrewriteStep` / `ErewriteStep` | respective base fields + `command` literal | rewriting family |
+| `MatchStep` / `SearchStep` | pattern fields + `command` literal; search adds `search_type` | `search_type` is `one-step`/`at-least-one-step`/`any-steps`/`normal-form`/`branch` |
+| `MaudeStep` | `Annotated[union, Field(discriminator="command")]` | the wire step type |
+
+The result models:
+
+| Model | Field | Type | Notes |
+| --- | --- | --- | --- |
+| `MaudeCapturedOutput` | `stdout` / `stderr` | `str` | ANSI-stripped; each stream capped separately |
+| `MaudeLoadWarning` | `file` / `line` / `message` | `str` / `int` / `str` | as Maude reported it (dependency or `<standard input>` included) |
+| `MaudeLoadInfo` | `warnings`, `output` | `list[MaudeLoadWarning]`, `MaudeCapturedOutput` | load phase only |
+| `MaudeBinding` | `variable` / `value` | `str` / `str` | one substitution pair |
+| `MaudeMatch` | `bindings` | `list[MaudeBinding]` | empty for a ground match |
+| `MaudeSearchSolution` | `term`, `rewrites`, `bindings` | `str`, `int`, `list[MaudeBinding]` | the rewrite counter includes equational rewrites |
+| `MaudeStepOutcome` | `index`, `command`, `status`, `term`, `rewrites`, `matches`, `solutions`, `truncated`, `message`, `limit`, `output` | mixed | fields that do not apply are `None`; `status` is `ok`/`parse-error`/`too-large` |
+| `MaudeRunResult` | `path`, `module`, `load`, `completed`, `steps` | `str`, `str`, `MaudeLoadInfo`, `bool`, `list[MaudeStepOutcome]` | `steps` is shorter when a step failed |
+
 ### Field docs: `_ResultModel` and `use_attribute_docstrings`
 
-All seven result models inherit from a private `_ResultModel` base (never `BaseModel`
-directly), which enables pydantic's attribute docstrings:
+All result models inherit from a private `_ResultModel` base (never `BaseModel`
+directly), which enables pydantic's attribute docstrings. Both tool modules define their
+own `_ResultModel` with the same config (each module documents its own schema).
 
 ```python
 class _ResultModel(BaseModel):
@@ -104,15 +133,26 @@ Defined in `harold_mcp.heuristic` (plain dataclasses, no framework types):
 
 ## Worker protocol types
 
-Defined in `harold_mcp.maude.worker` (TypedDicts; plain dicts cross the process boundary):
+Defined in `harold_mcp.maude.capture`, `harold_mcp.maude.worker` and
+`harold_mcp.maude.session` (TypedDicts; plain dicts cross the process boundary):
 
-- `WarningDict` — `{file: str, line: int | None, message: str}`. `file` is the name Maude
-  printed for the warning's file (the diagnosed file, a `load`/`in` dependency, or
-  `<standard input>` for some first-line warnings); the provider uses it to attribute the
-  warning instead of pinning everything on the diagnosed file.
-- `LoadDiagnosticsResult` — `{ok: bool, warnings: list[WarningDict]}`. `ok` is the
-  `maude.load` return value: `True` for every parseable input (Maude recovers from
+- `WarningDict` (`capture.py`) — `{file: str, line: int | None, message: str}`. `file` is
+  the name Maude printed for the warning's file (the diagnosed file, a `load`/`in`
+  dependency, or `<standard input>` for some first-line warnings); the provider uses it to
+  attribute the warning instead of pinning everything on the diagnosed file.
+- `CapturedOutput` (`capture.py`) — `{stdout: str, stderr: str}`, ANSI-stripped and
+  decoded lossily.
+- `LoadDiagnosticsResult` (`worker.py`) — `{ok: bool, warnings: list[WarningDict]}`. `ok`
+  is the `maude.load` return value: `True` for every parseable input (Maude recovers from
   arbitrary garbage), `False` for missing files / unrecoverable parse failures.
+- `StepRequest` / `SessionRequest` (`session.py`) — one flat step (every command-specific
+  field present, `None` when not applicable) and the whole session (path, module, steps,
+  `max_solutions`, `max_result_length`, `max_output_length`).
+- `BindingDict` / `SolutionDict` / `StepOutcomeDict` / `SessionResult` (`session.py`) —
+  `{variable, value}`, `{term, rewrites, bindings}`, one executed-step outcome (same
+  fields as the wire outcome, with the capture), and the load/module/outcomes envelope.
+- `CommandName`, `RewritingCommand`, `MatchingCommand`, `StepStatus` — `Literal` aliases
+  for the closed command/status vocabularies.
 
 ## Error hierarchies
 
@@ -124,7 +164,7 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 | Type | Base | Attributes | Raised by |
 | --- | --- | --- | --- |
 | `DiagnosticsError` | `RuntimeError` | — | base for failures of the diagnostics subsystem |
-| `SourceFileNotFoundError` | `DiagnosticsError` | `path: Path` | `SourceFile.from_path` — the tool's input is missing/unreadable |
+| `SourceFileNotFoundError` | `DiagnosticsError` | `path: Path` | `SourceFile.from_path` — the diagnostics tool's input is missing/unreadable |
 | `DiagnosticProviderError` | `DiagnosticsError` | `source`, `reason` | a provider could not produce diagnostics (wraps the cause) |
 | `DiagnosticCollectionError` | `DiagnosticsError` | `failures: tuple[ProviderFailure, ...]` | `collect_diagnostics` — at least one provider failed; the message names every failing provider |
 
@@ -138,9 +178,15 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 | `MaudeWorkerCrashedError` | `MaudeWorkerError` | — | broken pool (submit time) or worker death mid-task |
 | `MaudeWorkerTimeoutError` | `MaudeWorkerError` | — | call exceeded the configured timeout |
 
-`MaudeFileNotFoundError` no longer exists (removed in 0.0.4): the tool's input error is
-`SourceFileNotFoundError`, because a missing file is a diagnostics-tool concern, not an
-interpreter error.
+### Interpreter tool (`harold_mcp.server.tools.interpreter`)
+
+| Type | Base | Attributes | Raised by |
+| --- | --- | --- | --- |
+| `MaudeRunError` | `RuntimeError` | — | whole-call failure of `maude_run`; the `MaudeWorkerError` cause is chained |
+
+`MaudeFileNotFoundError` no longer exists (removed in 0.0.4): the diagnostics tool's input
+error is `SourceFileNotFoundError`, because a missing file is a diagnostics-tool concern,
+not an interpreter error.
 
 ## Framework types in use
 
@@ -149,9 +195,9 @@ interpreter error.
 | `FastMCP` | `fastmcp` | `server/server.py` — the server instance |
 | `Lifespan` (via `@lifespan`) | `fastmcp.server.lifespan` | `server/server.py` — the lifespan |
 | `App` | `cyclopts` | `main.py` (server CLI) and `heuristic/prelude_extract.py` (snapshot CLI) |
-| `Depends` | `fastmcp.dependencies` | tool (via `get_diagnostic_providers`) + `get_maude_executor` (nested DI: providers → executor → settings) |
-| `ToolAnnotations` | `mcp.types` | tool annotations: full read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) — reaches clients over the wire |
-| tags (`set[str]`) | `fastmcp` `@mcp.tool(tags=...)` | `tools/diagnostics.py` via `harold_tags` — server-side categorization only with mcp SDK 1.29 (not serialized to clients) |
+| `Depends` | `fastmcp.dependencies` | diagnostics tool (via `get_diagnostic_providers`) and `maude_run` (executor + settings); `get_maude_executor` nests `get_settings` |
+| `ToolAnnotations` | `mcp.types` | both tools: full read-only profile (`readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`) — reaches clients over the wire |
+| tags (`set[str]`) | `fastmcp` `@mcp.tool(tags=...)` | `tools/diagnostics.py` and `tools/interpreter.py` via `harold_tags` — server-side categorization only with mcp SDK 1.29 (not serialized to clients) |
 | `Icon` / `Image` | `mcp.types` / `fastmcp.utilities.types` | `resources.py` — server branding |
 | `BaseModel` / `ConfigDict` | `pydantic` | wire result models (`_ResultModel`) |
 | `BaseSettings` / `Field` / `SettingsConfigDict` | `pydantic-settings` / `pydantic` | `settings.py` — env-var config |
@@ -162,8 +208,8 @@ interpreter error.
 Defined in `harold_mcp.server.tags` (plain `str` constants, plus the `harold_tags` helper):
 
 - `maude`, `programming` — domain tags, added to every tool by `harold_tags`.
-- `diagnostics` — the current tool's functional category; `interpreter` and `docs` are
-  reserved for the planned run/RAG tools.
+- `diagnostics` — `maude_program_diagnostics`; `interpreter` — `maude_run`; `docs` —
+  reserved for the planned RAG tool.
 - Note: tags are server-side only with mcp SDK 1.29 (visibility control via
   `mcp.enable`/`mcp.disable`); they are not part of the MCP wire format on spec 2025-06-18.
 
