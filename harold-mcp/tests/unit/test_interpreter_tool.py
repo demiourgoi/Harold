@@ -223,6 +223,17 @@ def test_search_step_requires_a_pattern_and_a_search_type() -> None:
         _ = SearchStep(command="search", pattern="X")
 
 
+@pytest.mark.parametrize("depth", [-2, 2_147_483_648])
+def test_depth_outside_the_int32_range_is_rejected(depth: int) -> None:
+    with pytest.raises(ValidationError):
+        _ = MatchStep(command="match", pattern="X", depth=depth)
+
+
+def test_depth_at_the_documented_bounds_is_accepted() -> None:
+    assert MatchStep(command="match", pattern="X", depth=-1).depth == -1
+    assert MatchStep(command="match", pattern="X", depth=2_147_483_647).depth == 2_147_483_647
+
+
 def test_first_match_without_a_subject_is_rejected(maude_file: Path) -> None:
     executor = FakeExecutor()
 

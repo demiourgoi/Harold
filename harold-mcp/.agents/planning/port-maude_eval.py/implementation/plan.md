@@ -523,7 +523,7 @@ term; a capped search returns `truncated=true`.
 README (tool list and env table), `docs/modules.md`, `CHANGELOG.md`, bump the version,
 and run the full `make release` validation.
 
-**Review rev2 fixes (Step 5 findings, 2026-10-22).** `_run_match_or_search` now
+**Review fixes (Step 5 findings, rev1/rev2, 2026-10-22).** `_run_match_or_search` now
 enforces `max_result_length` on every serialized result term (search solution terms
 and binding variables/values) and returns a `too-large` outcome with `limit`, matching
 the rewriting commands; the review correctly found this gap. Tests now cover the
@@ -535,6 +535,15 @@ explicit term/subject for this step" (they also fire for later steps). `term-api
 is gone. `probe_match_search.py` records the canonical-state distinction; note that
 Maude rejects the **same term object** as search subject and target (warning and a
 `None` iterator), so the probe parses them separately.
+
+The Step 5 rev1 review added the `depth` domain
+(`Annotated[int | None, Field(ge=-1, le=2147483647)]`): an out-of-range value is now
+rejected at the schema instead of becoming an opaque `OverflowError` whole-call
+failure. Its `parse-error` status description was widened to "a term, pattern or
+subject did not parse". The suggestion to assert `_SEARCH_TYPES` against an
+in-process `import maude` was not adopted: the canonical-state test already fails on
+a 3/4 swap, and the test process stays free of the bindings. The skill/gitignore
+finding was resolved by restoring the skill.
 
 ---
 

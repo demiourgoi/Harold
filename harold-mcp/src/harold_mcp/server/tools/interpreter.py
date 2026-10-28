@@ -37,6 +37,11 @@ from harold_mcp.settings import Settings, get_settings
 # OBJECT_ORIENTED_THEORY. Spelled out because the server process never imports `maude`.
 _THEORY_MODULE_TYPES = frozenset({2, 3, 7, 11})
 
+# Maude's `UNBOUNDED` depth: the maximum C `int`. Spelled out (rather than
+# `sys.maxsize`, which is the platform word size) because the server process never
+# imports `maude` and the SWIG parameters are C ints.
+_MAUDE_UNBOUNDED_DEPTH = 2**31 - 1
+
 
 class MaudeRunError(RuntimeError):
     """Whole-call failure of `maude_run`.
@@ -115,7 +120,7 @@ class _PatternStep(_ResultModel):
     subject: str | None = None
     """Subject term text; omitted means the current term."""
 
-    depth: int | None = None
+    depth: Annotated[int | None, Field(ge=-1, le=_MAUDE_UNBOUNDED_DEPTH)] = None
     """Maude's matching/search depth: -1 = on top without extension, 0 = on top with
     extension, 2147483647 = anywhere in the term; omitted means -1."""
 
@@ -217,7 +222,8 @@ class MaudeStepOutcome(_ResultModel):
     """The command that produced this outcome."""
 
     status: StepStatus
-    """`"ok"`, `"parse-error"` (the term did not parse), or `"too-large"` (the result exceeded the limit)."""
+    """`"ok"`, `"parse-error"` (a term, pattern or subject did not parse), or `"too-large"`
+    (the result exceeded the limit)."""
 
     term: str | None
     """The result term (`"ok"` only)."""
