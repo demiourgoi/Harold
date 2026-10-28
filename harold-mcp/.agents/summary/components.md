@@ -435,9 +435,9 @@ replacing it (findings are heuristics and may be false positives).
   (implemented): `rough-idea.md` (2026-10-17 update), `idea-honing.md` (Q1–Q11),
   `research/` (contribution, placement, consumers, term API, worker behavior, probes),
   `design/detailed-design.md` (requirements R1–R16, session engine, caps, outcomes),
-  `implementation/plan.md` (six TDD steps) plus step reviews, and `summary.md`. Note: the
-  summary's status banner still says "implementation not started" — the code is in
-  `maude/session.py`, `server/tools/interpreter.py` and the integration tests.
+  `implementation/plan.md` (six TDD steps) plus step reviews, and `summary.md` (closing
+  record; the code is in `maude/session.py`, `server/tools/interpreter.py` and the
+  integration tests).
 - `port-repair.py/` — early planning record for a future repair/fix-application tool:
   `rough-idea.md`, `idea-honing.md`, `research/`, `summary.md`. No production code yet.
 - `no_new_module_quirk/` — complete PDD cycle for the deferred `q .` parser-residue bug

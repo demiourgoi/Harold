@@ -13,7 +13,7 @@
 - [x] **Step 3** — `maude_run` tool end to end (reduce only)
 - [x] **Step 4** — Rewriting family and current-term threading
 - [x] **Step 5** — `match` and `search`, final tool description
-- [ ] **Step 6** — Documentation, release bookkeeping, full validation
+- [x] **Step 6** — Documentation, release bookkeeping, full validation
 
 ## Working agreements
 
@@ -574,7 +574,7 @@ settings or undocumented modules.
 **Demo.** `make release` green; the MkDocs site documents the new tool and modules; the README
 configuration table matches `Settings`.
 
-### Implementation notes (Step 6, partial)
+### Implementation notes (Step 6)
 
 **Done.**
 
@@ -590,10 +590,11 @@ configuration table matches `Settings`.
   timeout rename, absolute-path guidance and the stdout-leak fix; planning/review commits
   are folded into "General fixes".
 
-**Deferred by user (2026-10-22).** The release version is `0.0.5`, not the plan's
-`0.1.0` proposal, and 0.0.5 still has small changes to land. The `pyproject.toml` bump to
-the next WIP version and the empty next-release section were therefore reverted:
-`pyproject.toml` stays at `0.0.5.dev0` and `uv.lock` is unchanged. Once 0.0.5 is ready,
-the release process should bump `pyproject.toml` to `0.0.6.dev0`, add an empty
-`## [0.0.6]` section, and run `make release`. The codebase summary was refreshed by the
-user, so no `.agents/summary/` action is pending.
+**Deferred by user (2026-10-28).** The release version is `0.0.5`, not the plan's
+`0.1.0` proposal, and 0.0.5 still has small changes to land in a follow-up PDD session.
+The `pyproject.toml` bump to the next WIP version and the empty next-release section were
+therefore reverted: `pyproject.toml` stays at `0.0.5.dev0` and `uv.lock` is unchanged.
+Once 0.0.5 is ready, that session should bump `pyproject.toml` to `0.0.6.dev0`, add an
+empty `## [0.0.6]` section, and run `make release`. The codebase summary was refreshed by
+the user, so no `.agents/summary/` action is pending. `make release` for this project is
+green (310 tests, strict docs build).

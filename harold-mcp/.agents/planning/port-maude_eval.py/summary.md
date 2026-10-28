@@ -1,9 +1,12 @@
 # Summary — `maude_run` (term evaluation / bounded interpreter sessions)
 
-> **Status (2026-10-17): PDD complete, implementation not started.** The project resumed after the
-> heuristic linter and the hermetic per-call interpreter redesign landed. Requirements, research,
-> design and the implementation plan are ready; the code changes are listed in
-> [`implementation/plan.md`](implementation/plan.md).
+> **Status (2026-10-28): PDD complete and implemented.** `maude_run` landed in the
+> unreleased 0.0.5 work: the settings and stream-capture foundation (Step 1), the worker
+> session engine and executor (Step 2), the tool (Step 3), the rewriting family (Step 4),
+> and `match`/`search` with the final description (Step 5). Step 6's README/module docs,
+> `## [0.0.5]` changelog entries and the full `make release` validation are done; the
+> version bump to the next WIP release is deferred to the follow-up 0.0.5 session because
+> 0.0.5 is not released yet.
 
 ## Artifacts
 
@@ -16,9 +19,9 @@
 | [`research/consumers.md`](research/consumers.md) | Phase-1 record: the `improve-rag` consumers and why they stay separate. |
 | [`research/term-api.md`](research/term-api.md) | Bindings 1.6.0 inventory: module selection/enumeration, `parseTerm`, the rewriting family (mutation, counters), `match`, `search`, serialization. |
 | [`research/worker-behavior.md`](research/worker-behavior.md) | Streams (stdout vs stderr, ANSI), hung reductions and pool recovery, per-call cost, executor reuse. |
-| [`research/probes/`](research/probes/) | `probe_term_ops.py`, `probe_streams.py`, `probe_modules.py`, `probe_timeout.py`, `probe_call_cost.py`, `probe_stdout_flush.py` plus transcripts and a README. |
+| [`research/probes/`](research/probes/) | `probe_term_ops.py`, `probe_match_search.py`, `probe_streams.py`, `probe_modules.py`, `probe_timeout.py`, `probe_call_cost.py`, `probe_stdout_flush.py` plus transcripts and a README. |
 | [`design/detailed-design.md`](design/detailed-design.md) | Standalone design: requirements R1–R16, architecture, components, data models, errors, testing, appendices. |
-| [`implementation/plan.md`](implementation/plan.md) | Six TDD steps with checklist, tests and demos per step. |
+| [`implementation/plan.md`](implementation/plan.md) | Six TDD steps with checklist, tests and demos per step, plus the step reviews and implementation notes. |
 | [`summary.md`](summary.md) | This file. |
 
 ## Design in one paragraph
@@ -80,22 +83,29 @@ the agent.
 5. `match` and `search`, final tool description.
 6. Documentation, release bookkeeping, full validation.
 
+All six steps are implemented and validated (`make release` is green). The only deferred
+release action is the next-version bump, listed under "Next steps".
+
 ## Next steps
 
-1. Implement the plan starting at Step 1.
-2. After the implementation lands: refresh `.agents/summary/` and `AGENTS.md` (new modules, timeout
-   rename, worker-op split), update `README.md`/`CHANGELOG.md`, and bump the version (proposal
-   `0.1.0`).
+1. Finish the remaining 0.0.5 changes in a follow-up PDD session, then complete the release
+   bookkeeping: bump `pyproject.toml` to the next WIP version (e.g. `0.0.6.dev0`), add the
+   matching empty changelog section, and publish 0.0.5.
+2. The knowledge base (`.agents/summary/`) and `AGENTS.md` were refreshed with the new tool,
+   modules and settings.
 3. Consider follow-ups outside this project: strategy commands (`srewrite`), `parseStrategy`,
    unification/variants, and a friendlier `match`-depth vocabulary.
 
-## Areas that may need refinement during implementation
+## Resolved during implementation
 
-- `search` type `BRANCH` is exposed as Maude defines it but was only smoke-tested (iteration and
-  empty results).
-- `gas` is passed through only when supplied; the binding default (`-1`) is used otherwise, which
-  the manual describes as 1 per position — verify against the bindings while implementing.
-- The `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` → `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` rename is a breaking
-  env-var change; it is acceptable pre-1.0 but must be prominent in the CHANGELOG.
-- The parent-stdout leak integration test may need to run in a child process if pytest's own
-  fd-level capture interferes.
+- `search` type `BRANCH`: covered by the five-type integration test and the canonical-state
+  test (`0` → `normal-form` `[0]`, `branch` `[]`); the probe records both.
+- `gas`: verified against the interpreter (probe `probe_term_ops.py` plus an integration
+  test); `gas=0` means no rewrites per position, and omitted values use the bindings' default.
+- The `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` → `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` rename is
+  prominent in the `## [0.0.5]` changelog section.
+- The parent-stdout leak regression test uses a dedicated pool created inside the redirect and
+  a non-blocking pipe read (multiprocessing's resource tracker can hold the write end); it was
+  verified to fail against the old stderr-only capture.
+- `match`/`search` enforce `max_result_length` on solution terms and bindings, and `depth` is
+  constrained to `-1..2147483647` at the schema.

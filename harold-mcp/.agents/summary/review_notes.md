@@ -203,12 +203,6 @@ for the record.
 10. **`maude_run` has no dedicated timeout integration test.** As with the diagnostics
     timeout path, the mapping is unit-tested only; a real non-terminating reduction is the
     documented way to trigger it, but no fixture/CI case does so.
-11. **`port-maude_eval.py/summary.md` status is stale.** Its banner still says
-    "implementation not started" while the code, tests and docs exist; the knowledge base
-    records the discrepancy. Update the planning record or move it to an implemented state.
-12. **`CHANGELOG.md` `[0.0.5]` is empty.** The `maude_run` feature, the capture refactor and
-    the `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` rename (breaking) are not yet recorded; the
-    release process requires a summary and entries before tagging.
 
 ## Completeness gaps
 
