@@ -41,8 +41,20 @@ Harold MCP tools:
   reported as whole-file diagnostics whose message names the dependency file and
   suggests diagnosing it on its own.
 
-Planned tools: running Maude programs, and a vector index of the Maude documentation for
-retrieval-augmented generation (RAG).
+- **`maude_run(path, module, steps)`** — runs a bounded Maude interpreter session: loads
+  one file into a fresh interpreter, selects a module, and executes an ordered list of
+  `reduce`, `rewrite`, `frewrite`, `erewrite`, `match` and `search` steps, returning every
+  intermediate result. Steps thread a current term REPL-style (omit a step's term or
+  subject to use the previous result), and the optional `bound`, `gas` and `depth` inputs
+  map to Maude's limits. Each call is hermetic: nothing survives between calls, so carry
+  state by re-submitting a saved result term or writing a wrapper module. Load warnings
+  are reported but evaluation proceeds; per-step failures (`parse-error`, `too-large`)
+  stop the run and are returned as outcomes, and `match`/`search` cap their results with a
+  `truncated` flag. Every phase reports the interpreter's captured stdout/stderr, and the
+  path must be **absolute** (the server's working directory is not the client's).
+
+Planned tools: a vector index of the Maude documentation for retrieval-augmented
+generation (RAG).
 
 ## Installation
 
@@ -106,11 +118,22 @@ The server is configured through environment variables set in the MCP server con
 
 | Env var | Meaning | Default |
 | --- | --- | --- |
-| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Workers are recycled after every call (each call gets a fresh interpreter), so this caps how many diagnostics can run concurrently, not how many interpreters stay warm. | half the logical CPUs, capped at 3 |
-| `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` | Seconds to wait for each worker call before failing it as timed out. | `60` |
+| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Workers are recycled after every call (each call gets a fresh interpreter), so this caps how many diagnostics/interpreter sessions can run concurrently, not how many interpreters stay warm. | half the logical CPUs, capped at 3 |
+| `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` | Seconds to wait for each `maude_program_diagnostics` worker call before failing it as timed out. Renamed from `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`. | `60` |
+| `HAROLD_INTERPRETER_TIMEOUT_SECS` | Default timeout for each `maude_run` call; its `timeout_secs` argument overrides it. | `60` |
+| `HAROLD_INTERPRETER_MAX_STEPS` | Maximum steps per `maude_run` call. | `200` |
+| `HAROLD_INTERPRETER_MAX_REWRITE_BOUND` | Maximum accepted `bound` per rewrite step. | `1000` |
+| `HAROLD_INTERPRETER_MAX_SOLUTIONS` | Maximum `match` substitutions or `search` solutions returned per step. | `200` |
+| `HAROLD_INTERPRETER_MAX_TERM_LENGTH` | Maximum characters of a term, pattern or subject input. | `100000` |
+| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | Maximum characters of a returned term; a longer result becomes a `too-large` step outcome. | `1000000` |
+| `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | Maximum characters of each captured stream (stdout and stderr separately) returned per phase; longer captures are truncated and marked. | `1000000` |
 | `MAUDE_LIB` | Inherited by the Maude bindings, not read by Harold itself: colon-separated directories where Maude searches for `prelude.maude` (and for library files loaded with `in`/`load`). Only needed to override the prelude bundled with the `maude` wheel. | unset (the bundled prelude is used) |
 
 Invalid values (e.g. `HAROLD_MAUDE_WORKERS=0`) make the server fail fast at startup.
+
+Both timeouts cover the whole worker call (interpreter startup included) and are best
+effort: a call that exceeds its timeout fails, its worker is killed, and the worker pool
+is replaced, so allow more time for long evaluations.
 
 If you use `MAUDE_LIB` to override the bundled prelude, that prelude must match the Maude version Harold uses (currently Maude 3.5.1, the version the `maude` dependency is built against); a mismatched prelude can make the interpreter fail to load it or behave inconsistently. See [`.agents/summary/maude-lib.md`](.agents/summary/maude-lib.md) for how Maude locates the prelude.
 

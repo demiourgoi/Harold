@@ -573,3 +573,27 @@ settings or undocumented modules.
 
 **Demo.** `make release` green; the MkDocs site documents the new tool and modules; the README
 configuration table matches `Settings`.
+
+### Implementation notes (Step 6, partial)
+
+**Done.**
+
+- `README.md`: `maude_run` added to the tool list (hermetic sessions, six commands,
+  threading, caps, absolute path) and the "planned tools" line now only mentions RAG;
+  the configuration table documents `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` (rename),
+  `HAROLD_INTERPRETER_TIMEOUT_SECS`, the six `HAROLD_INTERPRETER_MAX_*` caps and the
+  best-effort/whole-call timeout semantics.
+- `docs/modules.md`: added `harold_mcp.maude.capture`, `harold_mcp.maude.session` and
+  `harold_mcp.server.tools.interpreter`; `make docs-test` is green.
+- `CHANGELOG.md`: the `## [0.0.5]` section now has the release summary and entries for
+  the new tool, interpreter settings, capture/session modules, the breaking diagnostics
+  timeout rename, absolute-path guidance and the stdout-leak fix; planning/review commits
+  are folded into "General fixes".
+
+**Deferred by user (2026-10-22).** The release version is `0.0.5`, not the plan's
+`0.1.0` proposal, and 0.0.5 still has small changes to land. The `pyproject.toml` bump to
+the next WIP version and the empty next-release section were therefore reverted:
+`pyproject.toml` stays at `0.0.5.dev0` and `uv.lock` is unchanged. Once 0.0.5 is ready,
+the release process should bump `pyproject.toml` to `0.0.6.dev0`, add an empty
+`## [0.0.6]` section, and run `make release`. The codebase summary was refreshed by the
+user, so no `.agents/summary/` action is pending.

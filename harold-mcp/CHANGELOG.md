@@ -2,6 +2,65 @@
 
 ## [0.0.5]
 
+New `maude_run` tool: bounded Maude interpreter sessions — load one file, select a module,
+and run `reduce`, `rewrite`, `frewrite`, `erewrite`, `match` and `search` steps with
+REPL-style threading. A shared stream-capture layer also closes a latent stdout leak in
+the diagnostics worker.
+
+### Added
+
+- **`maude_run` MCP tool** — runs a bounded Maude interpreter session in one hermetic
+  call: one file, one explicit module, and an ordered step list of `reduce`, `rewrite`,
+  `frewrite`, `erewrite`, `match` and `search`. Commands thread a current term
+  REPL-style (omit a step's term/subject to use the previous result), expose Maude's
+  `bound`, `gas` and `depth`, and return every intermediate result (`term`/`rewrites`,
+  match substitutions, and search solutions with their bindings and rewrite counts).
+  Per-step failures (`parse-error`, `too-large`) stop the run and are returned as
+  outcomes; load warnings are reported while evaluation proceeds; every phase reports
+  ANSI-stripped captured stdout/stderr. `match`/`search` results are capped with a
+  `truncated` flag, result terms respect the configured length limit, and missing paths,
+  load failures, missing/theory modules and worker crashes/timeouts fail the whole call
+  with `MaudeRunError`. The tool advertises the same read-only annotation profile as the
+  diagnostics tool and carries the `interpreter` tag.
+- **Interpreter settings** — `HAROLD_INTERPRETER_TIMEOUT_SECS` and
+  `HAROLD_INTERPRETER_MAX_STEPS`, `..._MAX_REWRITE_BOUND`, `..._MAX_SOLUTIONS`,
+  `..._MAX_TERM_LENGTH`, `..._MAX_RESULT_LENGTH` and `..._MAX_OUTPUT_LENGTH`, plus the
+  tool's per-call `timeout_secs` override.
+- **Shared stream capture (`harold_mcp.maude.capture`)** — redirects fds 1 and 2 to temp
+  files, restores them in `finally`, strips ANSI codes, decodes lossily, parses Maude's
+  warnings and truncates output; used by both the diagnostics load and interpreter
+  sessions.
+- **Worker session engine (`harold_mcp.maude.session`)** — the bounded session
+  implementation and its worker protocol types, exposed through
+  `MaudeExecutor.run_session`.
+
+### Changed
+
+- **Breaking: `HAROLD_MAUDE_WORKER_TIMEOUT_SECS` renamed to
+  `HAROLD_DIAGNOSTICS_TIMEOUT_SECS`** — it is the diagnostics timeout (and the lifespan's
+  init-ping budget). The old environment variable is ignored.
+- **Timeout ownership** — `MaudeExecutor` no longer picks a default timeout: diagnostics
+  passes its setting, `maude_run` passes its own setting or the per-call override, and the
+  lifespan passes the diagnostics timeout to the startup check. Both timeouts cover the
+  whole worker call and remain best effort (a timeout kills and replaces the pool).
+- **Absolute paths in both tools** — the `maude_program_diagnostics` and `maude_run`
+  descriptions now state that `path` must be absolute, because the server's working
+  directory is not the client's.
+- **Concurrent-call wording** — `HAROLD_MAUDE_WORKERS` is documented as the cap on
+  concurrent diagnostics and interpreter sessions; workers are still recycled per call.
+
+### Fixed
+
+- **No stdout leak from loaded files** — diagnostics now captures the worker's stdout
+  around `maude.load`, so a diagnosed file's embedded REPL commands (e.g. a `red`) can no
+  longer write into the MCP stdio transport. The captured output is discarded; warnings
+  are still parsed from stderr.
+
+### General fixes
+
+- Assorted typos, formatting, documentation polish, PDD planning and review records, and
+  agent-harness command allow-list updates.
+
 ## [0.0.4]
 
 Heuristic linter port: `maude_program_diagnostics` now reports the Maude interpreter load
