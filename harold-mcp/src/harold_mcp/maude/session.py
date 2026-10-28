@@ -224,6 +224,52 @@ def _bindings(substitution: Any) -> list[BindingDict]:
     return [{"variable": str(variable), "value": str(value)} for variable, value in substitution]
 
 
+def _bindings_too_large(bindings: list[BindingDict], max_length: int) -> bool:
+    """Whether a serialized binding string (variable or value) exceeds the term cap."""
+    return any(len(binding["variable"]) > max_length or len(binding["value"]) > max_length for binding in bindings)
+
+
+type _CollectionResult = tuple[Literal["ok", "too-large"], list[Any], bool]
+
+
+def _collect_matches(
+    subject: Any,
+    pattern: Any,
+    depth: int,
+    max_solutions: int,
+    max_result_length: int,
+) -> _CollectionResult:
+    """Collect a capped list of match substitutions, enforcing the result term cap."""
+    matched = list(islice(subject.match(pattern, maxDepth=depth), max_solutions + 1))
+    matches: list[list[BindingDict]] = []
+    for substitution, _context in matched[:max_solutions]:
+        bindings = _bindings(substitution)
+        if _bindings_too_large(bindings, max_result_length):
+            return "too-large", [], False
+        matches.append(bindings)
+    return "ok", matches, len(matched) > max_solutions
+
+
+def _collect_solutions(
+    subject: Any,
+    search_type: int,
+    pattern: Any,
+    depth: int,
+    max_solutions: int,
+    max_result_length: int,
+) -> _CollectionResult:
+    """Collect a capped list of search solutions, enforcing the result term cap."""
+    found = list(islice(subject.search(search_type, pattern, depth=depth), max_solutions + 1))
+    solutions: list[SolutionDict] = []
+    for solution, substitution, _path, rewrites in found[:max_solutions]:
+        term_text = str(solution)
+        bindings = _bindings(substitution)
+        if len(term_text) > max_result_length or _bindings_too_large(bindings, max_result_length):
+            return "too-large", [], False
+        solutions.append({"term": term_text, "rewrites": int(rewrites), "bindings": bindings})
+    return "ok", solutions, len(found) > max_solutions
+
+
 def _run_match_or_search(
     module: Any,
     index: int,
@@ -231,17 +277,20 @@ def _run_match_or_search(
     subject_str: str,
     step: StepRequest,
     max_solutions: int,
+    max_result_length: int,
     max_output_length: int,
 ) -> StepOutcomeDict:
     """Parse the subject and pattern, run `match` or `search`, and build the outcome.
 
     Both iterations are capped at `max_solutions`; `truncated` is true when one more
     item existed. The iterators are lazy, so the extra item is consumed only to detect
-    the overflow. Parsing and the operation share one capture, so a parse failure's
-    `Warning:` lines become the `parse-error` message.
+    the overflow. Every serialized result term (a search solution or a binding value)
+    is checked against `max_result_length`: exceeding it produces a `too-large` outcome,
+    like the rewriting commands. Parsing and the operation share one capture, so a
+    parse failure's `Warning:` lines become the `parse-error` message.
     """
 
-    def execute() -> tuple[list[Any], bool] | None:
+    def execute() -> _CollectionResult | None:
         subject = module.parseTerm(subject_str)
         if subject is None:
             return None
@@ -253,29 +302,35 @@ def _run_match_or_search(
             return None
         depth = step["depth"] if step["depth"] is not None else -1
         if command == "match":
-            matched = list(islice(subject.match(pattern, maxDepth=depth), max_solutions + 1))
-            return (
-                [_bindings(substitution) for substitution, _context in matched[:max_solutions]],
-                len(matched) > max_solutions,
-            )
+            return _collect_matches(subject, pattern, depth, max_solutions, max_result_length)
         search_type_name = step["search_type"]
         if search_type_name is None or search_type_name not in _SEARCH_TYPES:
             raise ValueError(  # noqa: TRY003 - programming error
                 f"step {index} has no valid search_type"
             )
-        found = list(islice(subject.search(_SEARCH_TYPES[search_type_name], pattern, depth=depth), max_solutions + 1))
-        solutions: list[SolutionDict] = [
-            {"term": str(solution), "rewrites": int(rewrites), "bindings": _bindings(substitution)}
-            for solution, substitution, _path, rewrites in found[:max_solutions]
-        ]
-        return solutions, len(found) > max_solutions
+        return _collect_solutions(
+            subject,
+            _SEARCH_TYPES[search_type_name],
+            pattern,
+            depth,
+            max_solutions,
+            max_result_length,
+        )
 
     result, captured = capture_streams(execute)
     output = _truncate_capture(captured, max_output_length)
     if result is None:
         message = "\n".join(warning["message"] for warning in parse_warnings(captured["stderr"]))
         return _outcome(index=index, command=command, status="parse-error", message=message, output=output)
-    items, truncated = result
+    status, items, truncated = result
+    if status == "too-large":
+        return _outcome(
+            index=index,
+            command=command,
+            status="too-large",
+            limit=max_result_length,
+            output=output,
+        )
     if command == "match":
         return _outcome(
             index=index,
@@ -333,6 +388,7 @@ def _run_step(
                 subject_str,
                 step,
                 request["max_solutions"],
+                request["max_result_length"],
                 request["max_output_length"],
             )
         case _:

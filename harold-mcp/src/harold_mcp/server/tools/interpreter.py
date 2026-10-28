@@ -301,13 +301,12 @@ def _validate_step_threading(index: int, step: MaudeStep, has_current: bool) -> 
     if isinstance(step, _PatternStep):
         if step.subject is None and not has_current:
             raise MaudeRunError(  # noqa: TRY003
-                f"Step {index} has no subject and there is no current term: "
-                "the first match/search step must provide an explicit subject"
+                f"Step {index} has no subject and there is no current term: provide an explicit subject for this step"
             )
         return has_current
     if step.term is None and not has_current:
         raise MaudeRunError(  # noqa: TRY003
-            f"Step {index} has no term and there is no current term: the first step must provide an explicit term"
+            f"Step {index} has no term and there is no current term: provide an explicit term for this step"
         )
     return True
 

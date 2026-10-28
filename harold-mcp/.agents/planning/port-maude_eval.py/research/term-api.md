@@ -105,10 +105,10 @@ matches a ground pattern anywhere (`2` matches inside the sequence). Iterating a
 substitution yields `(variable Term, value Term)`; `str(variable)` prints the variable
 name alone (`N`), not name-plus-sort, so the tool's `variable` field is a plain name.
 
-**Implications.** The step outcome is `{matched: bool, matches: [{variable: termString, ...}],
-truncated: bool}`; iteration stops at the configured solutions cap. Default: plain on-top
-matching (`maxDepth=-1`); v1 also offers an optional `with_extension` flag mapping to
-`maxDepth=0`. Arbitrary depth matching (`UNBOUNDED`) is deferred.
+**Implications.** The step outcome is `{matches: [[{variable, value}, ...]], truncated}`;
+iteration stops at the configured solutions cap. `depth` maps directly to `maxDepth`
+(`-1` default, `0` for extension matching, `2147483647` for anywhere); there is no
+`with_extension` flag.
 
 ## 5. `search`
 
@@ -127,14 +127,17 @@ matching (`maxDepth=-1`); v1 also offers an optional `with_extension` flag mappi
 Probe on the counter module with `target = c(N)`, `depth=2`: `=>1` → `c(1)`; `=>+` → `c(1)`,
 `c(2)`; `=>*` → `c(0)` (rewrite count 0), `c(1)`, `c(2)`; `=>!` → no solutions (the rule never
 reaches a normal form); `=>#` → no solutions in this example. Ground targets work (`c(2) =>1
-c(3)` → one solution; `c(0) =>1 c(3)` → none). The iterator is **lazy**: a client-side cap can
-stop it after N solutions.
+c(3)` → one solution; `c(0) =>1 c(3)` → none). A canonical state (`0`, which the rule cannot
+rewrite) distinguishes `=>!` from `=>#`: `normal-form` returns `0` itself (rewrite count 0),
+while `branch` returns nothing. The iterator is **lazy**: a client-side cap can stop it after N
+solutions.
 
 **Implications.** The step input is `pattern` + `search_type` (one of the five) + optional
 `depth` (default `-1` = unbounded). The outcome is `{solutions: [{term, bindings, rewrites}],
 truncated: bool}`. An unbounded search in an infinite space with no solutions runs until the
 call timeout (best effort); the tool description must say so. `BRANCH` is exposed as Maude
-defines it, but the probe only verified that it iterates and can be empty.
+defines it; the probe verifies it iterates and is empty for both a canonical state and the
+non-terminating counter.
 
 ## 6. Printing and serialization
 

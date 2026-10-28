@@ -421,7 +421,9 @@ unchanged term and zero rewrites (a dropped `gas` would default to 1 and yield
 transcript was regenerated) and the probes README documents it. The session
 integration docstring no longer claims the engine only supports `reduce`, and the
 Step 4 implications note now records that `_validate_steps` needs the `subject`
-field and must not set `has_current` after `match`/`search`.
+field and must not set `has_current` after `match`/`search`. The rev2 review
+(`step-4-review-rev2.md`) is the Step 4 sign-off: it re-checked the tree and confirms
+all rev1 fixes are present; its Step 5 findings are handled once in the Step 5 notes.
 
 **Implications for later steps.** Step 5 adds `match`/`search`: their subject
 resolution differs (`subject` field), they do not update the current term (the
@@ -520,6 +522,19 @@ term; a capped search returns `truncated=true`.
 **Implications for later steps.** Step 6 is documentation/release only: update
 README (tool list and env table), `docs/modules.md`, `CHANGELOG.md`, bump the version,
 and run the full `make release` validation.
+
+**Review rev2 fixes (Step 5 findings, 2026-10-22).** `_run_match_or_search` now
+enforces `max_result_length` on every serialized result term (search solution terms
+and binding variables/values) and returns a `too-large` outcome with `limit`, matching
+the rewriting commands; the review correctly found this gap. Tests now cover the
+result-length cap for both commands, the canonical `normal-form` vs `branch`
+distinction (`0` → `[0]` vs `[]`, so a 3/4 constant swap fails), and match/search
+parse errors stopping the run. The no-current-term errors now say "provide an
+explicit term/subject for this step" (they also fire for later steps). `term-api.md`
+§4/§5 were corrected: the stale `matched`/`with_extension`/deferred-`UNBOUNDED` text
+is gone. `probe_match_search.py` records the canonical-state distinction; note that
+Maude rejects the **same term object** as search subject and target (warning and a
+`None` iterator), so the probe parses them separately.
 
 ---
 

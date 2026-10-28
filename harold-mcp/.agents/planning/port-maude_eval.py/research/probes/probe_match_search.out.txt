@@ -32,5 +32,9 @@ BRANCH (depth=2): 0 shown | []
 c(2) =>1 c(3): [('c(3)', 'empty', 2, [])]
 c(0) =>1 c(3): []
 
+=== canonical-state search (normal-form vs branch) ===
+subject 0 / target 0 NORMAL_FORM: ['0']
+subject 0 / target 0 BRANCH: []
+
 === lazy iteration cap ===
 first two solutions of an unbounded-depth any-steps search: ['c(0)', 'c(1)']

@@ -354,6 +354,23 @@ def test_search_types_and_ground_targets(executor: MaudeExecutor) -> None:
     assert ground["outcomes"][0]["solutions"] == [{"term": "c(3)", "rewrites": 2, "bindings": []}]
     assert ground["outcomes"][1]["solutions"] == []
 
+    canonical = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("search", pattern="0", subject="0", depth=2, search_type="normal-form"),
+                _step("search", pattern="0", subject="0", depth=2, search_type="branch"),
+            ],
+        ),
+    )
+    # The inc rule cannot rewrite 0, so it is already a normal form and a canonical
+    # state has no branches. This distinguishes NORMAL_FORM from BRANCH, which both
+    # return [] for the c(0) subject above (guards against a 3/4 constant swap).
+    assert [solution["term"] for solution in canonical["outcomes"][0]["solutions"]] == ["0"]
+    assert canonical["outcomes"][1]["solutions"] == []
+
 
 def test_match_and_search_caps_set_the_truncation_flag(executor: MaudeExecutor) -> None:
     matched = _run(
@@ -381,3 +398,58 @@ def test_match_and_search_caps_set_the_truncation_flag(executor: MaudeExecutor) 
     search_outcome = _single_outcome(searched)
     assert search_outcome["truncated"] is True
     assert len(search_outcome["solutions"]) == 1
+
+
+def test_match_and_search_result_length_cap(executor: MaudeExecutor) -> None:
+    matched = _run(
+        executor,
+        _request("counter.maude", "COUNTER", [_step("match", pattern="c(N)", subject="c(10)")], max_result_length=1),
+    )
+    match_outcome = _single_outcome(matched)
+    assert match_outcome["status"] == "too-large"
+    assert match_outcome["limit"] == 1
+    assert match_outcome["matches"] is None
+
+    searched = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [_step("search", pattern="c(N)", subject="c(0)", depth=2, search_type="one-step")],
+            max_result_length=1,
+        ),
+    )
+    search_outcome = _single_outcome(searched)
+    assert search_outcome["status"] == "too-large"
+    assert search_outcome["limit"] == 1
+    assert search_outcome["solutions"] is None
+
+
+def test_match_and_search_parse_errors_stop_the_run(executor: MaudeExecutor) -> None:
+    bad_pattern = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [
+                _step("match", pattern="c(", subject="c(5)"),
+                _step("match", pattern="c(N)", subject="c(5)"),
+            ],
+        ),
+    )
+    assert len(bad_pattern["outcomes"]) == 1
+    outcome = bad_pattern["outcomes"][0]
+    assert outcome["status"] == "parse-error"
+    assert "no parse for term." in str(outcome["message"])
+
+    bad_subject = _run(
+        executor,
+        _request(
+            "counter.maude",
+            "COUNTER",
+            [_step("search", pattern="c(N)", subject="c(", depth=2, search_type="one-step")],
+        ),
+    )
+    outcome = bad_subject["outcomes"][0]
+    assert outcome["status"] == "parse-error"
+    assert "no parse for term." in str(outcome["message"])

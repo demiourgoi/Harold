@@ -82,6 +82,16 @@ print("c(2) =>1 c(3):", solutions)
 solutions = [str(solution) for solution, *_ in start.search(maude.ONE_STEP, ground, depth=2)]
 print("c(0) =>1 c(3):", solutions)
 
+section("canonical-state search (normal-form vs branch)")
+# Parse the subject and target separately: Maude rejects the same term object as both.
+canonical_subject = counter.parseTerm("0")
+canonical_target = counter.parseTerm("0")
+for name in ("NORMAL_FORM", "BRANCH"):
+    solutions = [
+        str(solution) for solution, *_ in canonical_subject.search(getattr(maude, name), canonical_target, depth=2)
+    ]
+    print(f"subject 0 / target 0 {name}:", solutions)
+
 section("lazy iteration cap")
 lazy = start.search(maude.ANY_STEPS, target, depth=10)
 first_two = []
