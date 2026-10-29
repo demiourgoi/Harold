@@ -1,0 +1,23 @@
+***(
+    Maude CLI input for the search-path probe.
+
+    Load the fixture, reproduce the rough idea's shepherd search, and print the
+    three `show path` variants. Then search the unlabeled rules to see what
+    `show path labels` prints for rules without a label.
+
+    Run from this directory:
+
+        /home/juanrh/systems/maude/latest/maude < probe_cli_show_path.input
+)
+
+in search_path.maude .
+search [1, 7] in SHEPHERD : st(l, l, l, l) =>* st(r, r, r, r) .
+show path 9 .
+show path labels 9 .
+show path states 9 .
+search [1] in UNLABELED : a =>+ c .
+show path labels 2 .
+show path 2 .
+search [1] in BRANCH : a =># X:S .
+show path labels 0 .
+quit .

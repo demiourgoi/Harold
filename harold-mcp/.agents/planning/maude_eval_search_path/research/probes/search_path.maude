@@ -1,0 +1,80 @@
+***(
+    Fixtures for the search-path probe.
+
+    SHEPHERD is the river-crossing example from the rough idea: a 7-step solution
+    with labels crossWithSheep, crossAlone, crossWithCabbage, crossWithSheep,
+    crossWithDog, crossAlone, crossWithSheep.
+
+    UNLABELED has rules without labels, to see what getLabel() returns.
+
+    CHAIN is an unbounded counter used for long paths and for the path-thunk
+    laziness probe.
+
+    BRANCH is a one-state branching system for the =># search type.
+)
+
+mod SHEPHERD is
+  protecting BOOL .
+
+  sorts Side Config .
+
+  ops l r : -> Side .
+  op other : Side -> Side .
+  eq other(l) = r .
+  eq other(r) = l .
+
+  --- A bank is safe when neither forbidden pair is there without the shepherd.
+  op safe : Side Side Side Side -> Bool .
+  vars P C D S : Side .
+  eq safe(P, C, D, S) =
+    (C =/= S or P == S) and (D =/= S or P == S) .
+
+  --- st(shepherd, cabbage, dog, sheep)
+  op st : Side Side Side Side -> Config .
+
+  crl [crossAlone] :
+    st(P, C, D, S)
+    =>
+    st(other(P), C, D, S)
+    if safe(other(P), C, D, S) .
+
+  crl [crossWithCabbage] :
+    st(P, C, D, S)
+    =>
+    st(other(P), other(C), D, S)
+    if C == P /\ safe(other(P), other(C), D, S) .
+
+  crl [crossWithDog] :
+    st(P, C, D, S)
+    =>
+    st(other(P), C, other(D), S)
+    if D == P /\ safe(other(P), C, other(D), S) .
+
+  crl [crossWithSheep] :
+    st(P, C, D, S)
+    =>
+    st(other(P), C, D, other(S))
+    if S == P /\ safe(other(P), C, D, other(S)) .
+endm
+
+mod UNLABELED is
+  sort S .
+  ops a b c : -> S .
+  rl a => b .
+  rl b => c .
+endm
+
+mod CHAIN is
+  pr NAT .
+  sort S .
+  op n : Nat -> S .
+  var N : Nat .
+  rl [step] : n(N) => n(N + 1) .
+endm
+
+mod BRANCH is
+  sort S .
+  ops a b c : -> S .
+  rl [ab] : a => b .
+  rl [ac] : a => c .
+endm

@@ -1,0 +1,85 @@
+		     \||||||||||||||||||/
+		   --- Welcome to Maude ---
+		     /||||||||||||||||||\
+	    Maude 3.5.1 built: Jul 16 2025 12:00:00
+	     Copyright 1997-2025 SRI International
+		   Thu Oct 29 20:55:53 2026
+==========================================
+mod SHEPHERD
+==========================================
+mod UNLABELED
+==========================================
+mod CHAIN
+==========================================
+mod BRANCH
+==========================================
+search [1, 7] in SHEPHERD : st(l, l, l, l) =>* st(r, r, r, r) .
+
+Solution 1 (state 9)
+states: 10  rewrites: 427 in 0ms cpu (0ms real) (~ rewrites/second)
+empty substitution
+state 0, Config: st(l, l, l, l)
+===[ crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S
+    == P = true /\ safe(other(P), C, D, other(S)) = true . ]===>
+state 1, Config: st(r, l, l, r)
+===[ crl [crossAlone] : st(P, C, D, S) => st(other(P), C, D, S) if safe(other(
+    P), C, D, S) = true . ]===>
+state 2, Config: st(l, l, l, r)
+===[ crl [crossWithCabbage] : st(P, C, D, S) => st(other(P), other(C), D, S) if
+    C == P = true /\ safe(other(P), other(C), D, S) = true . ]===>
+state 3, Config: st(r, r, l, r)
+===[ crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S
+    == P = true /\ safe(other(P), C, D, other(S)) = true . ]===>
+state 5, Config: st(l, r, l, l)
+===[ crl [crossWithDog] : st(P, C, D, S) => st(other(P), C, other(D), S) if D
+    == P = true /\ safe(other(P), C, other(D), S) = true . ]===>
+state 7, Config: st(r, r, r, l)
+===[ crl [crossAlone] : st(P, C, D, S) => st(other(P), C, D, S) if safe(other(
+    P), C, D, S) = true . ]===>
+state 8, Config: st(l, r, r, l)
+===[ crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S
+    == P = true /\ safe(other(P), C, D, other(S)) = true . ]===>
+state 9, Config: st(r, r, r, r)
+crossWithSheep
+crossAlone
+crossWithCabbage
+crossWithSheep
+crossWithDog
+crossAlone
+crossWithSheep
+state 0, Config: st(l, l, l, l)
+--- crossWithSheep --->
+state 1, Config: st(r, l, l, r)
+--- crossAlone --->
+state 2, Config: st(l, l, l, r)
+--- crossWithCabbage --->
+state 3, Config: st(r, r, l, r)
+--- crossWithSheep --->
+state 5, Config: st(l, r, l, l)
+--- crossWithDog --->
+state 7, Config: st(r, r, r, l)
+--- crossAlone --->
+state 8, Config: st(l, r, r, l)
+--- crossWithSheep --->
+state 9, Config: st(r, r, r, r)
+==========================================
+search [1] in UNLABELED : a =>+ c .
+
+Solution 1 (state 2)
+states: 3  rewrites: 2 in 0ms cpu (0ms real) (~ rewrites/second)
+empty substitution
+(unlabeled rule)
+(unlabeled rule)
+state 0, S: a
+===[ rl a => b . ]===>
+state 1, S: b
+===[ rl b => c . ]===>
+state 2, S: c
+==========================================
+search [1] in BRANCH : a =># X:S .
+
+Solution 1 (state 0)
+states: 3  rewrites: 2 in 0ms cpu (0ms real) (~ rewrites/second)
+X:S --> a
+Empty path.
+Bye.

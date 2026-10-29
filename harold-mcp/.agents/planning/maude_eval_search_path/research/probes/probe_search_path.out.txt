@@ -1,0 +1,63 @@
+load: True
+
+=== search iterator and path thunk shape ===
+iterator type: RewriteSequenceSearch
+solution: st(r, r, r, r) | substitution: empty | rewrites: 427
+path thunk type: function
+path type: list | length: 15
+  [0] Term: 'st(l, l, l, l)' | label='<n/a>'
+  [1] Rule: 'crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\\ safe(other(P), C, D, other(S)) = true .' | label='crossWithSheep'
+  [2] Term: 'st(r, l, l, r)' | label='<n/a>'
+  [3] Rule: 'crl [crossAlone] : st(P, C, D, S) => st(other(P), C, D, S) if safe(other(P), C, D, S) = true .' | label='crossAlone'
+  [4] Term: 'st(l, l, l, r)' | label='<n/a>'
+  [5] Rule: 'crl [crossWithCabbage] : st(P, C, D, S) => st(other(P), other(C), D, S) if C == P = true /\\ safe(other(P), other(C), D, S) = true .' | label='crossWithCabbage'
+  [6] Term: 'st(r, r, l, r)' | label='<n/a>'
+  [7] Rule: 'crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\\ safe(other(P), C, D, other(S)) = true .' | label='crossWithSheep'
+  [8] Term: 'st(l, r, l, l)' | label='<n/a>'
+  [9] Rule: 'crl [crossWithDog] : st(P, C, D, S) => st(other(P), C, other(D), S) if D == P = true /\\ safe(other(P), C, other(D), S) = true .' | label='crossWithDog'
+  [10] Term: 'st(r, r, r, l)' | label='<n/a>'
+  [11] Rule: 'crl [crossAlone] : st(P, C, D, S) => st(other(P), C, D, S) if safe(other(P), C, D, S) = true .' | label='crossAlone'
+  [12] Term: 'st(l, r, r, l)' | label='<n/a>'
+  [13] Rule: 'crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\\ safe(other(P), C, D, other(S)) = true .' | label='crossWithSheep'
+  [14] Term: 'st(r, r, r, r)' | label='<n/a>'
+
+=== state numbers match Maude's `Solution N (state M)` ===
+solution state number: 9
+state chain (root first): [0, 1, 2, 3, 5, 7, 8, 9]
+getStateTerm(root state 0): 'st(l, l, l, l)'
+pathTo(same state) labels: ['crossWithSheep', 'crossAlone', 'crossWithCabbage', 'crossWithSheep', 'crossWithDog', 'crossAlone', 'crossWithSheep']
+
+=== path thunk captures the current state at call time ===
+after first next: state 0 | labels now: []
+after second next: state 1 | labels now: ['step']
+first thunk called late: ['step'] -> points at state 1
+second thunk called late: ['step'] -> points at state 1
+
+=== reflexive solution at the initial state (=>*) ===
+solution: n(0) | state: 0 | path length: 1
+  [0] Term: 'n(0)' | label='<n/a>'
+
+=== all five search types ===
+ONE_STEP: 1 solution(s) | (state, rewrites, labels, path len) = [(1, 63, ['crossWithSheep'], 3)]
+AT_LEAST_ONE_STEP: 1 solution(s) | (state, rewrites, labels, path len) = [(9, 427, ['crossWithSheep', 'crossAlone', 'crossWithCabbage', 'crossWithSheep', 'crossWithDog', 'crossAlone', 'crossWithSheep'], 15)]
+ANY_STEPS: 1 solution(s) | (state, rewrites, labels, path len) = [(9, 427, ['crossWithSheep', 'crossAlone', 'crossWithCabbage', 'crossWithSheep', 'crossWithDog', 'crossAlone', 'crossWithSheep'], 15)]
+NORMAL_FORM: 1 solution(s) | (state, rewrites, labels, path len) = [(2, 2, ['ac'], 3)]
+BRANCH: 1 solution(s) | (state, rewrites, labels, path len) = [(0, 2, [], 1)]
+
+=== unlabeled rules ===
+solution: c | state: 2
+  [0] Term: 'a' | label='<n/a>'
+  [1] Rule: 'rl a => b .' | label=None
+  [2] Term: 'b' | label='<n/a>'
+  [3] Rule: 'rl b => c .' | label=None
+  [4] Term: 'c' | label='<n/a>'
+
+=== long path size ===
+path elements: 201 | terms: 101 | rules: 100
+max term length: 6
+max rule length: 30
+total rule text length: 3000
+rewrite counter: 200 | state: 100
+
+=== path survives the iterator ===
+path elements after deleting the iterator: ['n(0)', 'rl [step] : n(N) => n(N + 1) .', 'n(1)'] ...

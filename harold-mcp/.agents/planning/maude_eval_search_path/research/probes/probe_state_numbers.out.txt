@@ -1,0 +1,13 @@
+load: True
+solution state: 9
+getStateParent(9): 8
+getStateParent(0): -1
+getRule(1): crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\ safe(other(P), C, D, other(S)) = true . | label: 'crossWithSheep'
+getRule(9): crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\ safe(other(P), C, D, other(S)) = true . | label: 'crossWithSheep'
+getRule() current: crl [crossWithSheep] : st(P, C, D, S) => st(other(P), C, D, other(S)) if S == P = true /\ safe(other(P), C, D, other(S)) = true . | label: 'crossWithSheep'
+getStateTerm(0): st(l, l, l, l)
+getStateTerm(9): st(r, r, r, r)
+pathTo(0): ['st(l, l, l, l)']
+pathTo(9) length: 15
+pathTo called twice returns the same labels: ['crossWithSheep', 'crossAlone', 'crossWithCabbage', 'crossWithSheep', 'crossWithDog', 'crossAlone', 'crossWithSheep']
+calling getRule(0) as the last call; expect a hard crash
