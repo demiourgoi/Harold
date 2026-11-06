@@ -114,24 +114,8 @@ Gotchas:
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
 - _Zed_ is useful for debugging, because it displays the _full JSON response_ from each tool call.
-- Setup the following agent skills:
-  - `codebase-summary`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/codebase-summary.sop.md) to  ~/.agents/skills/codebase-summary/SKILL.md, and add the following frontmatter
-
-```md
----
-name: codebase-summary
-description: Generates structured codebase documentation — architecture, components, interfaces, data models, workflows — into `.agents/summary/`, and produces consolidated files like `AGENTS.md`, `README.md`, or `CONTRIBUTING.md`. Use when the user asks to document, summarize, understand, or onboard to a codebase.
----
-```
-
-  - `pdd`: copy the corresponding [agent SOP](https://github.com/strands-agents/agent-sop/blob/main/agent-sops/pdd.sop.md) to  ~/.agents/skills/pdd/SKILL.md, and add the following frontmatter
-
-```md
----
-name: pdd
-description: Transforms a rough idea into a detailed design document, implementation plan, and actionable todo list using the Prompt-Driven Development (PDD) methodology. Use when a user describes a project concept or feature idea they want to develop, when they need to flesh out requirements and research before coding, or when they ask to plan, design, or create a structured specification for a new project.
----
-```
+- Setup agent skills and custom agents: clone `https://github.com/demiourgoi/epinoia` and `make -C ../../epinoia install`
+  - Review a commit: `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "Review the HEAD commit"`
 
 ## Maintaining the prelude sort snapshot
 

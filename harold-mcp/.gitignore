@@ -2,6 +2,8 @@
 docs/source
 .agents/**/*.html
 .agents/skills
+.vibe
+.review.md
 
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
 
