@@ -1,5 +1,7 @@
 # Harold agent skills
 
+Validate every skill's frontmatter against the [Agent Skills specification](https://agentskills.io/specification.md) with `make validate` (runs the official `skills-ref` validator for each `*/SKILL.md` in this directory).
+
 ## maude-primer
 
 Knowledge base generated from [*Maude 2.0 Primer, Version 1.0*](https://maude.cs.illinois.edu/documentation) (Theodore McCombs, SRI Computer Science Laboratory, August 2003; 137 pp.) via the [book-to-skill](https://github.com/virgiliojr94/book-to-skill.git) converter on 2026-11-09. Technical mode, Docling layout-aware extraction (no fallback).
