@@ -1,6 +1,10 @@
 ---
 name: maude-manual
-description: "Knowledge base from \"Maude Manual (Version 3.5.1)\" by Manuel Clavel, Francisco Durán, Steven Eker, Santiago Escobar, Patrick Lincoln, Narciso Martí-Oliet, José Meseguer, Rubén Rubio, and Carolyn Talcott (July 2025). Use when writing, debugging, verifying, or explaining Maude (rewriting-logic) code: functional/system/object-oriented/strategy modules, sorts-kinds-preregularity, equational attributes, module algebra (imports, renaming, theories, views, parameterization), search/rewrite strategies, unification/variants/narrowing, LTL model checking, reflection and META-LEVEL, predefined data modules, external objects and IO, or any Maude command, attribute, or trap."
+description: "Maude 3.5.1 manual reference: functional, system, object-oriented and strategy modules; sorts, kinds, preregularity; equational attributes; module algebra (imports, renaming, theories, views, parameterization); search and rewrite strategies; unification, variants, narrowing; LTL model checking; reflection and META-LEVEL; predefined data modules; external objects and IO. Use when writing, debugging, verifying, or explaining Maude (rewriting-logic) code, or when asked about any Maude command, attribute, or trap."
+metadata:
+  author: "Manuel Clavel, Francisco Durán, Steven Eker, Santiago Escobar, Patrick Lincoln, Narciso Martí-Oliet, José Meseguer, Rubén Rubio, Carolyn Talcott"
+  source: "Maude Manual (Version 3.5.1)"
+  publication-date: "July 2025"
 ---
 
 <!-- argument-hint: [topic, framework name, command, or chapter number] -->

@@ -1,6 +1,10 @@
 ---
 name: maude-primer
-description: "Knowledge base from \"Maude 2.0 Primer\" (v1.0, 2003) by Theodore McCombs. Use when writing, debugging, or explaining Maude (rewriting-logic) code: sorts, subsorts, kinds, constructors, equations and membership axioms, rewrite laws and search, Full Maude object-oriented modules, parameterized modules/theories/views, or META-LEVEL metaprogramming and internal strategies."
+description: "Maude 2.0 Primer reference in its beginner-friendly, non-mathematical register: sorts, subsorts, kinds, constructors, equations and membership axioms, rewrite laws and search, Full Maude object-oriented modules, parameterized modules/theories/views, META-LEVEL metaprogramming and internal strategies. Use when writing, debugging, or explaining Maude (rewriting-logic) code, especially 2.x-era syntax and pedagogy."
+metadata:
+  author: "Theodore McCombs (SRI Computer Science Laboratory)"
+  source: "Maude 2.0 Primer (v1.0)"
+  publication-year: "2003"
 ---
 
 <!-- argument-hint: [topic, framework name, or chapter number] -->
