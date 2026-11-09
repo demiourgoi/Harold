@@ -71,6 +71,14 @@ release: install check test docs-test  ## run all CI tests
 	@echo
 	@echo "🚀 All CI tests are passing!"
 
+HASH ?= HEAD
+
+.PHONY: review-commit
+review-commit:  ## review a commit (default HEAD): e.g. `make review-commit HASH=abc123`
+	@if [ -z "$(HASH)" ]; then echo "HASH is empty; pass e.g. HASH=HEAD" >&2; exit 1; fi
+	@vibe --agent ponytail-reviewer --trust --add-dir "$(HOME)/git" "Review the commit $(HASH)"
+
+
 .PHONY: help
 help:
 	@uv run python -c "import re; \

@@ -115,7 +115,7 @@ Gotchas:
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
 - _Zed_ is useful for debugging, because it displays the _full JSON response_ from each tool call.
 - Setup agent skills and custom agents: clone `https://github.com/demiourgoi/epinoia` and `make -C ../../epinoia install`
-  - Review a commit: `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "Review the HEAD commit"`
+  - Review a commit: `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "Review the HEAD commit"` or use `make review-commit`
 
 ## Maintaining the prelude sort snapshot
 
