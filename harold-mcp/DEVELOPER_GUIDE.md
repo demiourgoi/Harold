@@ -115,7 +115,17 @@ Gotchas:
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
 - _Zed_ is useful for debugging, because it displays the _full JSON response_ from each tool call.
 - Setup agent skills and custom agents: clone `https://github.com/demiourgoi/epinoia` and `make -C ../../epinoia install`
-  - Review a commit: `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "Review the HEAD commit"` or use `make review-commit`
+  - Review with the `ponytail-reviewer` agent: `make review PROMPT="<prompt>"` (it runs
+    `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "<prompt>"`). The agent is read-only and writes its
+    report to `.review.md` in the repository root, so each run overwrites the previous report.
+  - The `ponytail-review-pdd` SOP (`.agents/skills/ponytail-review-pdd/`) orchestrates its reviews through opencode, so
+    it cannot run under `vibe`. Use `make review` with the matching prompt instead; replace `<project>` with the
+    directory of a PDD project under `.agents/planning/` and `<step>` with the implementation step number. Unlike the
+    SOP, these prompts do not produce numbered `*-review-rev{J}.md` files, diff snapshots or `.log` transcripts:
+    - **tech-design**: `make review PROMPT="Review the technical design at .agents/planning/<project>/design/detailed-design.md. Read rough-idea.md, idea-honing.md, research/ and implementation/plan.md in that directory as context, and check the design against the requirements."`
+    - **code-uncommitted** (step `<step>`): `make review PROMPT="Review the uncommitted changes in this repository as implementation step <step> of the PDD project .agents/planning/<project>. Read design/detailed-design.md and the 'Step <step>:' section of implementation/plan.md, then review the staged, unstaged and untracked changes against them."`
+    - **code-commits** (step `<step>`, range `<start>..<end>`): `make review PROMPT="Review the commits <start>..<end> in this repository as implementation step <step> of the PDD project .agents/planning/<project>. Use git diff <start>..<end> and judge it against design/detailed-design.md and the 'Step <step>:' section of implementation/plan.md."`
+    - **final-pdd-review**: `make review PROMPT="Review the whole codebase of this repository against the PDD project .agents/planning/<project>: rough-idea.md, the requirements in idea-honing.md, design/detailed-design.md and implementation/plan.md."`
 
 ## Maintaining the prelude sort snapshot
 
