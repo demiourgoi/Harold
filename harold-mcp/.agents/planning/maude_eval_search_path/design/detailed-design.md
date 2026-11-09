@@ -108,19 +108,19 @@ sequenceDiagram
     participant W as Worker
     participant M as Maude bindings
     S->>W: run_session(file, module, steps, caps)
-    W->>M: load(file); getModule(module)
+    W->>M: load file, select module
     W->>M: subject.search(type, pattern, depth)
     loop until max_solutions + 1
         M-->>W: (term, substitution, path_thunk, rewrites)
         alt solution inside the cap
-            W->>W: serialize term and bindings; cap check
+            W->>W: serialize term and bindings, check caps
             opt path mode != none
                 W->>M: path_thunk()  (iterator still on this solution)
                 M-->>W: [t0, r1, t1, …, rn, tn]
-                W->>W: build {initial, transitions}; cap checks
+                W->>W: build initial and transitions, check caps
             end
         else one extra solution
-            W->>W: mark truncated; no path work
+            W->>W: mark truncated, no path work
             Note over W: break
         end
     end
