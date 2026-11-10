@@ -1,5 +1,10 @@
 # Detailed design — search paths in `maude_run`
 
+> Revision 2 — incorporates the design review (design-review-v1): iterative path
+> reconstruction instead of the bindings' recursive `pathTo`, explicit `path=None`
+> semantics, named limits on `too-large`, package re-exports, and the expanded test
+> inventory.
+
 ## 1. Overview
 
 `maude_run` executes a bounded, hermetic Maude interpreter session: one file, one
@@ -18,12 +23,18 @@ number from a search that ran earlier in the same interpreter, and the interpret
 gone after every call. Attaching the path to the solution at search time avoids that
 entirely — no cross-call state, no new command, no exposed state numbers.
 
+The bindings' convenience accessor, `pathTo`, builds the path with Python recursion, so
+the worker reconstructs the path iteratively from the search graph's parent links (see
+§6.2). This keeps deep searches bounded and reportable instead of crashing the call.
+
 ### Goals
 
 - Every `search` solution can carry its path, by default in a compact labels form.
 - The wire contract is explicit, stable, and easy for an agent to consume.
 - Payload and work stay bounded by understandable caps.
 - The feature does not weaken hermeticity or the two-process architecture.
+- Path reconstruction is safe at any search depth: an over-cap path is a per-step
+  `too-large`, never a whole-call failure.
 
 ### Non-goals
 
@@ -71,9 +82,11 @@ Numbered for traceability; the implementation plan and tests refer to these.
 - **R8 — Hermetic materialization.** All Maude object access and all string
   materialization happen inside the worker before it returns; the server process never
   imports the bindings.
-- **R9 — Lifetime and crash safety.** The implementation uses an explicit, documented
-  strategy for the bindings' lazy path thunk (see §6.2) and never walks the search graph
-  with `getRule`, which crashes the process on the root state (see §6.3).
+- **R9 — Reconstruction safety.** The worker reads the solution's state number while the
+  search iterator is positioned on that solution (§6.1), reconstructs the path with a
+  non-recursive parent walk (the bindings' `pathTo` is recursive and overflows on deep
+  paths, §6.2), and calls `getRule` only for states that have a parent — never on the
+  root, which crashes the process (§6.3).
 
 ## 3. Architecture Overview
 
@@ -91,9 +104,9 @@ flowchart LR
     end
     subgraph worker["worker process (fresh per call)"]
         E["run_session<br/>load + select module"]
-        C["_collect_solutions<br/>iterate lazily, call thunk<br/>while positioned"]
-        P["Path assembly<br/>pathTo layout → initial + transitions"]
-        K["Cap checks<br/>max_path_steps, max_result_length"]
+        C["_collect_solutions<br/>iterate lazily<br/>read getStateNr"]
+        P["_reconstruct_path<br/>parent walk (ints)<br/>forward serialization"]
+        K["Cap checks<br/>max_path_steps<br/>max_result_length"]
         E --> C --> P --> K
     end
     R -->|"SessionRequest"| E
@@ -108,16 +121,19 @@ sequenceDiagram
     participant W as Worker
     participant M as Maude bindings
     S->>W: run_session(file, module, steps, caps)
-    W->>M: load file, select module
+    W->>M: load(file), then getModule(module)
     W->>M: subject.search(type, pattern, depth)
     loop until max_solutions + 1
         M-->>W: (term, substitution, path_thunk, rewrites)
+        Note over W: path_thunk is ignored (recursive, §6.2)
         alt solution inside the cap
-            W->>W: serialize term and bindings, check caps
+            W->>W: serialize term and bindings, then cap check
             opt path mode != none
-                W->>M: path_thunk()  (iterator still on this solution)
-                M-->>W: [t0, r1, t1, …, rn, tn]
-                W->>W: build initial and transitions, check caps
+                W->>W: state = it.getStateNr()  (positioned here)
+                W->>M: getStateParent chain (state numbers only)
+                W->>W: transitions = depth, over cap => too-large
+                W->>M: getStateTerm(root), then getRule(state) + getStateTerm(state)
+                W->>W: check each string, assemble path
             end
         else one extra solution
             W->>W: mark truncated, no path work
@@ -141,7 +157,8 @@ interpreter_max_path_steps: int = Field(default=100, gt=0)
 - Env var: `HAROLD_INTERPRETER_MAX_PATH_STEPS` (the `HAROLD_` prefix is global).
 - Documented in the `Settings` docstring next to the other interpreter caps.
 - Meaning: maximum transitions (rule applications) per solution path. `0` is invalid and
-  fails fast at startup like the other caps.
+  fails fast at startup like the other caps. Any positive value is safe: reconstruction
+  does not recurse (§6.2).
 
 ### 4.2 `maude/session.py` (worker side)
 
@@ -183,7 +200,7 @@ class SessionRequest(TypedDict):
 ```
 
 `_collect_solutions` gains `path_mode: str` and `max_path_steps: int`, and its result
-type carries the exceeded limit so the outcome is actionable:
+type carries the exceeded limit and a short reason so the outcome is actionable:
 
 ```python
 class _CollectionResult(NamedTuple):
@@ -191,27 +208,40 @@ class _CollectionResult(NamedTuple):
     items: list[Any]
     truncated: bool
     limit: int | None
+    message: str | None
 ```
 
-`_collect_matches` returns the same shape with `truncated` as before and `limit=None`
-on success, `max_result_length` on overflow. `_run_match_or_search` passes the step's
-`path` value and the request's `max_path_steps` for `search`, and reports
-`limit=result.limit` on a `too-large` outcome.
+- `_collect_matches` returns the same shape: `limit`/`message` set on overflow and
+  `None` on success.
+- `_run_match_or_search` passes the step's `path` value and the request's
+  `max_path_steps` for `search`, and reports `limit` and `message` on a `too-large`
+  outcome.
+- **A search step whose `path` is `None` is treated as `"none"`.** The worker does only
+  what the request asks; the tool owns the `"labels"` default. This also keeps the
+  direct session-engine callers (integration tests) explicit.
 
-Path assembly is a small helper, so the collection loop stays readable:
+Path reconstruction is a separate helper so the collection loop stays readable:
 
 ```python
-def _serialize_path(
-    path_elements: list[Any],
-    mode: str,                    # "labels" | "full"
+class _PathResult(NamedTuple):
+    status: Literal["ok", "too-large"]
+    path: PathDict | None
+    limit: int | None
+    message: str | None
+
+def _reconstruct_path(
+    iterator: Any,
+    state_number: int,          # read from iterator.getStateNr() while positioned
+    mode: str,                  # "labels" | "full"
     max_path_steps: int,
     max_result_length: int,
-) -> tuple[Literal["ok", "too-large"], PathDict | None, int | None]:
+) -> _PathResult:
     ...
 ```
 
-It returns `("too-large", None, cap)` where `cap` is the violated cap, or
-`("ok", path, None)`.
+It walks the parent chain (state numbers only), rejects an over-cap depth before
+formatting anything, then serializes forward, calling `getRule` only for states after
+the root (§5.2, §6).
 
 ### 4.3 `server/tools/interpreter.py`
 
@@ -252,6 +282,11 @@ Plumbing:
 - `_to_request`: add `"max_path_steps": settings.interpreter_max_path_steps`.
 - `_to_solutions`: adapt `solution["path"]` (dict or `None`) into
   `MaudeSearchPath | None`, including `label=None` and `text`/`state=None`.
+- `MaudeStepOutcome.message` docstring: the interpreter's message (`parse-error`) or
+  Harold's reason for exceeding a limit (`too-large`).
+- `maude/__init__.py`: re-export `PathDict`, `PathRuleDict` and `PathTransitionDict`
+  (the tool layer imports worker types from the package root, like the existing
+  TypedDicts), and add them to `__all__`.
 
 ### 4.4 Documentation surfaces
 
@@ -319,19 +354,37 @@ Zero transitions (reflexive `=>*` or `=>#`):
 Unlabeled rule in `"full"` mode:
 `{"rule": {"label": null, "text": "rl a => b ."}, "state": "b"}`.
 
-### 5.2 Serialization rules
+### 5.2 Reconstruction and serialization rules
 
-- `initial` = `str` of the first element returned by `pathTo` (the parsed subject in
-  Maude's mixfix print form).
+Reconstruction runs in the worker, while the search iterator is still alive:
+
+1. Read `state_number = iterator.getStateNr()` **while the iterator is positioned on this
+   solution** (§6.1).
+2. Walk the parent chain with `iterator.getStateParent(state)` until it returns a
+   negative value, collecting state numbers; reverse them into
+   `states = [root, …, solution]`. `getStateParent(0) == -1` and search graphs are
+   acyclic, so the walk terminates.
+3. `transitions = len(states) - 1`. If `transitions > max_path_steps`, return `too-large`
+   (`limit = interpreter_max_path_steps`) **before formatting any string** (§6.2).
+4. Serialize forward:
+   - `initial = str(iterator.getStateTerm(states[0]))` (the root; safe, §6.3).
+   - For each state after the root: `rule = iterator.getRule(state)` (**never** for the
+     root, §6.3), `label = rule.getLabel()`, and, in `"full"` mode only,
+     `text = str(rule)` and `state_text = str(iterator.getStateTerm(state))`.
+5. Check every produced string against `max_result_length`; an overflow is `too-large`
+   with `limit = interpreter_max_result_length`.
+
+Field semantics:
+
+- `initial` = `str` of the initial state term (the parsed subject in Maude's mixfix print
+  form).
 - `rule.label` = `rule.getLabel()`; the bindings return `None` for an unlabeled rule.
 - `rule.text` = `str(rule)`. It matches the Maude CLI's `show path` rule text, except
   that it is not line-wrapped and conditions are normalized with `= true`.
-- `state` = `str` of the transition's resulting term (the next path element).
-- Layout assumption: `pathTo` returns `[t0, r1, t1, …, rn, tn]` (odd length; `n`
-  transitions). The implementation walks it pairwise and rejects an even-length list as
-  an internal error rather than mis-slicing it.
-- Rule text and state strings are produced only in `"full"` mode; `"labels"` mode never
-  formats them (saves work and payload).
+- `state` = `str` of the transition's resulting term.
+- This call pattern (`getStateParent` for every state, `getRule`/`getStateTerm` for every
+  non-root state) mirrors the bindings' `pathTo` exactly, but as a loop instead of
+  recursion.
 
 ### 5.3 Caps and accounting
 
@@ -342,73 +395,102 @@ Unlabeled rule in `"full"` mode:
 | `interpreter_max_result_length` | 1,000,000 chars | Each serialized string: solution term, binding name/value, path `initial`, rule `label`, rule `text`, `state` |
 
 - Path work is done only for the `max_solutions` solutions that are returned. The extra
-  solution consumed to set `truncated` is not path-processed.
+  solution consumed to set `truncated` is neither path-processed nor state-recorded.
 - `too-large` is all-or-nothing per step (the step's `solutions` is omitted), matching
   today's behavior for oversized terms and bindings. No partial path is ever returned.
-- The outcome's `limit` names the violated cap: `interpreter_max_path_steps` for a
-  transition-count overflow, `interpreter_max_result_length` for an oversized element.
-  This makes the failure actionable (the client can raise the right setting or request
+- The outcome's `limit` is the violated numeric cap and `message` names the setting:
+  `path exceeds interpreter_max_path_steps` or, for an oversized string,
+  `path element exceeds interpreter_max_result_length`. `message` also names the setting
+  for the non-path `too-large` cases, so the two equal-valued caps can always be told
+  apart. This makes the failure actionable (raise the right setting, or request
   `"labels"` instead of `"full"`).
-- Memory: `pathTo` materializes the full element list before the transition count can be
-  checked. The list is O(depth) with the already-built search graph as the dominant
-  structure, so this is acceptable; the per-element string cap bounds each formatted
-  string.
+- Depth is counted from integers before any rule text or term is formatted, so an
+  over-cap path costs O(depth) `getStateParent` calls and nothing else. Serialization
+  memory is O(returned path size), bounded by the two caps. No recursive call is made.
 
-## 6. Correctness Constraints (reviewer-mandated)
+## 6. Correctness Constraints
 
-Two hazards in the bindings must be handled explicitly by the implementation. They are
-the main reason this design exists as a separate document.
+Three hazards in the bindings shape the implementation. They are the main reason this
+design exists as a separate document.
 
 ### 6.1 The path is attached to the iterator's current state
 
-`subject.search(...)` yields `(term, substitution, path_thunk, rewrite_count)`, where
-`path_thunk` is a Python function that resolves `getStateNr()` **at call time**:
+`subject.search(...)` yields `(term, substitution, path_thunk, rewrite_count)`. Both the
+thunk and `iterator.getStateNr()` resolve the **current** state at call time, not at
+yield time.
 
-```python
-lambda: self.pathTo(self.getStateNr())
-```
+**Chosen strategy: read `iterator.getStateNr()` inside the iteration loop, while the
+iterator is positioned on that solution, and reconstruct from that state number
+immediately.** This is the "capture the state number" half of the alternative strategy,
+with reconstruction done iteratively (the thunk is not used at all, §6.2).
 
-If the thunks are collected first (as the current implementation does with
-`list(islice(...))`) and called later, every thunk resolves to the *last consumed*
-state, so every solution gets the last solution's path. This is silent data corruption,
-not a crash.
-
-**Chosen strategy: strategy 1 — call the thunk inside the iteration loop, while the
-iterator is positioned on that solution.** The search iterator is consumed lazily; for
-each yielded solution the worker validates and serializes the solution, then (when paths
-are requested) calls the thunk immediately and assembles the path before advancing.
-
-**Rejected for v1: strategy 2 — record `getStateNr()` per solution and call
-`pathTo(state)` after the loop.** It is correct (the search graph outlives the iterator
-position) and would defer path work until after size validation, but it adds a second
-way to reach the same data and needs the iterator object to stay alive across the
-collection loop. If profiling ever shows path reconstruction dominating a step, strategy
-2 is the documented fallback: save the state number during iteration and call
-`pathTo(state)` afterwards; never call an old thunk.
+**Do not defer reading the state number** — for example, collect all solutions first and
+call `getStateNr()` afterwards. Every solution would then resolve to the last consumed
+state, silently attributing the last solution's path to all of them.
 
 **Regression test:** on a chain module (`n(N) => n(N+1)`, one labeled rule), run
-`n(0) =>+ n(N)` and assert the first solution's path has 1 transition and the second
-has 2. The buggy `islice`-then-call version produces 2 and 2, so the test fails loudly.
+`n(0) =>+ n(N)` with depth 2 and assert that the first solution's path has 1 transition
+and the second has 2. A deferred state read produces 2 and 2, so the test fails loudly.
 
-### 6.2 `getRule(0)` crashes the process
+### 6.2 `pathTo` is recursive and overflows the Python stack on deep paths
+
+With the pinned bindings, `pathTo` is Python recursion — one frame per transition:
+
+```python
+parent = self.getStateParent(stateNr)
+if parent < 0:
+    path = [self.getStateTerm(stateNr)]
+else:
+    path = self.pathTo(parent)
+    path.append(self.getRule(stateNr))
+    path.append(self.getStateTerm(stateNr))
+```
+
+Paths deeper than CPython's recursion limit (about 1000 frames) raise `RecursionError`.
+Inside the worker this is an ordinary Python exception, not a process crash, so the
+executor does not map it; `maude_run` reports a generic whole-call
+`MaudeRunError("Unexpected failure running the Maude interpreter session")` that names
+no cap. Reproduced against the pinned bindings: `n(0) =>* n(1500)` on the one-rule chain
+module finds the solution in milliseconds (3000 rewrites), and calling the path thunk
+raises `RecursionError` after ~1000 frames. A design that checks the transition cap only
+*after* calling `pathTo` therefore fails the whole call for deep searches instead of
+returning the promised `too-large`, and raising the cap makes it worse.
+
+**Fix: iterative reconstruction, not `pathTo`.** Walk `getStateParent` with a plain loop,
+count transitions, reject over-cap paths before formatting anything, and build the path
+forward with `getRule`/`getStateTerm` (§5.2). This is safe at any depth and any cap.
+
+**Rejected: pre-count with `getStateParent`, then call `pathTo` only when the depth
+fits.** It protects the default cap (100) but not a raised one: a user who sets
+`HAROLD_INTERPRETER_MAX_PATH_STEPS` above the recursion limit hits `RecursionError` on
+paths that are within the cap. The iterative builder is only slightly longer and removes
+the interaction entirely.
+
+**Tests:** `n(0) =>* n(1500)` with the default cap returns `too-large`, `limit=100`,
+`message` naming the path cap, and the run stops at that step (no whole-call error); the
+same search with `max_path_steps=2000` returns one solution with 1500 transitions.
+
+### 6.3 `getRule(0)` crashes the process
 
 `RewriteSequenceSearch.getRule(0)` on the root state — which has no incoming rule —
-hard-crashes the interpreter process (SIGSEGV, no Python traceback). `pathTo` never
-calls it: its recursion stops at `parent < 0` and returns `[stateTerm(n)]`.
+hard-crashes the interpreter process (SIGSEGV, no Python traceback). The crash is
+specific to a state **with no parent**: `getStateParent(0) == -1`, `getStateTerm(0)` is
+safe, and `getRule` on any non-root state is safe. `pathTo` itself calls `getRule` on
+every non-root state; it simply never reaches the root because its base case returns
+before the call.
 
-**Architectural rule: reconstruct paths only through the yielded thunk (or
-`pathTo(state)`), never by walking parents with `getStateParent` + `getRule`.** The v1
-implementation contains no `getRule` call at all. The code comment at the reconstruction
-site states this explicitly, and the module docstring for the path helper repeats the
-warning, so a future refactor cannot "simplify" the thunk away.
+**Architectural rule: call `getRule` only for states after the root in the reconstructed
+chain; never for the root, and never for an arbitrary state number without knowing its
+parent.** The iterative builder in §5.2 enforces this by iterating `states[1:]`; its
+comment states the invariant.
 
 **Regression test:** a zero-transition path (reflexive `n(0) =>* n(0)`) must return
-`{initial: "n(0)", transitions: []}`. A naive parent-walk implementation would request
-`getRule(0)` for the root and crash the worker; the test both pins the empty-path shape
-and exercises the root state safely.
+`{initial: "n(0)", transitions: []}`. A naive parent-walk implementation would call
+`getRule(0)` for the root and crash the worker; the test pins the empty-path shape and
+exercises the root state safely.
 
-Both tests run through the real interpreter in the integration suite; the worker being a
-fresh process per call means a crash surfaces as a worker failure rather than taking down
+The tests run through the real interpreter in the integration suite; because each call
+uses a fresh worker process, a crash surfaces as a worker failure rather than taking down
 the test runner.
 
 ## 7. Error Handling
@@ -416,18 +498,20 @@ the test runner.
 - **Invalid `path` value** — rejected by pydantic at the tool boundary
   (`ValidationError`); no worker call.
 - **Path cap exceeded** (transitions > `interpreter_max_path_steps`) — the step outcome
-  is `too-large`, `limit = interpreter_max_path_steps`, `solutions` omitted, the run
-  stops there (`completed=false`). The same all-or-nothing semantics as an oversized
-  term.
-- **Path element too long** — `too-large`, `limit = interpreter_max_result_length`.
-- **Oversized solution term or binding** — unchanged: `too-large`, `limit =
-  interpreter_max_result_length`; checked before path work.
-- **`path="none"`** — no path work; `path` is `null`; all other behavior is unchanged.
+  is `too-large`, `limit = interpreter_max_path_steps`,
+  `message` names the setting, `solutions` omitted, and the run stops
+  (`completed=false`). The same all-or-nothing semantics as an oversized term.
+- **Path element too long** — `too-large`, `limit = interpreter_max_result_length`,
+  `message` names the setting.
+- **Oversized solution term or binding** — unchanged status/limit, now also with a
+  `message` naming `interpreter_max_result_length`; checked before any path work.
+- **`path="none"` or a `None` path on a search step** — no path work; `path` is `null`;
+  all other behavior is unchanged.
 - **Parse errors, missing module, failed load, theory module, worker crash/timeout** —
-  unchanged whole-call vs per-step behavior.
-- **Internal layout violation** (even-length `pathTo` list) — treated as a programming
-  error (`ValueError` inside the worker), so it fails the call rather than emitting a
-  malformed path. This cannot happen with the pinned bindings; it is a defensive check.
+  unchanged whole-call vs per-step behavior. `message` remains the interpreter's text for
+  `parse-error`.
+- **Deep paths** — counted iteratively and reported as `too-large`; no `pathTo` call
+  exists, so `RecursionError` cannot occur on the path code path.
 - **Timeouts** — path reconstruction is O(depth) per solution and happens inside the
   existing whole-call timeout; no new timeout knob.
 
@@ -445,17 +529,26 @@ Tool layer (`tests/unit/test_interpreter_tool.py`):
 - The session request carries `max_path_steps` from settings (including an override).
 - `test_search_outcome_is_adapted`: updated exact dump includes `path` with labels-mode
   nulls; a second case covers a full path, a `null` label, and `path: None`.
-- A `too-large` outcome with `limit = interpreter_max_path_steps` is adapted unchanged.
+- A `too-large` outcome with `limit = interpreter_max_path_steps` and its `message` is
+  adapted unchanged.
 
 Worker layer (new `tests/unit/test_maude_session.py`, entirely fake objects):
 
-- `_serialize_path` on a hand-built interleaved list: labels mode, full mode, unlabeled
-  rule, zero transitions, even-length rejection.
-- `_collect_solutions` laziness: fake iterator whose thunk reads the current position;
-  assert each solution gets its own path (this pins strategy 1 without an interpreter).
+- `_reconstruct_path` on a fake iterator (`getStateNr`, `getStateParent`, `getRule`,
+  `getStateTerm`): labels mode, full mode, unlabeled rule, zero transitions, and the
+  exact chain order.
+- **Safety pin:** the fake iterator raises if `getRule` is called with the root state
+  number, and the test covers a zero-transition path (would crash a naive parent walk)
+  plus a multi-transition path.
+- **Depth pin:** the fake iterator raises if `getRule`/`getStateTerm` are called when the
+  chain is over the cap, proving the count happens before formatting.
+- `_collect_solutions` laziness: a fake iterator that advances a state counter per
+  solution and whose path depends on the current state; assert each solution gets its own
+  path (pins §6.1 without an interpreter).
 - `_collect_solutions` cap accounting: transition overflow reports the path cap,
-  element overflow reports the result cap, and paths are not built for the extra
-  solution consumed to set `truncated`.
+  element overflow reports the result cap, and paths are not built for the extra solution
+  consumed to set `truncated`.
+- A search step with `path=None` produces `path=None` in every solution.
 
 Settings (`tests/unit/test_settings.py`):
 
@@ -481,8 +574,10 @@ Session-level (`tests/integration/test_maude_session_integration.py`) and tool-l
 | `UNLABELED`, `a =>+ c` | `label` null, `text` present in full mode |
 | `CHAIN`, `n(0) =>+ n(N)`, depth 2 | Laziness regression: transition counts 1 and 2 in solution order |
 | `max_solutions=1` on a longer search | `truncated=true`, one solution, its path correct |
-| `max_path_steps=2` on the 7-step shepherd search | `too-large`, `limit=2`, `solutions` omitted |
-| `max_result_length` between label and rule-text lengths, full mode | `too-large`, `limit=max_result_length` |
+| `max_path_steps=2` on the 7-step shepherd search | `too-large`, `limit=2`, `message` names the path cap, `solutions` omitted |
+| `max_result_length` between label and rule-text lengths, full mode | `too-large`, `limit=max_result_length`, `message` names the result cap |
+| `CHAIN`, `n(0) =>* n(1500)`, default cap | `too-large`, `limit=100`, path-cap message, run stops; no whole-call error (the design-review regression) |
+| `CHAIN`, `n(0) =>* n(1500)`, `max_path_steps=2000` | `ok`; 1500 transitions; first state `n(0)`, last state `n(1500)` |
 | `path="none"` | `path` null; solutions otherwise unchanged |
 | `CHAIN`, `n(0) =>* n(100)`, depth 100, default cap | 100 transitions accepted; last state equals the solution term |
 | Non-search steps | No path data; existing outcome shapes unchanged |
@@ -491,12 +586,39 @@ The shepherd labels are taken from the reference session in the requirement:
 `crossWithSheep, crossAlone, crossWithCabbage, crossWithSheep, crossWithDog,
 crossAlone, crossWithSheep`.
 
-### 8.3 Validation and repo checks
+### 8.3 Existing tests and helpers to update
+
+Because the new keys are required in the worker TypedDicts and the solution shape gains
+a field, these break loudly and are updated in the same steps as the code:
+
+- `tests/unit/test_interpreter_tool.py`:
+  - the `_outcome`/`_session_result` helpers if a new outcome field is needed (only
+    `message` semantics change; the key already exists);
+  - the search solution literal in `test_search_outcome_is_adapted` (add `path`);
+  - any exact search-solution `model_dump()` assertion.
+- `tests/integration/test_maude_session_integration.py`:
+  - `_step` and `_request` build fully explicit `StepRequest`/`SessionRequest` literals:
+    add `path` and `max_path_steps` (mypy also fails otherwise). The helper default for
+    `path` is `None` (treated as `"none"` by the worker), so existing tests keep their
+    path-free shape; path tests pass `"labels"`/`"full"` explicitly;
+  - `test_search_types_and_ground_targets` and its ground/canonical variants compare
+    solution dicts exactly (add `path`);
+  - `test_match_and_search_caps_set_the_truncation_flag` and
+    `test_match_and_search_result_length_cap` still pass but gain `message` assertions
+    for the `too-large` cases;
+  - `test_too_large_result_is_an_outcome` gains `message` coverage.
+- `tests/integration/test_maude_run_integration.py`:
+  - `test_match_and_search_thread_without_changing_the_current_term` asserts solution
+    terms only (passes), and gets a path assertion in the new path tests.
+- `tests/unit/test_settings.py`: add the new env var to `_ENV_VARS`, `test_defaults`,
+  `test_env_overrides`, and the non-positive parametrization.
+
+### 8.4 Validation and repo checks
 
 - `make check` (ruff, format, mypy, basedpyright, deptry).
 - `make test` (authoritative full suite with coverage); `make test-unit` and
   `make test-integration` during development.
-- `make docs-test` if docstrings change the generated reference (they do, so run it).
+- `make docs-test` (docstrings change the generated reference).
 
 ## 9. Rollout and Compatibility Notes
 
@@ -505,9 +627,11 @@ crossAlone, crossWithSheep`.
   size; the change is recorded in the changelog.
 - `.agents/summary` data-model notes that literally list `SolutionDict` fields will be
   stale until the knowledge base is refreshed.
-- A pathological search can now fail where it previously succeeded (labels mode still
-  pays the transition cap). This is accepted: 100 transitions covers hand-written plans,
-  and the error names the cap to raise.
+- A pathological search can still fail where it previously succeeded (labels mode pays
+  the transition cap), but the failure is a per-step `too-large` naming the cap — not a
+  whole-call error — at any search depth, because reconstruction is iterative.
+- Any positive `interpreter_max_path_steps` is safe; there is no interaction with the
+  Python recursion limit.
 
 ## 10. Appendices
 
@@ -515,7 +639,8 @@ crossAlone, crossWithSheep`.
 
 | Choice | Why |
 | --- | --- |
-| Object-level path thunk / `pathTo` | Direct, already attached to each solution; matches `show path` content; no second search, no metarepresentation |
+| Iterative parent walk (`getStateParent` + `getRule`/`getStateTerm`) | Same data as `pathTo`, but safe at any depth and any cap; count before formatting |
+| Object-level path data | Direct, already attached to each solution; matches `show path` content; no second search, no metarepresentation |
 | CLI `show path N` | Rejected: needs a per-search state number and a live interpreter |
 | `metaSearchPath` | Rejected: requires metarepresenting module and terms and re-running search logic through `META-LEVEL` |
 | Labels by default | Tens of bytes per step; the main reason an agent runs `search` |
@@ -532,14 +657,18 @@ Confirmed behavior:
 
 - `EasyTerm.search` yields `(term, substitution, path_thunk, rewrite_count)` for every
   solution, for all five search types.
+- Both the thunk and `getStateNr()` resolve the state at call time, not at yield time
+  (§6.1).
 - `pathTo(n)` returns `[t0, r1, t1, …, rn, tn]` — `2n+1` elements for `n` transitions;
-  `pathTo(0)` is `[t0]`.
+  `pathTo(0)` is `[t0]`. It is implemented as Python recursion, one frame per
+  transition, so it raises `RecursionError` beyond about 1000 transitions (§6.2). The
+  original probes topped out at 100 transitions and did not exercise this.
 - `Rule.getLabel()` returns the label or `None`; `str(rule)` is the full statement the
   CLI prints (without line wrapping, conditions normalized with `= true`).
 - `getStateNr()` matches the CLI's `Solution N (state M)` numbering, but numbers are
   per-search and die with the interpreter, so they are not exposed.
-- The thunk resolves the state at call time (the trap in §6.1).
-- `getRule(0)` crashes the process; `pathTo` and `getStateTerm(0)` are safe (§6.2).
+- `getRule(0)` crashes the process; `getStateParent(0) == -1`, `getStateTerm(0)` and
+  `getRule`/`getStateTerm` on non-root states are safe (§6.3).
 - Long-path cost: a 100-transition path is 201 elements and about 3 KB of rule text;
   reconstruction is O(depth) string formatting per solution.
 - Zero-transition paths occur for reflexive `=>*` and for `=>#` branching states.
@@ -561,6 +690,7 @@ External references: the Maude 3.5.1 manual (`search` and `show path` in §5.4.3
 | Partial paths / `path_truncated` marker | A prefix that does not reach the solution is not a path to it, and a marker complicates `path: null` semantics |
 | Per-element cap only | Total path size stays unbounded for many small elements |
 | Total serialized-bytes cap | Exact but more bookkeeping; harder to explain than "transitions per path" |
+| Pre-count, then call the recursive `pathTo` | Safe only below the recursion limit; a raised cap reintroduces `RecursionError` |
 
 ### D. Known limitations
 
@@ -570,5 +700,6 @@ External references: the Maude 3.5.1 manual (`search` and `show path` in §5.4.3
   which intermediate state was reached; use `"full"` when that matters.
 - A path is only as deep as the bounded `search`; `depth` still controls the search
   itself, and the path cap can be hit before the search cap.
-- `pathTo` materializes the whole element list before the transition cap is checked;
-  the cap bounds the returned data, not the transient list.
+- The iterative builder duplicates `pathTo`'s accessor pattern; if the bindings change
+  how paths are exposed, the builder must be kept in sync. It assumes the parent chain is
+  acyclic (search graphs are), and does not add a cycle guard.
