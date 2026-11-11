@@ -5,7 +5,11 @@ root-state safety rule (`getRule` on the root crashes the real process), the
 over-cap early stop, and the element cap, without an interpreter.
 """
 
-from harold_mcp.maude.session import _reconstruct_path
+from typing import Any
+
+import pytest
+
+from harold_mcp.maude.session import _collect_solutions, _collect_step, _reconstruct_path
 
 
 class FakeRule:
@@ -201,3 +205,147 @@ def test_path_at_exactly_the_cap_is_accepted() -> None:
     assert result.status == "ok"
     assert result.path is not None
     assert len(result.path["transitions"]) == 3
+
+
+class FakeSearch(FakeIterator):
+    """A lazy search iterator fake: one solution per state number, in order.
+
+    Each yielded solution positions the iterator on that solution's state, so
+    `getStateNr()` resolves the current state at call time (like the bindings).
+    """
+
+    def __init__(self, solution_states: list[int], terms: dict[int, str]) -> None:
+        super().__init__({}, terms)
+        self._solution_states = iter(solution_states)
+        self.current: int | None = None
+        self.state_nr_calls = 0
+
+    def __iter__(self) -> FakeSearch:
+        return self
+
+    def __next__(self) -> tuple[str, list[tuple[str, str]], None, int]:
+        self.current = next(self._solution_states)
+        return (self._terms[self.current], [], None, 1)
+
+    def getStateNr(self) -> int:
+        self.state_nr_calls += 1
+        assert self.current is not None
+        return self.current
+
+
+class FakeSubject:
+    """`subject.search(...)` fake returning the given iterator."""
+
+    def __init__(self, iterator: FakeSearch) -> None:
+        self.iterator = iterator
+
+    def search(self, search_type: int, pattern: Any, depth: int) -> FakeSearch:
+        return self.iterator
+
+
+def _collect(
+    iterator: FakeSearch,
+    *,
+    path_mode: str | None,
+    max_solutions: int = 200,
+    max_path_steps: int = 100,
+    max_result_length: int = 1_000_000,
+):
+    return _collect_solutions(
+        FakeSubject(iterator), 2, None, -1, max_solutions, max_result_length, path_mode, max_path_steps
+    )
+
+
+def test_each_solution_gets_its_own_path() -> None:
+    """Laziness pin: the state is read while the iterator is positioned on each solution."""
+    iterator = FakeSearch([2, 3], terms={0: "n(0)", 1: "n(1)", 2: "n(2)", 3: "n(3)"})
+    iterator._rules = {
+        1: FakeRule("one", "rl one ."),
+        2: FakeRule("two", "rl two ."),
+        3: FakeRule("three", "rl three ."),
+    }
+
+    result = _collect(iterator, path_mode="labels")
+
+    assert result.status == "ok"
+    first, second = result.items
+    assert [t["rule"]["label"] for t in first["path"]["transitions"]] == ["one", "two"]
+    assert [t["rule"]["label"] for t in second["path"]["transitions"]] == ["one", "two", "three"]
+    assert iterator.state_nr_calls == 2
+
+
+def test_extra_solution_for_truncated_gets_no_path_work() -> None:
+    iterator = FakeSearch([1, 2], terms={0: "n(0)", 1: "n(1)", 2: "n(2)"})
+    iterator._rules = {1: FakeRule("one", "rl one ."), 2: FakeRule("two", "rl two .")}
+
+    result = _collect(iterator, path_mode="labels", max_solutions=1)
+
+    assert result.status == "ok"
+    assert result.truncated is True
+    assert len(result.items) == 1
+    assert iterator.state_nr_calls == 1
+
+
+def test_transition_overflow_reports_the_path_cap() -> None:
+    iterator = FakeSearch([5], terms={i: f"n({i})" for i in range(6)})
+
+    result = _collect(iterator, path_mode="labels", max_path_steps=2)
+
+    assert result.status == "too-large"
+    assert result.items == []
+    assert result.limit == 2
+    assert result.message == "path exceeds interpreter_max_path_steps"
+
+
+def test_element_overflow_reports_the_result_cap() -> None:
+    iterator = FakeSearch([1], terms={0: "n(0)", 1: "n(1)"})
+    iterator._rules = {1: FakeRule("a-very-long-label", "rl a => b .")}
+
+    result = _collect(iterator, path_mode="labels", max_result_length=5)
+
+    assert result.status == "too-large"
+    assert result.limit == 5
+    assert result.message == "path element exceeds interpreter_max_result_length"
+
+
+class _NoPathAccess(FakeSearch):
+    """Fails loudly if any path accessor is reached for an oversized solution term."""
+
+    def getStateNr(self) -> int:
+        raise AssertionError("getStateNr called although the solution term already exceeded the cap")  # noqa: TRY003
+
+
+def test_oversized_term_is_checked_before_any_path_work() -> None:
+    iterator = _NoPathAccess([5], terms={5: "n(5)"})
+
+    result = _collect(iterator, path_mode="full", max_path_steps=2, max_result_length=2)
+
+    assert result.status == "too-large"
+    assert result.limit == 2
+    assert result.message == "result exceeds interpreter_max_result_length"
+
+
+def test_path_mode_none_and_none_string_skip_path_work() -> None:
+    for mode in (None, "none"):
+        iterator = FakeSearch([1], terms={0: "n(0)", 1: "n(1)"})
+
+        result = _collect(iterator, path_mode=mode)
+
+        assert result.status == "ok"
+        assert result.items[0]["path"] is None
+        assert iterator.state_nr_calls == 0
+
+
+def test_invalid_path_mode_is_a_programming_error() -> None:
+    with pytest.raises(ValueError, match="path_mode"):
+        _ = _collect_step(
+            "search",
+            0,
+            {"command": "search", "search_type": "any-steps", "path_mode": "bogus"},
+            None,
+            None,
+            -1,
+            200,
+            1_000_000,
+            100,
+        )
