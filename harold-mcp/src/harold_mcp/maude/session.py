@@ -11,7 +11,7 @@ writing a wrapper module.
 """
 
 from itertools import islice
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict, capture_streams, parse_warnings, truncate_output
 
@@ -57,6 +57,7 @@ class StepRequest(TypedDict):
     gas: int | None
     depth: int | None
     search_type: str | None
+    path_mode: str | None
 
 
 class SessionRequest(TypedDict):
@@ -67,6 +68,7 @@ class SessionRequest(TypedDict):
     steps: list[StepRequest]
     max_solutions: int
     max_result_length: int
+    max_path_steps: int
     max_output_length: int
 
 
@@ -77,12 +79,46 @@ class BindingDict(TypedDict):
     value: str
 
 
+class PathRuleDict(TypedDict):
+    """The rule of one path transition; `text` is set only in `"full"` mode."""
+
+    label: str | None
+    text: str | None
+
+
+class PathTransitionDict(TypedDict):
+    """One path transition: the rule applied and the state it produced.
+
+    `state` is set only in `"full"` mode.
+    """
+
+    rule: PathRuleDict
+    state: str | None
+
+
+class PathDict(TypedDict):
+    """The rewrite path from the search subject to a solution.
+
+    `initial` is the parsed subject; `transitions` is the ordered rule
+    applications (empty for a reflexive or branching zero-transition path).
+    """
+
+    initial: str
+    transitions: list[PathTransitionDict]
+
+
 class SolutionDict(TypedDict):
-    """One `search` solution."""
+    """One `search` solution.
+
+    `path` is the reconstructed rewrite path when the step requested one, `None`
+    otherwise (the tool owns the `"labels"` default; the worker only does what the
+    request asks).
+    """
 
     term: str
     rewrites: int
     bindings: list[BindingDict]
+    path: PathDict | None
 
 
 class StepOutcomeDict(TypedDict):
@@ -266,8 +302,87 @@ def _collect_solutions(
         bindings = _bindings(substitution)
         if len(term_text) > max_result_length or _bindings_too_large(bindings, max_result_length):
             return "too-large", [], False
-        solutions.append({"term": term_text, "rewrites": int(rewrites), "bindings": bindings})
+        solutions.append({"term": term_text, "rewrites": int(rewrites), "bindings": bindings, "path": None})
     return "ok", solutions, len(found) > max_solutions
+
+
+class _PathResult(NamedTuple):
+    """Result of reconstructing one solution's path: the path, or the exceeded limit."""
+
+    status: Literal["ok", "too-large"]
+    path: PathDict | None
+    limit: int | None
+    message: str | None
+
+
+def _reconstruct_path(
+    iterator: Any,
+    state_number: int,
+    mode: str,
+    max_path_steps: int,
+    max_result_length: int,
+) -> _PathResult:
+    """Reconstruct the rewrite path from the search root to the state `state_number`.
+
+    `state_number` must be read from `iterator.getStateNr()` while the iterator is
+    positioned on the solution; both resolve the state at call time, not at yield
+    time. The path is built iteratively from the search graph's parent links (the
+    bindings' `pathTo` is recursive and overflows the Python stack on deep paths):
+    the parent walk collects state numbers only, stops as soon as the chain exceeds
+    `max_path_steps` transitions (at most `max_path_steps + 2` `getStateParent`
+    calls, and no string is formatted for an over-cap path), and only then are the
+    states serialized forward.
+
+    `getRule` is called only for states after the root: the root has no incoming
+    rule and `getRule` on it crashes the interpreter process. In `"labels"` mode only
+    the rule labels are returned; in `"full"` mode also the rule text and the
+    intermediate states. Every produced string is checked against
+    `max_result_length`; an overflow is a `too-large` result naming that cap.
+    """
+    chain = [state_number]
+    parent = iterator.getStateParent(state_number)
+    while parent >= 0:
+        chain.append(parent)
+        parent = iterator.getStateParent(parent)
+        if len(chain) > max_path_steps + 1:
+            return _PathResult(
+                status="too-large",
+                path=None,
+                limit=max_path_steps,
+                message="path exceeds interpreter_max_path_steps",
+            )
+    chain.reverse()
+
+    initial = str(iterator.getStateTerm(chain[0]))
+    if len(initial) > max_result_length:
+        return _PathResult(
+            status="too-large",
+            path=None,
+            limit=max_result_length,
+            message="path element exceeds interpreter_max_result_length",
+        )
+
+    transitions: list[PathTransitionDict] = []
+    for state in chain[1:]:
+        rule = iterator.getRule(state)
+        label = rule.getLabel()
+        text = str(rule) if mode == "full" else None
+        state_text = str(iterator.getStateTerm(state)) if mode == "full" else None
+        for element in (label, text, state_text):
+            if element is not None and len(element) > max_result_length:
+                return _PathResult(
+                    status="too-large",
+                    path=None,
+                    limit=max_result_length,
+                    message="path element exceeds interpreter_max_result_length",
+                )
+        transitions.append({"rule": {"label": label, "text": text}, "state": state_text})
+    return _PathResult(
+        status="ok",
+        path={"initial": initial, "transitions": transitions},
+        limit=None,
+        message=None,
+    )
 
 
 def _run_match_or_search(

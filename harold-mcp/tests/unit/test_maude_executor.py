@@ -28,6 +28,7 @@ SESSION_REQUEST: SessionRequest = {
     "steps": [],
     "max_solutions": 200,
     "max_result_length": 1_000_000,
+    "max_path_steps": 100,
     "max_output_length": 1_000_000,
 }
 

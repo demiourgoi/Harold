@@ -45,6 +45,7 @@ def _step(
     gas: int | None = None,
     depth: int | None = None,
     search_type: str | None = None,
+    path_mode: str | None = None,
 ) -> StepRequest:
     return {
         "command": command,
@@ -55,6 +56,7 @@ def _step(
         "gas": gas,
         "depth": depth,
         "search_type": search_type,
+        "path_mode": path_mode,
     }
 
 
@@ -69,6 +71,7 @@ def _request(
     *,
     max_solutions: int = 200,
     max_result_length: int = 1_000_000,
+    max_path_steps: int = 100,
     max_output_length: int = 1_000_000,
 ) -> SessionRequest:
     return {
@@ -77,6 +80,7 @@ def _request(
         "steps": steps,
         "max_solutions": max_solutions,
         "max_result_length": max_result_length,
+        "max_path_steps": max_path_steps,
         "max_output_length": max_output_length,
     }
 
@@ -330,7 +334,9 @@ def test_search_types_and_ground_targets(executor: MaudeExecutor) -> None:
     )
 
     one_step, at_least_one, any_steps, normal_form, branch = result["outcomes"]
-    assert one_step["solutions"] == [{"term": "c(1)", "rewrites": 2, "bindings": [{"variable": "N", "value": "1"}]}]
+    assert one_step["solutions"] == [
+        {"term": "c(1)", "rewrites": 2, "bindings": [{"variable": "N", "value": "1"}], "path": None}
+    ]
     assert [solution["term"] for solution in at_least_one["solutions"]] == ["c(1)", "c(2)"]
     # =>* includes the initial state, with a zero rewrite count.
     assert [solution["term"] for solution in any_steps["solutions"]] == ["c(0)", "c(1)", "c(2)"]
@@ -351,7 +357,7 @@ def test_search_types_and_ground_targets(executor: MaudeExecutor) -> None:
             ],
         ),
     )
-    assert ground["outcomes"][0]["solutions"] == [{"term": "c(3)", "rewrites": 2, "bindings": []}]
+    assert ground["outcomes"][0]["solutions"] == [{"term": "c(3)", "rewrites": 2, "bindings": [], "path": None}]
     assert ground["outcomes"][1]["solutions"] == []
 
     canonical = _run(

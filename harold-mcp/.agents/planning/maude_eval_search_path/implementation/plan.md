@@ -3,7 +3,7 @@
 ## Checklist
 
 - [x] Step 1: Add the `interpreter_max_path_steps` setting
-- [ ] Step 2: Define the path contract and the reconstruction helper
+- [x] Step 2: Define the path contract and the reconstruction helper
 - [ ] Step 3: Reconstruct paths in the session engine
 - [ ] Step 4: Expose paths through `maude_run`
 - [ ] Step 5: Documentation and release metadata
@@ -118,6 +118,18 @@ everywhere).
 **Demo.** The unit suite shows a fake 7-transition path assembled in both modes, a
 zero-transition path, an over-cap path rejected after exactly `cap + 2` parent lookups,
 and a request carrying `path_mode`/`max_path_steps`.
+
+### Implementation notes
+
+Implemented as planned, with one structural note: the over-cap check runs after the
+extra `getStateParent` call, so an over-cap chain is rejected after exactly
+`max_path_steps + 2` parent lookups (the count the plan's demo pins); a chain that
+fits the cap costs `cap + 1`. The fake-based unit file also covers the
+at-exactly-the-cap boundary and the `initial`-string element cap, beyond the plan's
+minimum list. `_collect_solutions` sets `"path": None` for now, so tool behavior is
+unchanged (all 66 integration tests pass unmodified except for the updated exact
+literals). The invalid-mode `ValueError` is deferred to Step 3 with the collection
+path, as planned. Reviewed with the ponytail-review skill (1 round, no findings).
 
 ---
 
