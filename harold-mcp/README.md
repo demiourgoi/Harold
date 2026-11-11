@@ -50,8 +50,11 @@ Harold MCP tools:
   state by re-submitting a saved result term or writing a wrapper module. Load warnings
   are reported but evaluation proceeds; per-step failures (`parse-error`, `too-large`)
   stop the run and are returned as outcomes, and `match`/`search` cap their results with a
-  `truncated` flag. Every phase reports the interpreter's captured stdout/stderr, and the
-  path must be **absolute** (the server's working directory is not the client's).
+  `truncated` flag. Each `search` solution carries its rewrite path: `path: "labels"`
+  (the default) returns the ordered rule labels, `path: "full"` also the rule text and
+  intermediate states, and `path: "none"` omits it. Every phase reports the interpreter's
+  captured stdout/stderr, and the path must be **absolute** (the server's working
+  directory is not the client's).
 
 Planned tools: a vector index of the Maude documentation for retrieval-augmented
 generation (RAG).
@@ -125,7 +128,8 @@ The server is configured through environment variables set in the MCP server con
 | `HAROLD_INTERPRETER_MAX_REWRITE_BOUND` | Maximum accepted `bound` per rewrite step. | `1000` |
 | `HAROLD_INTERPRETER_MAX_SOLUTIONS` | Maximum `match` substitutions or `search` solutions returned per step. | `200` |
 | `HAROLD_INTERPRETER_MAX_TERM_LENGTH` | Maximum characters of a term, pattern or subject input. | `100000` |
-| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | Maximum characters of a returned term; a longer result becomes a `too-large` step outcome. | `1000000` |
+| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | Maximum characters of a returned term (or path string); a longer result becomes a `too-large` step outcome. | `1000000` |
+| `HAROLD_INTERPRETER_MAX_PATH_STEPS` | Maximum transitions per `search` solution path; a longer path becomes a `too-large` step outcome. | `100` |
 | `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | Maximum characters of each captured stream (stdout and stderr separately) returned per phase; longer captures are truncated and marked. | `1000000` |
 | `MAUDE_LIB` | Inherited by the Maude bindings, not read by Harold itself: colon-separated directories where Maude searches for `prelude.maude` (and for library files loaded with `in`/`load`). Only needed to override the prelude bundled with the `maude` wheel. | unset (the bundled prelude is used) |
 
