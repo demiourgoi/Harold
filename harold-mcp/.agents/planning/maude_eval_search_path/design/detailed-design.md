@@ -1,9 +1,11 @@
 # Detailed design — search paths in `maude_run`
 
-> Revision 2 — incorporates the design review (design-review-v1): iterative path
-> reconstruction instead of the bindings' recursive `pathTo`, explicit `path=None`
-> semantics, named limits on `too-large`, package re-exports, and the expanded test
-> inventory.
+> Revision 3 — incorporates design review v2: explicit `depth` on the
+> unbounded-search tests, an early-stop parent walk (O(cap) work), the rewriting
+> `too-large` message, the remaining plumbing/test updates, and the `=>!` path test.
+> Revision 2 incorporated design review v1: iterative path reconstruction instead of the
+> bindings' recursive `pathTo`, explicit `path=None` semantics, named limits on
+> `too-large`, package re-exports, and the expanded test inventory.
 
 ## 1. Overview
 
@@ -213,6 +215,8 @@ class _CollectionResult(NamedTuple):
 
 - `_collect_matches` returns the same shape: `limit`/`message` set on overflow and
   `None` on success.
+- `_run_rewriting` keeps its `too-large` status and `limit`, and sets `message` naming
+  `interpreter_max_result_length` (this is the fourth `too-large` site; see §7).
 - `_run_match_or_search` passes the step's `path` value and the request's
   `max_path_steps` for `search`, and reports `limit` and `message` on a `too-large`
   outcome.
@@ -287,6 +291,9 @@ Plumbing:
 - `maude/__init__.py`: re-export `PathDict`, `PathRuleDict` and `PathTransitionDict`
   (the tool layer imports worker types from the package root, like the existing
   TypedDicts), and add them to `__all__`.
+- The tool module's `__all__`: add `MaudeRuleRef`, `MaudePathTransition` and
+  `MaudeSearchPath` (it conventionally lists every public model; nothing enforces it
+  mechanically).
 
 ### 4.4 Documentation surfaces
 
@@ -360,18 +367,22 @@ Reconstruction runs in the worker, while the search iterator is still alive:
 
 1. Read `state_number = iterator.getStateNr()` **while the iterator is positioned on this
    solution** (§6.1).
-2. Walk the parent chain with `iterator.getStateParent(state)` until it returns a
-   negative value, collecting state numbers; reverse them into
-   `states = [root, …, solution]`. `getStateParent(0) == -1` and search graphs are
-   acyclic, so the walk terminates.
-3. `transitions = len(states) - 1`. If `transitions > max_path_steps`, return `too-large`
-   (`limit = interpreter_max_path_steps`) **before formatting any string** (§6.2).
-4. Serialize forward:
+2. Walk the parent chain with `iterator.getStateParent(state)`, collecting state
+   numbers, and stop in one of two cases:
+   - the parent is negative (the root was reached): reverse the collected states into
+     `states = [root, …, solution]` and continue;
+   - more than `max_path_steps + 1` states have been collected: the path is over cap
+     whatever the remaining distance to the root, so return `too-large`
+     (`limit = interpreter_max_path_steps`) immediately. Do not walk to the root just to
+     count, and do not format any string (§6.2).
+
+   `getStateParent(0) == -1` and search graphs are acyclic.
+3. Serialize forward (`transitions = len(states) - 1 <= max_path_steps`):
    - `initial = str(iterator.getStateTerm(states[0]))` (the root; safe, §6.3).
    - For each state after the root: `rule = iterator.getRule(state)` (**never** for the
      root, §6.3), `label = rule.getLabel()`, and, in `"full"` mode only,
      `text = str(rule)` and `state_text = str(iterator.getStateTerm(state))`.
-5. Check every produced string against `max_result_length`; an overflow is `too-large`
+4. Check every produced string against `max_result_length`; an overflow is `too-large`
    with `limit = interpreter_max_result_length`.
 
 Field semantics:
@@ -404,9 +415,11 @@ Field semantics:
   for the non-path `too-large` cases, so the two equal-valued caps can always be told
   apart. This makes the failure actionable (raise the right setting, or request
   `"labels"` instead of `"full"`).
-- Depth is counted from integers before any rule text or term is formatted, so an
-  over-cap path costs O(depth) `getStateParent` calls and nothing else. Serialization
-  memory is O(returned path size), bounded by the two caps. No recursive call is made.
+- The depth check reads integers only and stops as soon as the chain is over cap, so
+  path reconstruction costs at most `max_path_steps + 2` `getStateParent` calls and
+  O(`max_path_steps`) transient memory per solution, regardless of the search depth. No
+  rule text or term is formatted for an over-cap path, and no recursive call is made.
+  Serialization memory is O(returned path size), bounded by the two caps.
 
 ## 6. Correctness Constraints
 
@@ -466,9 +479,12 @@ fits.** It protects the default cap (100) but not a raised one: a user who sets
 paths that are within the cap. The iterative builder is only slightly longer and removes
 the interaction entirely.
 
-**Tests:** `n(0) =>* n(1500)` with the default cap returns `too-large`, `limit=100`,
-`message` naming the path cap, and the run stops at that step (no whole-call error); the
-same search with `max_path_steps=2000` returns one solution with 1500 transitions.
+**Tests:** `n(0) =>* n(1500)` with `depth=1500` and the default cap returns `too-large`,
+`limit=100`, `message` naming the path cap, and the run stops at that step (no whole-call
+error); the same search with `max_path_steps=2000` and `depth=1500` returns one solution
+with 1500 transitions. The explicit depth matters: `CHAIN` is infinite and the engine
+consumes one solution beyond the cap to set `truncated`; without a depth the test hangs
+instead of reaching the path logic (§8.2).
 
 ### 6.3 `getRule(0)` crashes the process
 
@@ -484,7 +500,8 @@ chain; never for the root, and never for an arbitrary state number without knowi
 parent.** The iterative builder in §5.2 enforces this by iterating `states[1:]`; its
 comment states the invariant.
 
-**Regression test:** a zero-transition path (reflexive `n(0) =>* n(0)`) must return
+**Regression test:** a zero-transition path (reflexive `n(0) =>* n(0)` with `depth=3`,
+because `CHAIN` is infinite) must return
 `{initial: "n(0)", transitions: []}`. A naive parent-walk implementation would call
 `getRule(0)` for the root and crash the worker; the test pins the empty-path shape and
 exercises the root state safely.
@@ -505,15 +522,20 @@ the test runner.
   `message` names the setting.
 - **Oversized solution term or binding** — unchanged status/limit, now also with a
   `message` naming `interpreter_max_result_length`; checked before any path work.
+- **Oversized rewriting result term** — unchanged status and `limit`; gains the same
+  `message` naming `interpreter_max_result_length`, so `reduce`/`rewrite`/`frewrite`/
+  `erewrite` outcomes match the documented `message` semantics.
 - **`path="none"` or a `None` path on a search step** — no path work; `path` is `null`;
   all other behavior is unchanged.
 - **Parse errors, missing module, failed load, theory module, worker crash/timeout** —
   unchanged whole-call vs per-step behavior. `message` remains the interpreter's text for
   `parse-error`.
-- **Deep paths** — counted iteratively and reported as `too-large`; no `pathTo` call
+- **Deep paths** — counted iteratively, and the walk stops as soon as the chain is over
+  cap, so the cost is bounded by `max_path_steps` regardless of depth; no `pathTo` call
   exists, so `RecursionError` cannot occur on the path code path.
-- **Timeouts** — path reconstruction is O(depth) per solution and happens inside the
-  existing whole-call timeout; no new timeout knob.
+- **Timeouts** — path reconstruction costs at most `max_path_steps + 2` integer parent
+  lookups plus formatting bounded by the two caps, inside the existing whole-call
+  timeout; no new timeout knob.
 
 ## 8. Testing Strategy
 
@@ -541,7 +563,9 @@ Worker layer (new `tests/unit/test_maude_session.py`, entirely fake objects):
   number, and the test covers a zero-transition path (would crash a naive parent walk)
   plus a multi-transition path.
 - **Depth pin:** the fake iterator raises if `getRule`/`getStateTerm` are called when the
-  chain is over the cap, proving the count happens before formatting.
+  chain is over the cap, proving the count happens before formatting; it also counts
+  `getStateParent` calls and proves the walk stops after at most `max_path_steps + 2`
+  states instead of reaching a root that is many more states away.
 - `_collect_solutions` laziness: a fake iterator that advances a state counter per
   solution and whose path depends on the current state; assert each solution gets its own
   path (pins §6.1 without an interpreter).
@@ -569,15 +593,16 @@ Session-level (`tests/integration/test_maude_session_integration.py`) and tool-l
 | Shepherd `st(l,l,l,l) =>* st(r,r,r,r)`, default mode | 7 transitions, labels in the documented order, `text`/`state` null, `initial` present |
 | Same search, `full` mode | Rule text present; every transition state present; final state equals the solution term; `initial` equals the subject |
 | `=>1` search | Exactly one transition |
-| Reflexive `=>*` (`n(0) =>* n(0)`) | Zero transitions, not `null` — also the root-state safety test |
+| Reflexive `=>*` (`n(0) =>* n(0)`, depth 3) | Zero transitions, not `null` — also the root-state safety test |
+| `=>!` on `BRANCH` (`a =>! c`) | One transition, label `ac`, final state `c` (pins normal-form paths) |
 | `=>#` on `BRANCH` (`a =># X:S`) | Zero transitions |
 | `UNLABELED`, `a =>+ c` | `label` null, `text` present in full mode |
 | `CHAIN`, `n(0) =>+ n(N)`, depth 2 | Laziness regression: transition counts 1 and 2 in solution order |
 | `max_solutions=1` on a longer search | `truncated=true`, one solution, its path correct |
 | `max_path_steps=2` on the 7-step shepherd search | `too-large`, `limit=2`, `message` names the path cap, `solutions` omitted |
 | `max_result_length` between label and rule-text lengths, full mode | `too-large`, `limit=max_result_length`, `message` names the result cap |
-| `CHAIN`, `n(0) =>* n(1500)`, default cap | `too-large`, `limit=100`, path-cap message, run stops; no whole-call error (the design-review regression) |
-| `CHAIN`, `n(0) =>* n(1500)`, `max_path_steps=2000` | `ok`; 1500 transitions; first state `n(0)`, last state `n(1500)` |
+| `CHAIN`, `n(0) =>* n(1500)`, depth 1500, default cap | `too-large`, `limit=100`, path-cap message, run stops; no whole-call error (the design-review regression) |
+| `CHAIN`, `n(0) =>* n(1500)`, depth 1500, `max_path_steps=2000` | `ok`; 1500 transitions; first state `n(0)`, last state `n(1500)` |
 | `path="none"` | `path` null; solutions otherwise unchanged |
 | `CHAIN`, `n(0) =>* n(100)`, depth 100, default cap | 100 transitions accepted; last state equals the solution term |
 | Non-search steps | No path data; existing outcome shapes unchanged |
@@ -585,6 +610,12 @@ Session-level (`tests/integration/test_maude_session_integration.py`) and tool-l
 The shepherd labels are taken from the reference session in the requirement:
 `crossWithSheep, crossAlone, crossWithCabbage, crossWithSheep, crossWithDog,
 crossAlone, crossWithSheep`.
+
+A search over an unbounded state space **must** set `depth`: the engine always consumes
+one solution beyond `max_solutions` to compute `truncated`, so a search that yields fewer
+solutions than the cap but never exhausts its state space runs until the call timeout.
+That is existing `maude_run` behavior, not specific to paths, but it decides whether
+these tests terminate.
 
 ### 8.3 Existing tests and helpers to update
 
@@ -595,7 +626,13 @@ a field, these break loudly and are updated in the same steps as the code:
   - the `_outcome`/`_session_result` helpers if a new outcome field is needed (only
     `message` semantics change; the key already exists);
   - the search solution literal in `test_search_outcome_is_adapted` (add `path`);
-  - any exact search-solution `model_dump()` assertion.
+  - any exact search-solution `model_dump()` assertion;
+  - `test_search_step_forwards_pattern_subject_depth_and_type`: the expected
+    `StepRequest` gains `"path": "labels"`;
+  - `test_request_carries_the_steps_and_configured_caps`: the two expected step dicts
+    gain `"path": None`, and the request gains `max_path_steps`.
+- `tests/unit/test_maude_executor.py`: the module-level `SESSION_REQUEST` literal gains
+  the required `max_path_steps` key (mypy also fails otherwise).
 - `tests/integration/test_maude_session_integration.py`:
   - `_step` and `_request` build fully explicit `StepRequest`/`SessionRequest` literals:
     add `path` and `max_path_steps` (mypy also fails otherwise). The helper default for
@@ -629,9 +666,10 @@ a field, these break loudly and are updated in the same steps as the code:
   stale until the knowledge base is refreshed.
 - A pathological search can still fail where it previously succeeded (labels mode pays
   the transition cap), but the failure is a per-step `too-large` naming the cap — not a
-  whole-call error — at any search depth, because reconstruction is iterative.
-- Any positive `interpreter_max_path_steps` is safe; there is no interaction with the
-  Python recursion limit.
+  whole-call error — at any search depth, because reconstruction is iterative and stops
+  at the cap.
+- Any positive `interpreter_max_path_steps` is safe: reconstruction is iterative, stops
+  at the cap, and has no interaction with the Python recursion limit or the search depth.
 
 ## 10. Appendices
 
@@ -670,7 +708,8 @@ Confirmed behavior:
 - `getRule(0)` crashes the process; `getStateParent(0) == -1`, `getStateTerm(0)` and
   `getRule`/`getStateTerm` on non-root states are safe (§6.3).
 - Long-path cost: a 100-transition path is 201 elements and about 3 KB of rule text;
-  reconstruction is O(depth) string formatting per solution.
+  reconstruction is O(path length) string formatting per solution, bounded by the path
+  cap (and the parent walk stops at the cap, §5.2).
 - Zero-transition paths occur for reflexive `=>*` and for `=>#` branching states.
 
 External references: the Maude 3.5.1 manual (`search` and `show path` in §5.4.3,
@@ -703,3 +742,7 @@ External references: the Maude 3.5.1 manual (`search` and `show path` in §5.4.3
 - The iterative builder duplicates `pathTo`'s accessor pattern; if the bindings change
   how paths are exposed, the builder must be kept in sync. It assumes the parent chain is
   acyclic (search graphs are), and does not add a cycle guard.
+- A search over an unbounded state space must set `depth`: the session engine consumes
+  one solution beyond `max_solutions` to compute `truncated`, so a search that yields
+  fewer solutions than the cap but never exhausts its space runs until the call timeout.
+  This is existing `maude_run` behavior, not introduced by paths.
