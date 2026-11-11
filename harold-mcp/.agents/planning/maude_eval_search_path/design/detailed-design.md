@@ -1,6 +1,10 @@
 # Detailed design — search paths in `maude_run`
 
-> Revision 3 — incorporates design review v2: explicit `depth` on the
+> Revision 4 — incorporates design review v3: the worker key is renamed `path_mode`
+> (avoiding the `SessionRequest.path` collision), the invalid-value contract is pinned to
+> the `search_type` precedent, the term-cap-before-path work ordering gets a test, and
+> the session-engine docstrings join the documentation surfaces.
+> Revision 3 incorporated design review v2: explicit `depth` on the
 > unbounded-search tests, an early-stop parent walk (O(cap) work), the rewriting
 > `too-large` message, the remaining plumbing/test updates, and the `=>!` path test.
 > Revision 2 incorporated design review v1: iterative path reconstruction instead of the
@@ -192,7 +196,7 @@ class SolutionDict(TypedDict):
 class StepRequest(TypedDict):
     ...
     search_type: str | None
-    path: str | None          # "none" | "labels" | "full" | None (non-search)
+    path_mode: str | None     # "none" | "labels" | "full" | None (non-search)
 
 class SessionRequest(TypedDict):
     ...
@@ -201,8 +205,13 @@ class SessionRequest(TypedDict):
     max_output_length: int
 ```
 
-`_collect_solutions` gains `path_mode: str` and `max_path_steps: int`, and its result
-type carries the exceeded limit and a short reason so the outcome is actionable:
+The worker key is `path_mode`, not `path`: `SessionRequest.path` is the Maude file and the
+step key is the path mode, and both request objects are in scope together in the
+`_run_step` family. The user-facing wire name stays `SearchStep.path` (settled in the
+requirements).
+
+`_collect_solutions` gains `path_mode: str | None` and `max_path_steps: int`, and its
+result type carries the exceeded limit and a short reason so the outcome is actionable:
 
 ```python
 class _CollectionResult(NamedTuple):
@@ -217,12 +226,15 @@ class _CollectionResult(NamedTuple):
   `None` on success.
 - `_run_rewriting` keeps its `too-large` status and `limit`, and sets `message` naming
   `interpreter_max_result_length` (this is the fourth `too-large` site; see §7).
-- `_run_match_or_search` passes the step's `path` value and the request's
+- `_run_match_or_search` passes the step's `path_mode` value and the request's
   `max_path_steps` for `search`, and reports `limit` and `message` on a `too-large`
   outcome.
-- **A search step whose `path` is `None` is treated as `"none"`.** The worker does only
-  what the request asks; the tool owns the `"labels"` default. This also keeps the
+- **A search step whose `path_mode` is `None` is treated as `"none"`.** The worker does
+  only what the request asks; the tool owns the `"labels"` default. This also keeps the
   direct session-engine callers (integration tests) explicit.
+- Any other `path_mode` string is a programming error and raises the same defensive
+  `ValueError` as an invalid `search_type` (the tool's pydantic boundary only produces
+  `"none"`, `"labels"` or `"full"`), so the worker contract has no silent fallback.
 
 Path reconstruction is a separate helper so the collection loop stays readable:
 
@@ -282,7 +294,8 @@ class MaudeSearchSolution(_ResultModel):
 
 Plumbing:
 
-- `_to_step_request`: add `"path": step.path if isinstance(step, SearchStep) else None`.
+- `_to_step_request`: add
+  `"path_mode": step.path if isinstance(step, SearchStep) else None`.
 - `_to_request`: add `"max_path_steps": settings.interpreter_max_path_steps`.
 - `_to_solutions`: adapt `solution["path"]` (dict or `None`) into
   `MaudeSearchPath | None`, including `label=None` and `text`/`state=None`.
@@ -300,6 +313,10 @@ Plumbing:
 - `maude_run` docstring (free-form text above `Args:` is the MCP description): extend the
   `search` bullet with `path` and the three modes; extend "Output and limits" with the
   path shape, the default, the two caps, and the `too-large` rule.
+- Session-engine docstrings (`_collect_solutions`, `_run_match_or_search`,
+  `_reconstruct_path`): they are rendered in the API reference (`docs/modules.md` renders
+  `harold_mcp.maude.session`), so describe path assembly, the caps and the failure
+  ordering there too.
 - `README.md`: the `maude_run` bullet and the env-var table entry for
   `HAROLD_INTERPRETER_MAX_PATH_STEPS`.
 - The agent knowledge base (interface and data-model notes) and `CHANGELOG.md`, plus the
@@ -572,6 +589,9 @@ Worker layer (new `tests/unit/test_maude_session.py`, entirely fake objects):
 - `_collect_solutions` cap accounting: transition overflow reports the path cap,
   element overflow reports the result cap, and paths are not built for the extra solution
   consumed to set `truncated`.
+- **Ordering pin:** a solution whose term exceeds `max_result_length` while its path also
+  exceeds `max_path_steps` reports the result cap, and the fake iterator raises if any
+  path accessor is called (the term/binding check runs before path work).
 - A search step with `path=None` produces `path=None` in every solution.
 
 Settings (`tests/unit/test_settings.py`):
@@ -628,21 +648,20 @@ a field, these break loudly and are updated in the same steps as the code:
   - the search solution literal in `test_search_outcome_is_adapted` (add `path`);
   - any exact search-solution `model_dump()` assertion;
   - `test_search_step_forwards_pattern_subject_depth_and_type`: the expected
-    `StepRequest` gains `"path": "labels"`;
+    `StepRequest` gains `"path_mode": "labels"`;
   - `test_request_carries_the_steps_and_configured_caps`: the two expected step dicts
-    gain `"path": None`, and the request gains `max_path_steps`.
+    gain `"path_mode": None`, and the request gains `max_path_steps`.
 - `tests/unit/test_maude_executor.py`: the module-level `SESSION_REQUEST` literal gains
   the required `max_path_steps` key (mypy also fails otherwise).
 - `tests/integration/test_maude_session_integration.py`:
   - `_step` and `_request` build fully explicit `StepRequest`/`SessionRequest` literals:
-    add `path` and `max_path_steps` (mypy also fails otherwise). The helper default for
-    `path` is `None` (treated as `"none"` by the worker), so existing tests keep their
-    path-free shape; path tests pass `"labels"`/`"full"` explicitly;
+    add `path_mode` and `max_path_steps` (mypy also fails otherwise). The helper default
+    for `path_mode` is `None` (treated as `"none"` by the worker), so existing tests keep
+    their path-free shape; path tests pass `"labels"`/`"full"` explicitly;
   - `test_search_types_and_ground_targets` and its ground/canonical variants compare
     solution dicts exactly (add `path`);
-  - `test_match_and_search_caps_set_the_truncation_flag` and
-    `test_match_and_search_result_length_cap` still pass but gain `message` assertions
-    for the `too-large` cases;
+  - `test_match_and_search_result_length_cap` still passes but gains `message`
+    assertions for its match and search `too-large` cases;
   - `test_too_large_result_is_an_outcome` gains `message` coverage.
 - `tests/integration/test_maude_run_integration.py`:
   - `test_match_and_search_thread_without_changing_the_current_term` asserts solution
