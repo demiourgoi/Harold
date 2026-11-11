@@ -2,7 +2,7 @@
 
 ## Checklist
 
-- [ ] Step 1: Add the `interpreter_max_path_steps` setting
+- [x] Step 1: Add the `interpreter_max_path_steps` setting
 - [ ] Step 2: Define the path contract and the reconstruction helper
 - [ ] Step 3: Reconstruct paths in the session engine
 - [ ] Step 4: Expose paths through `maude_run`
@@ -55,6 +55,16 @@ consumes in Step 2.
 
 **Demo.** `Settings().interpreter_max_path_steps == 100`;
 `HAROLD_INTERPRETER_MAX_PATH_STEPS=5` yields `5`; `...=0` fails fast at startup.
+
+### Implementation notes
+
+Implemented exactly as planned: the field sits between `interpreter_max_result_length`
+and `interpreter_max_output_length` in `Settings`, the docstring documents
+`HAROLD_INTERPRETER_MAX_PATH_STEPS` (default `100`, maximum transitions per search
+solution path), and `tests/unit/test_settings.py` covers the default, an override,
+and `0`/negative rejection (via the existing parametrization, which picks the new
+env var up from `_ENV_VARS`). No deviations. Reviewed with the ponytail-review
+skill (1 round, no findings).
 
 ---
 

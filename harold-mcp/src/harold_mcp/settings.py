@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     - `HAROLD_INTERPRETER_MAX_RESULT_LENGTH`: maximum characters of any returned
       term (default `1000000`); longer results are reported as too large, never
       truncated.
+    - `HAROLD_INTERPRETER_MAX_PATH_STEPS`: maximum transitions per search solution
+      path (default `100`); a longer path is reported as too large, never truncated.
     - `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH`: maximum characters of each captured
       stream (stdout and stderr separately) returned per phase (default
       `1000000`); longer captures are truncated and marked.
@@ -54,6 +56,7 @@ class Settings(BaseSettings):
     interpreter_max_solutions: int = Field(default=200, gt=0)
     interpreter_max_term_length: int = Field(default=100_000, gt=0)
     interpreter_max_result_length: int = Field(default=1_000_000, gt=0)
+    interpreter_max_path_steps: int = Field(default=100, gt=0)
     interpreter_max_output_length: int = Field(default=1_000_000, gt=0)
 
 
