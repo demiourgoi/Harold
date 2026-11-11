@@ -5,7 +5,7 @@
 - [x] Step 1: Add the `interpreter_max_path_steps` setting
 - [x] Step 2: Define the path contract and the reconstruction helper
 - [x] Step 3: Reconstruct paths in the session engine
-- [ ] Step 4: Expose paths through `maude_run`
+- [x] Step 4: Expose paths through `maude_run`
 - [ ] Step 5: Documentation and release metadata
 
 ## Working agreements
@@ -231,6 +231,19 @@ its tests.
 **Demo.** An MCP `maude_run` call `search` with default settings returns the seven
 shepherd labels in order; `path: "full"` adds rule text and states; `path: "none"` returns
 `path: null`.
+
+### Implementation notes
+
+Implemented as planned, with no deviations: `SearchStep.path` defaults to `"labels"`, the
+three wire models carry attribute docstrings (promoted to schema descriptions via the
+`_ResultModel` base), `_to_solutions` adapts the worker `path` dict or `None`, and the
+`maude_run` docstring documents the modes, the path shape, both caps and the `too-large`
+rule. Unit tests cover the default/invalid value, forwarding, the full-path adaptation
+(including `label=None`), the exact `model_dump()` shapes, and the path-cap `too-large`
+adaptation; tool-level integration tests cover shepherd labels/full, `path="none"`,
+the `=>!` case, and both cap overflows through `maude_run` (with per-test `Settings`
+overrides, since the tool reads the caps from settings). Reviewed with the
+ponytail-review skill (1 round, no findings).
 
 ---
 

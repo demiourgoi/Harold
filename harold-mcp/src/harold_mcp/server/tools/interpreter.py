@@ -20,6 +20,7 @@ from harold_mcp.maude import (
     CommandName,
     MaudeExecutor,
     MaudeWorkerError,
+    PathDict,
     SessionRequest,
     SessionResult,
     SolutionDict,
@@ -141,6 +142,11 @@ class SearchStep(_PatternStep):
     search_type: Literal["one-step", "at-least-one-step", "any-steps", "normal-form", "branch"]
     """The Maude search type: `=>1`, `=>+`, `=>*`, `=>!` or `=>#`."""
 
+    path: Literal["none", "labels", "full"] = "labels"
+    """How much of each solution's rewrite path to return: `"labels"` (the rule
+    sequence, the default), `"full"` (also the rule text and intermediate states),
+    or `"none"`."""
+
 
 MaudeStep = Annotated[
     ReduceStep | RewriteStep | FrewriteStep | ErewriteStep | MatchStep | SearchStep,
@@ -199,6 +205,37 @@ class MaudeMatch(_ResultModel):
     """The variable/value pairs of the substitution (empty for a ground match)."""
 
 
+class MaudeRuleRef(_ResultModel):
+    """The rule applied in one path transition."""
+
+    label: str | None
+    """The rule's label; `null` when the rule has no label."""
+
+    text: str | None
+    """The full rule statement; `null` unless the step requested `path="full"`."""
+
+
+class MaudePathTransition(_ResultModel):
+    """One transition of a search path: the rule applied and the state it produced."""
+
+    rule: MaudeRuleRef
+    """The rule that produced this state."""
+
+    state: str | None
+    """The state the transition produced; `null` unless the step requested `path="full"`."""
+
+
+class MaudeSearchPath(_ResultModel):
+    """The rewrite path from the search subject to a solution."""
+
+    initial: str
+    """The search subject the path started from."""
+
+    transitions: list[MaudePathTransition]
+    """The ordered rule applications leading to the solution (empty for a reflexive or
+    branching zero-transition path)."""
+
+
 class MaudeSearchSolution(_ResultModel):
     """One solution produced by a `search` step."""
 
@@ -210,6 +247,10 @@ class MaudeSearchSolution(_ResultModel):
 
     bindings: list[MaudeBinding]
     """The variable/value pairs that make the target match this state."""
+
+    path: MaudeSearchPath | None
+    """The rewrite path from the search subject to this state; `null` when the step
+    requested `path="none"`. A path always exists for a search solution."""
 
 
 class MaudeStepOutcome(_ResultModel):
@@ -242,7 +283,8 @@ class MaudeStepOutcome(_ResultModel):
     """`true` when a `match`/`search` hit the configured solution cap (`"ok"` only)."""
 
     message: str | None
-    """The interpreter's message (`"parse-error"` only)."""
+    """The interpreter's message (`"parse-error"`), or Harold's reason for exceeding a
+    limit (`"too-large"`), naming the setting to raise."""
 
     limit: int | None
     """The exceeded limit (`"too-large"` only)."""
@@ -351,7 +393,7 @@ def _to_step_request(step: MaudeStep) -> StepRequest:
         "gas": step.gas if isinstance(step, _GassedStep) else None,
         "depth": step.depth if isinstance(step, _PatternStep) else None,
         "search_type": step.search_type if isinstance(step, SearchStep) else None,
-        "path_mode": None,
+        "path_mode": step.path if isinstance(step, SearchStep) else None,
     }
 
 
@@ -392,6 +434,20 @@ def _to_matches(matches: list[list[BindingDict]]) -> list[MaudeMatch]:
     return [MaudeMatch(bindings=_to_bindings(bindings)) for bindings in matches]
 
 
+def _to_path(path: PathDict) -> MaudeSearchPath:
+    """Adapt a worker path to the wire model."""
+    return MaudeSearchPath(
+        initial=path["initial"],
+        transitions=[
+            MaudePathTransition(
+                rule=MaudeRuleRef(label=transition["rule"]["label"], text=transition["rule"]["text"]),
+                state=transition["state"],
+            )
+            for transition in path["transitions"]
+        ],
+    )
+
+
 def _to_solutions(solutions: list[SolutionDict]) -> list[MaudeSearchSolution]:
     """Adapt worker search solutions to the wire model."""
     return [
@@ -399,6 +455,7 @@ def _to_solutions(solutions: list[SolutionDict]) -> list[MaudeSearchSolution]:
             term=solution["term"],
             rewrites=solution["rewrites"],
             bindings=_to_bindings(solution["bindings"]),
+            path=_to_path(solution["path"]) if solution["path"] is not None else None,
         )
         for solution in solutions
     ]
@@ -520,7 +577,9 @@ def maude_run(
       0 = on top with extension, 2147483647 = anywhere in the term).
     - `search`: search from the current term (or `subject`) for states matching `pattern`
       using `search_type` (one-step, at-least-one-step, any-steps, normal-form, branch)
-      and an optional `depth`.
+      and an optional `depth`. Each solution carries its rewrite path (`path`):
+      `"labels"` (the default) returns the ordered rule labels; `"full"` also returns
+      the full rule text and the intermediate states; `"none"` omits the path.
 
     Load problems and step failures
     -------------------------------
@@ -541,10 +600,17 @@ def maude_run(
     (color codes stripped; a stream longer than the configured output limit is truncated
     and marked). A search step returns at most the configured number of solutions and a
     match step at most the configured number of substitutions; `truncated` is true when
-    the cap was reached. The whole call is bounded by timeout_secs (default: the server's
-    interpreter timeout). The timeout covers interpreter startup and is best effort: a
-    non-terminating reduction fails the call and replaces the worker pool, so allow more
-    time for long evaluations.
+    the cap was reached. Each search solution's `path` is `{initial, transitions}`, where
+    `initial` is the search subject and each transition carries the applied rule (label,
+    and text in `"full"` mode) and, in `"full"` mode, the state it produced (the last
+    state equals the solution's `term`); `path` is `null` when the step requested
+    `"none"`. Paths are bounded by the configured maximum transitions per path
+    (default 100), and every returned string by the configured maximum result length; a
+    path or result exceeding its cap makes the step `too-large` with the limit and a
+    message naming the setting to raise. The whole call is bounded by timeout_secs
+    (default: the server's interpreter timeout). The timeout covers interpreter startup
+    and is best effort: a non-terminating reduction fails the call and replaces the
+    worker pool, so allow more time for long evaluations.
 
     Args:
         path: Absolute path to the Maude source file to load (typically `.maude`). Pass
@@ -580,8 +646,11 @@ __all__ = [
     "MaudeLoadInfo",
     "MaudeLoadWarning",
     "MaudeMatch",
+    "MaudePathTransition",
+    "MaudeRuleRef",
     "MaudeRunError",
     "MaudeRunResult",
+    "MaudeSearchPath",
     "MaudeSearchSolution",
     "MaudeStep",
     "MaudeStepOutcome",

@@ -154,3 +154,102 @@ def test_match_and_search_thread_without_changing_the_current_term(
     # The search starts from the current term set by the rewrite (c(2)).
     assert [solution.term for solution in search_outcome.solutions] == ["c(2)", "c(3)", "c(4)"]
     assert search_outcome.truncated is False
+
+
+_SHEPHERD_LABELS = [
+    "crossWithSheep",
+    "crossAlone",
+    "crossWithCabbage",
+    "crossWithSheep",
+    "crossWithDog",
+    "crossAlone",
+    "crossWithSheep",
+]
+
+
+def _shepherd_step(**overrides: object) -> SearchStep:
+    fields: dict[str, object] = {
+        "command": "search",
+        "pattern": "st(r, r, r, r)",
+        "subject": "st(l, l, l, l)",
+        "search_type": "any-steps",
+    }
+    fields.update(overrides)
+    return SearchStep(**fields)  # type: ignore[arg-type]
+
+
+def test_search_path_labels_end_to_end(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(environment, "search_path.maude", "SHEPHERD", [_shepherd_step()])
+
+    assert result.completed is True
+    outcome = result.steps[0]
+    solution = (outcome.solutions or [])[0]
+    assert solution.path is not None
+    assert solution.path.initial == "st(l, l, l, l)"
+    assert [t.rule.label for t in solution.path.transitions] == _SHEPHERD_LABELS
+    assert all(t.rule.text is None and t.state is None for t in solution.path.transitions)
+
+
+def test_search_path_full_end_to_end(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(environment, "search_path.maude", "SHEPHERD", [_shepherd_step(path="full")])
+
+    solution = (result.steps[0].solutions or [])[0]
+    assert solution.path is not None
+    assert [t.rule.label for t in solution.path.transitions] == _SHEPHERD_LABELS
+    assert all(t.rule.text is not None and t.state is not None for t in solution.path.transitions)
+    assert solution.path.transitions[-1].state == solution.term
+
+
+def test_search_path_none_end_to_end(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(environment, "search_path.maude", "SHEPHERD", [_shepherd_step(path="none")])
+
+    solution = (result.steps[0].solutions or [])[0]
+    assert solution.path is None
+
+
+def test_search_path_normal_form_end_to_end(environment: tuple[MaudeExecutor, Settings]) -> None:
+    step = SearchStep(command="search", pattern="c", subject="a", search_type="normal-form", path="full")
+    result = _run(environment, "search_path.maude", "BRANCH", [step])
+
+    solution = (result.steps[0].solutions or [])[0]
+    assert solution.path is not None
+    (transition,) = solution.path.transitions
+    assert (transition.rule.label, transition.state) == ("ac", "c")
+
+
+def test_search_path_cap_overflow_is_a_too_large_step(environment: tuple[MaudeExecutor, Settings]) -> None:
+    executor, _ = environment
+    settings = Settings(maude_workers=1, interpreter_max_path_steps=2)
+    result = maude_run(
+        str(FIXTURES_DIR / "search_path.maude"),
+        "SHEPHERD",
+        [_shepherd_step()],
+        executor=executor,
+        settings=settings,
+    )
+
+    assert result.completed is False
+    outcome = result.steps[0]
+    assert (outcome.status, outcome.limit) == ("too-large", 2)
+    assert outcome.message == "path exceeds interpreter_max_path_steps"
+    assert outcome.solutions is None
+
+
+def test_search_path_element_cap_overflow_is_a_too_large_step(
+    environment: tuple[MaudeExecutor, Settings],
+) -> None:
+    executor, _ = environment
+    settings = Settings(maude_workers=1, interpreter_max_result_length=50)
+    result = maude_run(
+        str(FIXTURES_DIR / "search_path.maude"),
+        "SHEPHERD",
+        [_shepherd_step(path="full")],
+        executor=executor,
+        settings=settings,
+    )
+
+    assert result.completed is False
+    outcome = result.steps[0]
+    assert (outcome.status, outcome.limit) == ("too-large", 50)
+    assert outcome.message == "path element exceeds interpreter_max_result_length"
+    assert outcome.solutions is None
