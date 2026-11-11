@@ -16,6 +16,7 @@ _ENV_VARS = [
     "HAROLD_INTERPRETER_MAX_SOLUTIONS",
     "HAROLD_INTERPRETER_MAX_TERM_LENGTH",
     "HAROLD_INTERPRETER_MAX_RESULT_LENGTH",
+    "HAROLD_INTERPRETER_MAX_PATH_STEPS",
     "HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH",
 ]
 
@@ -39,6 +40,7 @@ def test_defaults() -> None:
     assert resolved.interpreter_max_solutions == 200
     assert resolved.interpreter_max_term_length == 100_000
     assert resolved.interpreter_max_result_length == 1_000_000
+    assert resolved.interpreter_max_path_steps == 100
     assert resolved.interpreter_max_output_length == 1_000_000
 
 
@@ -60,6 +62,7 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
         "HAROLD_INTERPRETER_MAX_SOLUTIONS": ("interpreter_max_solutions", 11),
         "HAROLD_INTERPRETER_MAX_TERM_LENGTH": ("interpreter_max_term_length", 13),
         "HAROLD_INTERPRETER_MAX_RESULT_LENGTH": ("interpreter_max_result_length", 17),
+        "HAROLD_INTERPRETER_MAX_PATH_STEPS": ("interpreter_max_path_steps", 23),
         "HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH": ("interpreter_max_output_length", 19),
     }
     for env_var, (_, value) in overrides.items():
