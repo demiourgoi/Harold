@@ -4,7 +4,7 @@
 
 - [x] Step 1: Add the `interpreter_max_path_steps` setting
 - [x] Step 2: Define the path contract and the reconstruction helper
-- [ ] Step 3: Reconstruct paths in the session engine
+- [x] Step 3: Reconstruct paths in the session engine
 - [ ] Step 4: Expose paths through `maude_run`
 - [ ] Step 5: Documentation and release metadata
 
@@ -177,6 +177,21 @@ wire behavior unchanged (the tool sends `path_mode=None` until Step 4).
 labels; `"full"` returns rule text and states; `"none"`/`None` returns `path: null`;
 `n(0) =>* n(1500)` at depth 1500 returns `too-large`, `limit=100`; a raised cap returns
 1500 transitions.
+
+### Implementation notes
+
+Implemented as planned. One deviation: the `search_type`/`path_mode` validation and
+the collection dispatch moved into a small `_collect_step` helper, because
+`_run_match_or_search` exceeded ruff's cyclomatic-complexity limit (C901, 11 > 10)
+with the new `path_mode` branch. Behavior is identical and the defensive `ValueError`
+precedent is preserved. The fixture is the research probe's `search_path.maude`
+verbatim, and all the design §8.2 session-level tests were added (shepherd labels/full,
+`=>1`, reflexive, `=>!`, `=>#`, unlabeled, laziness, `max_solutions=1`, path cap,
+element cap, deep search under the default and a raised cap, `"none"`/`None`, the
+invalid-mode `ValueError`, and the at-exactly-the-cap boundary). The ordering pin
+(oversized term before path work) is covered at the unit level with a fake that
+fails on any path accessor. Reviewed with the ponytail-review skill (1 round, no
+findings).
 
 ---
 

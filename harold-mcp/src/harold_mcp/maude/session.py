@@ -10,7 +10,6 @@ caller carries state across sessions by re-submitting a saved result term or by
 writing a wrapper module.
 """
 
-from itertools import islice
 from typing import Any, Literal, NamedTuple, TypedDict
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict, capture_streams, parse_warnings, truncate_output
@@ -239,6 +238,7 @@ def _run_rewriting(
             command=command,
             status="too-large",
             limit=max_result_length,
+            message="result exceeds interpreter_max_result_length",
             output=output,
         )
     return _outcome(
@@ -265,7 +265,14 @@ def _bindings_too_large(bindings: list[BindingDict], max_length: int) -> bool:
     return any(len(binding["variable"]) > max_length or len(binding["value"]) > max_length for binding in bindings)
 
 
-type _CollectionResult = tuple[Literal["ok", "too-large"], list[Any], bool]
+class _CollectionResult(NamedTuple):
+    """Result of a capped `match`/`search` collection: the items, or the exceeded limit."""
+
+    status: Literal["ok", "too-large"]
+    items: list[Any]
+    truncated: bool
+    limit: int | None
+    message: str | None
 
 
 def _collect_matches(
@@ -275,15 +282,29 @@ def _collect_matches(
     max_solutions: int,
     max_result_length: int,
 ) -> _CollectionResult:
-    """Collect a capped list of match substitutions, enforcing the result term cap."""
-    matched = list(islice(subject.match(pattern, maxDepth=depth), max_solutions + 1))
+    """Collect a capped list of match substitutions, enforcing the result term cap.
+
+    The match iterator is lazy: at most `max_solutions` substitutions are consumed,
+    plus one extra only to set `truncated`. A serialized binding string (variable or
+    value) longer than `max_result_length` makes the whole collection `too-large`.
+    """
     matches: list[list[BindingDict]] = []
-    for substitution, _context in matched[:max_solutions]:
+    truncated = False
+    for substitution, _context in subject.match(pattern, maxDepth=depth):
+        if len(matches) == max_solutions:
+            truncated = True
+            break
         bindings = _bindings(substitution)
         if _bindings_too_large(bindings, max_result_length):
-            return "too-large", [], False
+            return _CollectionResult(
+                status="too-large",
+                items=[],
+                truncated=False,
+                limit=max_result_length,
+                message="result exceeds interpreter_max_result_length",
+            )
         matches.append(bindings)
-    return "ok", matches, len(matched) > max_solutions
+    return _CollectionResult(status="ok", items=matches, truncated=truncated, limit=None, message=None)
 
 
 def _collect_solutions(
@@ -293,17 +314,53 @@ def _collect_solutions(
     depth: int,
     max_solutions: int,
     max_result_length: int,
+    path_mode: str | None,
+    max_path_steps: int,
 ) -> _CollectionResult:
-    """Collect a capped list of search solutions, enforcing the result term cap."""
-    found = list(islice(subject.search(search_type, pattern, depth=depth), max_solutions + 1))
+    """Collect a capped list of search solutions, with optional rewrite paths.
+
+    The search iterator is lazy: at most `max_solutions` solutions are consumed,
+    plus one extra only to set `truncated` (no path work is done for it). For each
+    returned solution the term and bindings are checked against `max_result_length`
+    **before** any path work; then, when `path_mode` is `"labels"` or `"full"`, the
+    solution's state number is read from `iterator.getStateNr()` while the iterator
+    is positioned on that solution, and the path is reconstructed iteratively
+    (see `_reconstruct_path`). A path over `max_path_steps` transitions, or any path
+    string over `max_result_length`, makes the whole collection `too-large` naming
+    the exceeded cap; `path_mode` `None`/`"none"` skips path work entirely.
+    """
     solutions: list[SolutionDict] = []
-    for solution, substitution, _path, rewrites in found[:max_solutions]:
+    truncated = False
+    iterator = subject.search(search_type, pattern, depth=depth)
+    for solution, substitution, _path, rewrites in iterator:
+        if len(solutions) == max_solutions:
+            truncated = True
+            break
         term_text = str(solution)
         bindings = _bindings(substitution)
         if len(term_text) > max_result_length or _bindings_too_large(bindings, max_result_length):
-            return "too-large", [], False
-        solutions.append({"term": term_text, "rewrites": int(rewrites), "bindings": bindings, "path": None})
-    return "ok", solutions, len(found) > max_solutions
+            return _CollectionResult(
+                status="too-large",
+                items=[],
+                truncated=False,
+                limit=max_result_length,
+                message="result exceeds interpreter_max_result_length",
+            )
+        path: PathDict | None = None
+        if path_mode in ("labels", "full"):
+            state_number = iterator.getStateNr()
+            path_result = _reconstruct_path(iterator, state_number, path_mode, max_path_steps, max_result_length)
+            if path_result.status == "too-large":
+                return _CollectionResult(
+                    status="too-large",
+                    items=[],
+                    truncated=False,
+                    limit=path_result.limit,
+                    message=path_result.message,
+                )
+            path = path_result.path
+        solutions.append({"term": term_text, "rewrites": int(rewrites), "bindings": bindings, "path": path})
+    return _CollectionResult(status="ok", items=solutions, truncated=truncated, limit=None, message=None)
 
 
 class _PathResult(NamedTuple):
@@ -385,6 +442,46 @@ def _reconstruct_path(
     )
 
 
+def _collect_step(
+    command: MatchingCommand,
+    index: int,
+    step: StepRequest,
+    subject: Any,
+    pattern: Any,
+    depth: int,
+    max_solutions: int,
+    max_result_length: int,
+    max_path_steps: int,
+) -> _CollectionResult:
+    """Dispatch a parsed `match`/`search` step to its capped collection.
+
+    Validates the step's `search_type` and `path_mode` first (a mismatch is a
+    programming error: the tool's pydantic boundary only produces valid values).
+    """
+    if command == "match":
+        return _collect_matches(subject, pattern, depth, max_solutions, max_result_length)
+    search_type_name = step["search_type"]
+    if search_type_name is None or search_type_name not in _SEARCH_TYPES:
+        raise ValueError(  # noqa: TRY003 - programming error
+            f"step {index} has no valid search_type"
+        )
+    path_mode = step["path_mode"]
+    if path_mode is not None and path_mode not in ("none", "labels", "full"):
+        raise ValueError(  # noqa: TRY003 - programming error
+            f"step {index} has no valid path_mode"
+        )
+    return _collect_solutions(
+        subject,
+        _SEARCH_TYPES[search_type_name],
+        pattern,
+        depth,
+        max_solutions,
+        max_result_length,
+        path_mode,
+        max_path_steps,
+    )
+
+
 def _run_match_or_search(
     module: Any,
     index: int,
@@ -393,6 +490,7 @@ def _run_match_or_search(
     step: StepRequest,
     max_solutions: int,
     max_result_length: int,
+    max_path_steps: int,
     max_output_length: int,
 ) -> StepOutcomeDict:
     """Parse the subject and pattern, run `match` or `search`, and build the outcome.
@@ -401,8 +499,12 @@ def _run_match_or_search(
     item existed. The iterators are lazy, so the extra item is consumed only to detect
     the overflow. Every serialized result term (a search solution or a binding value)
     is checked against `max_result_length`: exceeding it produces a `too-large` outcome,
-    like the rewriting commands. Parsing and the operation share one capture, so a
-    parse failure's `Warning:` lines become the `parse-error` message.
+    like the rewriting commands. A `search` step may request the solutions' rewrite
+    paths via `path_mode` (`"labels"`, `"full"`, or `None`/`"none"` for no path),
+    bounded by `max_path_steps`; a path or result over its cap is a `too-large`
+    outcome whose `limit` and `message` name the exceeded setting. Parsing and the
+    operation share one capture, so a parse failure's `Warning:` lines become the
+    `parse-error` message.
     """
 
     def execute() -> _CollectionResult | None:
@@ -416,20 +518,8 @@ def _run_match_or_search(
         if pattern is None:
             return None
         depth = step["depth"] if step["depth"] is not None else -1
-        if command == "match":
-            return _collect_matches(subject, pattern, depth, max_solutions, max_result_length)
-        search_type_name = step["search_type"]
-        if search_type_name is None or search_type_name not in _SEARCH_TYPES:
-            raise ValueError(  # noqa: TRY003 - programming error
-                f"step {index} has no valid search_type"
-            )
-        return _collect_solutions(
-            subject,
-            _SEARCH_TYPES[search_type_name],
-            pattern,
-            depth,
-            max_solutions,
-            max_result_length,
+        return _collect_step(
+            command, index, step, subject, pattern, depth, max_solutions, max_result_length, max_path_steps
         )
 
     result, captured = capture_streams(execute)
@@ -437,13 +527,14 @@ def _run_match_or_search(
     if result is None:
         message = "\n".join(warning["message"] for warning in parse_warnings(captured["stderr"]))
         return _outcome(index=index, command=command, status="parse-error", message=message, output=output)
-    status, items, truncated = result
+    status, items, truncated, limit, limit_message = result
     if status == "too-large":
         return _outcome(
             index=index,
             command=command,
             status="too-large",
-            limit=max_result_length,
+            limit=limit,
+            message=limit_message,
             output=output,
         )
     if command == "match":
@@ -504,6 +595,7 @@ def _run_step(
                 step,
                 request["max_solutions"],
                 request["max_result_length"],
+                request["max_path_steps"],
                 request["max_output_length"],
             )
         case _:

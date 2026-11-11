@@ -163,6 +163,7 @@ def test_too_large_result_is_an_outcome(executor: MaudeExecutor) -> None:
     outcome = _single_outcome(result)
     assert outcome["status"] == "too-large"
     assert outcome["limit"] == 1
+    assert outcome["message"] == "result exceeds interpreter_max_result_length"
     assert outcome["term"] is None
 
 
@@ -414,6 +415,7 @@ def test_match_and_search_result_length_cap(executor: MaudeExecutor) -> None:
     match_outcome = _single_outcome(matched)
     assert match_outcome["status"] == "too-large"
     assert match_outcome["limit"] == 1
+    assert match_outcome["message"] == "result exceeds interpreter_max_result_length"
     assert match_outcome["matches"] is None
 
     searched = _run(
@@ -428,6 +430,7 @@ def test_match_and_search_result_length_cap(executor: MaudeExecutor) -> None:
     search_outcome = _single_outcome(searched)
     assert search_outcome["status"] == "too-large"
     assert search_outcome["limit"] == 1
+    assert search_outcome["message"] == "result exceeds interpreter_max_result_length"
     assert search_outcome["solutions"] is None
 
 
@@ -459,3 +462,213 @@ def test_match_and_search_parse_errors_stop_the_run(executor: MaudeExecutor) -> 
     outcome = bad_subject["outcomes"][0]
     assert outcome["status"] == "parse-error"
     assert "no parse for term." in str(outcome["message"])
+
+
+_SHEPHERD_LABELS = [
+    "crossWithSheep",
+    "crossAlone",
+    "crossWithCabbage",
+    "crossWithSheep",
+    "crossWithDog",
+    "crossAlone",
+    "crossWithSheep",
+]
+
+
+def _shepherd_step(path_mode: str | None) -> StepRequest:
+    return _step(
+        "search", pattern="st(r, r, r, r)", subject="st(l, l, l, l)", search_type="any-steps", path_mode=path_mode
+    )
+
+
+def test_search_path_labels_mode(executor: MaudeExecutor) -> None:
+    result = _run(executor, _request("search_path.maude", "SHEPHERD", [_shepherd_step("labels")]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    assert solution["term"] == "st(r, r, r, r)"
+    path = solution["path"]
+    assert path is not None
+    assert path["initial"] == "st(l, l, l, l)"
+    assert [t["rule"]["label"] for t in path["transitions"]] == _SHEPHERD_LABELS
+    assert all(t["rule"]["text"] is None and t["state"] is None for t in path["transitions"])
+
+
+def test_search_path_full_mode(executor: MaudeExecutor) -> None:
+    result = _run(executor, _request("search_path.maude", "SHEPHERD", [_shepherd_step("full")]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert path["initial"] == "st(l, l, l, l)"
+    assert [t["rule"]["label"] for t in path["transitions"]] == _SHEPHERD_LABELS
+    assert all(t["rule"]["text"] is not None and t["state"] is not None for t in path["transitions"])
+    assert "crossWithSheep" in path["transitions"][0]["rule"]["text"]
+    # The last transition's state is the solution term (explicit redundancy by design).
+    assert path["transitions"][-1]["state"] == solution["term"]
+
+
+def test_search_path_one_step_has_one_transition(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="n(N)", subject="n(0)", depth=2, search_type="one-step", path_mode="labels")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert len(path["transitions"]) == 1
+    assert path["transitions"][0]["rule"]["label"] == "step"
+
+
+def test_search_path_reflexive_search_has_zero_transitions(executor: MaudeExecutor) -> None:
+    """Also the root-state safety test: a naive parent walk would crash the worker."""
+    step = _step("search", pattern="n(0)", subject="n(0)", depth=3, search_type="any-steps", path_mode="full")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    assert solution["term"] == "n(0)"
+    assert solution["path"] == {"initial": "n(0)", "transitions": []}
+
+
+def test_search_path_normal_form_search(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="c", subject="a", search_type="normal-form", path_mode="full")
+    result = _run(executor, _request("search_path.maude", "BRANCH", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert path["transitions"] == [{"rule": {"label": "ac", "text": "rl [ac] : a => c ."}, "state": "c"}]
+
+
+def test_search_path_branch_search_has_zero_transitions(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="X:S", subject="a", search_type="branch", path_mode="full")
+    result = _run(executor, _request("search_path.maude", "BRANCH", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    assert solution["path"] == {"initial": "a", "transitions": []}
+
+
+def test_search_path_unlabeled_rules_have_null_labels(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="c", subject="a", search_type="at-least-one-step", path_mode="full")
+    result = _run(executor, _request("search_path.maude", "UNLABELED", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert [t["rule"]["label"] for t in path["transitions"]] == [None, None]
+    assert all(t["rule"]["text"] is not None for t in path["transitions"])
+    assert [t["state"] for t in path["transitions"]] == ["b", "c"]
+
+
+def test_search_path_is_lazy_per_solution(executor: MaudeExecutor) -> None:
+    """Each solution's path matches its own position (regression for state-number laziness)."""
+    step = _step("search", pattern="n(N)", subject="n(0)", depth=2, search_type="at-least-one-step", path_mode="labels")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    solutions = outcome["solutions"]
+    assert [solution["term"] for solution in solutions] == ["n(1)", "n(2)"]
+    assert [len(solution["path"]["transitions"]) for solution in solutions] == [1, 2]
+
+
+def test_search_path_with_max_solutions_one(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="n(N)", subject="n(0)", depth=5, search_type="at-least-one-step", path_mode="labels")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step], max_solutions=1))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    assert outcome["truncated"] is True
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert len(path["transitions"]) == 1
+
+
+def test_search_path_cap_is_a_too_large_outcome(executor: MaudeExecutor) -> None:
+    result = _run(executor, _request("search_path.maude", "SHEPHERD", [_shepherd_step("labels")], max_path_steps=2))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "too-large"
+    assert outcome["limit"] == 2
+    assert outcome["message"] == "path exceeds interpreter_max_path_steps"
+    assert outcome["solutions"] is None
+
+
+def test_search_path_element_cap_is_a_too_large_outcome(executor: MaudeExecutor) -> None:
+    # 50 sits between the label length and the rule-text length, so only the full mode trips it.
+    result = _run(executor, _request("search_path.maude", "SHEPHERD", [_shepherd_step("full")], max_result_length=50))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "too-large"
+    assert outcome["limit"] == 50
+    assert outcome["message"] == "path element exceeds interpreter_max_result_length"
+    assert outcome["solutions"] is None
+
+
+def test_search_path_deep_search_reports_the_path_cap(executor: MaudeExecutor) -> None:
+    """The design-review regression: iterative reconstruction, no whole-call failure."""
+    step = _step("search", pattern="n(1500)", subject="n(0)", depth=1500, search_type="any-steps", path_mode="labels")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "too-large"
+    assert outcome["limit"] == 100
+    assert outcome["message"] == "path exceeds interpreter_max_path_steps"
+    assert result["outcomes"][-1] is outcome
+
+
+def test_search_path_deep_search_with_a_raised_cap(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="n(1500)", subject="n(0)", depth=1500, search_type="any-steps", path_mode="labels")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step], max_path_steps=2000))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert len(path["transitions"]) == 1500
+    assert path["initial"] == "n(0)"
+    assert path["transitions"][-1]["state"] is None  # labels mode
+    assert solution["term"] == "n(1500)"
+
+
+def test_search_path_at_exactly_the_cap(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="n(100)", subject="n(0)", depth=100, search_type="any-steps", path_mode="full")
+    result = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    (solution,) = outcome["solutions"]
+    path = solution["path"]
+    assert path is not None
+    assert len(path["transitions"]) == 100
+    assert path["transitions"][-1]["state"] == solution["term"] == "n(100)"
+
+
+def test_search_path_mode_none_returns_null_paths(executor: MaudeExecutor) -> None:
+    for mode in (None, "none"):
+        result = _run(executor, _request("search_path.maude", "SHEPHERD", [_shepherd_step(mode)]))
+
+        outcome = _single_outcome(result)
+        assert outcome["status"] == "ok"
+        (solution,) = outcome["solutions"]
+        assert solution["path"] is None
+
+
+def test_search_path_invalid_mode_is_a_programming_error(executor: MaudeExecutor) -> None:
+    step = _step("search", pattern="n(N)", subject="n(0)", depth=2, search_type="one-step", path_mode="bogus")
+    with pytest.raises(ValueError, match="path_mode"):
+        _ = _run(executor, _request("search_path.maude", "CHAIN", [step]))
