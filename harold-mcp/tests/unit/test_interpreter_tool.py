@@ -305,7 +305,7 @@ def test_search_step_forwards_pattern_subject_depth_and_type(maude_file: Path) -
             "gas": None,
             "depth": 2,
             "search_type": "any-steps",
-            "path_mode": None,
+            "path_mode": "labels",
         }
     ]
 
@@ -316,6 +316,7 @@ def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None
         interpreter_timeout_secs=41,
         interpreter_max_solutions=7,
         interpreter_max_result_length=11,
+        interpreter_max_path_steps=3,
         interpreter_max_output_length=13,
     )
 
@@ -350,7 +351,7 @@ def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None
     ]
     assert request["max_solutions"] == 7
     assert request["max_result_length"] == 11
-    assert request["max_path_steps"] == 100
+    assert request["max_path_steps"] == 3
     assert request["max_output_length"] == 13
     assert timeout == 41
 
@@ -452,6 +453,7 @@ def test_search_outcome_is_adapted(maude_file: Path) -> None:
                         "term": "c(1)",
                         "rewrites": 2,
                         "bindings": [{"variable": "N", "value": "1"}],
+                        "path": None,
                     }
                 ],
                 truncated=True,
@@ -474,8 +476,100 @@ def test_search_outcome_is_adapted(maude_file: Path) -> None:
             "term": "c(1)",
             "rewrites": 2,
             "bindings": [{"variable": "N", "value": "1"}],
+            "path": None,
         }
     ]
+
+
+def test_search_step_path_defaults_to_labels_and_rejects_unknown_values() -> None:
+    step = SearchStep(command="search", pattern="c(N)", search_type="any-steps")
+    assert step.path == "labels"
+
+    with pytest.raises(ValidationError):
+        _ = SearchStep(command="search", pattern="c(N)", search_type="any-steps", path="bogus")
+
+
+def test_search_step_forwards_the_path_mode(maude_file: Path) -> None:
+    executor = FakeExecutor(
+        result=_session_result(
+            outcomes=[_outcome(command="search", term=None, rewrites=None, solutions=[], truncated=False)]
+        )
+    )
+
+    for mode in ("full", "none"):
+        step = SearchStep(command="search", pattern="c(N)", subject="c(0)", search_type="any-steps", path=mode)
+        _ = maude_run(str(maude_file), "M", [step], executor=executor, settings=_settings())
+
+    assert [call[0]["steps"][0]["path_mode"] for call in executor.calls] == ["full", "none"]
+
+
+def test_full_path_with_an_unlabeled_rule_is_adapted(maude_file: Path) -> None:
+    session = _session_result(
+        outcomes=[
+            _outcome(
+                command="search",
+                term=None,
+                rewrites=None,
+                solutions=[
+                    {
+                        "term": "b",
+                        "rewrites": 1,
+                        "bindings": [],
+                        "path": {
+                            "initial": "a",
+                            "transitions": [{"rule": {"label": None, "text": "rl a => b ."}, "state": "b"}],
+                        },
+                    }
+                ],
+                truncated=False,
+            )
+        ]
+    )
+
+    result = maude_run(
+        str(maude_file),
+        "M",
+        [SearchStep(command="search", pattern="b", subject="a", search_type="one-step", path="full")],
+        executor=FakeExecutor(session),
+        settings=_settings(),
+    )
+
+    solution = (result.steps[0].solutions or [])[0]
+    assert solution.path is not None
+    assert solution.path.model_dump() == {
+        "initial": "a",
+        "transitions": [{"rule": {"label": None, "text": "rl a => b ."}, "state": "b"}],
+    }
+
+
+def test_too_large_path_cap_outcome_is_adapted(maude_file: Path) -> None:
+    session = _session_result(
+        outcomes=[
+            _outcome(
+                command="search",
+                term=None,
+                rewrites=None,
+                status="too-large",
+                solutions=None,
+                limit=100,
+                message="path exceeds interpreter_max_path_steps",
+            )
+        ]
+    )
+
+    result = maude_run(
+        str(maude_file),
+        "M",
+        [SearchStep(command="search", pattern="c(N)", subject="c(0)", search_type="any-steps")],
+        executor=FakeExecutor(session),
+        settings=_settings(),
+    )
+
+    outcome = result.steps[0]
+    assert outcome.status == "too-large"
+    assert outcome.limit == 100
+    assert outcome.message == "path exceeds interpreter_max_path_steps"
+    assert outcome.solutions is None
 
 
 def test_parse_error_outcome_is_adapted(maude_file: Path) -> None:
