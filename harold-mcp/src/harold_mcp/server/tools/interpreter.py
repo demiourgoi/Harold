@@ -351,6 +351,7 @@ def _to_step_request(step: MaudeStep) -> StepRequest:
         "gas": step.gas if isinstance(step, _GassedStep) else None,
         "depth": step.depth if isinstance(step, _PatternStep) else None,
         "search_type": step.search_type if isinstance(step, SearchStep) else None,
+        "path_mode": None,
     }
 
 
@@ -362,6 +363,7 @@ def _to_request(path: Path, module: str, steps: Sequence[MaudeStep], settings: S
         "steps": [_to_step_request(step) for step in steps],
         "max_solutions": settings.interpreter_max_solutions,
         "max_result_length": settings.interpreter_max_result_length,
+        "max_path_steps": settings.interpreter_max_path_steps,
         "max_output_length": settings.interpreter_max_output_length,
     }
 

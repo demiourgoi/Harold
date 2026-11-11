@@ -305,6 +305,7 @@ def test_search_step_forwards_pattern_subject_depth_and_type(maude_file: Path) -
             "gas": None,
             "depth": 2,
             "search_type": "any-steps",
+            "path_mode": None,
         }
     ]
 
@@ -333,6 +334,7 @@ def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None
             "gas": None,
             "depth": None,
             "search_type": None,
+            "path_mode": None,
         },
         {
             "command": "reduce",
@@ -343,10 +345,12 @@ def test_request_carries_the_steps_and_configured_caps(maude_file: Path) -> None
             "gas": None,
             "depth": None,
             "search_type": None,
+            "path_mode": None,
         },
     ]
     assert request["max_solutions"] == 7
     assert request["max_result_length"] == 11
+    assert request["max_path_steps"] == 100
     assert request["max_output_length"] == 13
     assert timeout == 41
 
