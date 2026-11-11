@@ -6,7 +6,7 @@
 - [x] Step 2: Define the path contract and the reconstruction helper
 - [x] Step 3: Reconstruct paths in the session engine
 - [x] Step 4: Expose paths through `maude_run`
-- [ ] Step 5: Documentation and release metadata
+- [x] Step 5: Documentation and release metadata
 
 ## Working agreements
 
@@ -276,3 +276,17 @@ closes the feature.
 
 **Demo.** `make release` green; README and CHANGELOG match the tool behavior; the
 version is the agreed next release.
+
+### Implementation notes
+
+Implemented as planned: the README `maude_run` bullet documents the three modes, the
+env-var table gains `HAROLD_INTERPRETER_MAX_PATH_STEPS` (default `100`), CHANGELOG.md
+gains a `## [0.0.6]` section (feature, new setting, the `too-large` `message` change,
+and the default-payload change with its `path: "none"` opt-out), and `pyproject.toml`
+is bumped to `0.0.6.dev0` — the plan's suggested next version, applied without a
+pause for confirmation because the task was pre-authorized end to end; flag to the
+maintainer for confirmation. `make release` passes (install, check, test, docs-test).
+`.agents/summary/` was not regenerated in this code step, per the working agreements:
+it should be refreshed with the codebase-summary skill, and the knowledge base's
+data-model notes (which list `SolutionDict` fields) are stale until then.
+Reviewed with the ponytail-review skill (1 round, no findings).
