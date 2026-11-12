@@ -1,0 +1,7 @@
+mod BOUNDED-SEARCH-LAST is
+  sort S .
+  ops a b c : -> S [ctor] .
+  rl [step] : a => b .
+endm
+
+search [1] a =>* Z:S .

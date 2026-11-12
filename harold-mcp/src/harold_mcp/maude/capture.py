@@ -9,8 +9,11 @@ This module imports only the standard library. Importing it in the MCP server
 process is safe; the `maude` SWIG bindings are never imported here.
 """
 
+import contextlib
+import ctypes
 import os
 import re
+import sys
 import tempfile
 from collections.abc import Callable
 from typing import BinaryIO, TypedDict
@@ -75,6 +78,27 @@ def _decode_capture(capture: BinaryIO) -> str:
     return capture.read().decode("utf-8", errors="replace")
 
 
+def _flush_stdio() -> None:
+    """Flush Python and C/C++ stdio buffers.
+
+    Maude writes through C/C++ streams, whose buffers are independent of the Python
+    file objects that wrap fds 1 and 2. Without this flush, the tail of a phase stays
+    buffered after `capture_streams` restores the descriptors; it is then captured by
+    a later phase or written to the process's real stdout — in a worker, the MCP stdio
+    pipe. Flushing before the redirect also keeps pre-existing buffered output out of
+    the capture. Failures are suppressed: flushing must never change the phase result.
+    """
+    with contextlib.suppress(Exception):
+        _ = sys.stdout.flush()
+    with contextlib.suppress(Exception):
+        _ = sys.stderr.flush()
+    with contextlib.suppress(Exception):
+        libc = ctypes.CDLL(None)
+        libc.fflush.argtypes = [ctypes.c_void_p]
+        libc.fflush.restype = ctypes.c_int
+        _ = libc.fflush(None)
+
+
 def capture_streams[T](fn: Callable[[], T]) -> tuple[T, CapturedOutput]:
     """Run `fn` with fd 1 and fd 2 redirected to temp files.
 
@@ -87,6 +111,7 @@ def capture_streams[T](fn: Callable[[], T]) -> tuple[T, CapturedOutput]:
         tempfile.TemporaryFile(mode="w+b") as stdout_capture,
         tempfile.TemporaryFile(mode="w+b") as stderr_capture,
     ):
+        _flush_stdio()
         saved_stdout = os.dup(1)
         saved_stderr = os.dup(2)
         try:
@@ -94,6 +119,9 @@ def capture_streams[T](fn: Callable[[], T]) -> tuple[T, CapturedOutput]:
             _ = os.dup2(stderr_capture.fileno(), 2)
             result = fn()
         finally:
+            # Flush while the capture fds are still in place: libmaude buffers its
+            # output independently and would otherwise flush it after the restore.
+            _flush_stdio()
             _ = os.dup2(saved_stdout, 1)
             _ = os.dup2(saved_stderr, 2)
             os.close(saved_stdout)

@@ -6,7 +6,9 @@ parser itself. The stream-capture tests write directly to fds 1 and 2 (not throu
 stream objects.
 """
 
+import ctypes
 import os
+import tempfile
 
 import pytest
 
@@ -82,6 +84,43 @@ def test_capture_streams_decodes_invalid_utf8_lossily() -> None:
 
     assert captured["stdout"] == "ok \ufffd\ufffd end"
     assert captured["stderr"] == "\ufffd"
+
+
+def _write_buffered_to_c_stdout(text: bytes) -> None:
+    """Write through C stdio without flushing (the libmaude output path)."""
+    libc = ctypes.CDLL(None)
+    _ = libc.printf(text)
+
+
+def test_capture_streams_flushes_buffered_c_output() -> None:
+    """Regression: libmaude's C buffer must be flushed before the fds are restored.
+
+    Without the flush, a phase that ends in a bounded search (or any output path that
+    does not flush itself) loses its tail; the bytes then surface in a later phase or
+    on the worker's inherited stdout.
+    """
+    _, captured = capture_streams(lambda: _write_buffered_to_c_stdout(b"buffered without newline"))
+
+    assert captured["stdout"] == "buffered without newline"
+
+
+def test_capture_streams_does_not_leak_buffered_c_output() -> None:
+    """The flushed bytes must stay in the capture, not reach the restored stdout."""
+    libc = ctypes.CDLL(None)
+    _ = libc.fflush(None)  # start with an empty C buffer
+
+    with tempfile.TemporaryFile(mode="w+b") as sink:
+        saved_stdout = os.dup(1)
+        try:
+            _ = os.dup2(sink.fileno(), 1)
+            _ = capture_streams(lambda: _write_buffered_to_c_stdout(b"buffered"))
+        finally:
+            _ = os.dup2(saved_stdout, 1)
+            os.close(saved_stdout)
+        _ = sink.seek(0)
+        leaked = sink.read()
+
+    assert leaked == b""
 
 
 def test_strip_ansi_leaves_plain_text_untouched() -> None:

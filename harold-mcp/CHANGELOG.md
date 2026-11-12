@@ -73,7 +73,16 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
 - **No stdout leak from loaded files** — diagnostics now captures the worker's stdout
   around `maude.load`, so a diagnosed file's embedded REPL commands (e.g. a `red`) can no
   longer write into the MCP stdio transport. The captured output is discarded; warnings
-  are still parsed from stderr.
+  are still parsed from stderr only.
+- **Complete captured output** — `capture_streams` now flushes Python and C/C++ stdio
+  buffers while fds 1/2 still point at the capture files. A load whose last command is a
+  bounded `search` that stops at its bound no longer loses that result block, and the
+  unflushed bytes can no longer surface in a later phase or reach the MCP stdio
+  transport. This closes the remaining case behind the "no stdout leak" fix above.
+- **Diagnosable unexpected failures** — a non-`MaudeWorkerError` from `maude_run` now
+  reports the exception type and message in the client-visible `MaudeRunError` (the cause
+  stays chained) and logs the traceback server-side, instead of returning only the
+  generic "Unexpected failure running the Maude interpreter session" text.
 
 ### General fixes
 

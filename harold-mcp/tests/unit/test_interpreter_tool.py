@@ -644,4 +644,16 @@ def test_unexpected_exception_is_chained(maude_file: Path) -> None:
     with pytest.raises(MaudeRunError, match="Unexpected failure") as exc_info:
         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
 
+    assert "ValueError: boom" in str(exc_info.value)
+    assert exc_info.value.__cause__ is cause
+
+
+def test_unexpected_exception_without_a_message_names_its_type(maude_file: Path) -> None:
+    cause = RuntimeError()
+    executor = FakeExecutor(exc=cause)
+
+    with pytest.raises(MaudeRunError, match="RuntimeError") as exc_info:
+        _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
+
+    assert str(exc_info.value).endswith("RuntimeError")
     assert exc_info.value.__cause__ is cause

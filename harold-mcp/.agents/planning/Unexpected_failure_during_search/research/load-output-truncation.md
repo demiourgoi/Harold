@@ -4,6 +4,10 @@ Verification of the analysis recorded in `rough-idea.md` after the failure was r
 on the original (less powerful) host. The analysis was supplied by an agent on that host;
 this note separates what is confirmed from what is wrong or unproven.
 
+Status: **fixed** — `capture_streams` now flushes Python and C/C++ stdio while the
+capture descriptors are installed, with unit and integration regressions. The sections
+below record the pre-fix verification and the evidence for the mechanism.
+
 ## Verdict in one paragraph
 
 The **observable** is real and reproducible: a bounded `search` that reaches its bound as
@@ -26,7 +30,7 @@ worker's inherited stdout (the MCP stdio pipe in production). The link to the
 | Unread bytes "desynchronize the session" | **Refuted** for the session: there is no stream reader to desynchronize |
 | The result once surfaced attached to a later step's `stdout` | **Confirmed as a symptom of the same bug**: the leftover buffer is flushed after the capture ends; where it lands depends on timing |
 | The same bug explains subsequent "Unexpected failure" errors | **Unproven**: the generic error is raised only when `executor.run_session` raises a non-`MaudeWorkerError`; buffered output cannot raise inside the session engine |
-| `maude_run` steps are unaffected | **Partly wrong**: step *results* are fine, but step *stdout* uses the same capture and can lose its tail too (our search step's captured stdout was empty and the block leaked) |
+| `maude_run` steps are unaffected | **Correct for textual output**: the bindings' `reduce`/`search` APIs return results programmatically and print nothing, so step stdout is normally empty. Only the load phase executes embedded commands and emits Maude's textual output |
 | "Not performance and not a timeout" | **True for the truncation symptom**; not established for the generic error |
 | Maude model/solution analysis (7 crossings, mirror optimum, 16-state space, no dangerous state) | **Confirmed** and matches our `maude_run` results |
 
@@ -39,7 +43,8 @@ Probes are in `research/probes/` (outside `tests/`, not collected by the normal 
     `==========================================\nsearch [1] in PROBE : a =>* Z:S .\n`.
   - `search [5] ...` and `reduce c .`: complete output captured.
   - `search [1]` followed by a `reduce` step: load output still truncated; the step's
-    captured stdout is empty, and the search block appears on the inherited stdout.
+    captured stdout is empty (the bindings return results programmatically and do not
+    print), and the load-time search block appears on the inherited stdout.
   - five repetitions: truncation every time on this host.
   - `test_f_leftover_flushes_to_inherited_stdout` redirects fd 1 to a private sink,
     runs the session, and finds
@@ -80,7 +85,11 @@ libmaude's print paths, not of Harold's protocol.
 
 ## Impact
 
-- Any phase can lose the tail of its captured stdout (and, in principle, stderr).
+- The **load phase** can lose the tail of its captured stdout; it is the only phase where
+  Maude prints command output (embedded `reduce`/`search` commands in the file). Step
+  commands use the bindings' APIs, which return results programmatically and print
+  nothing, so their stdout is normally empty. stderr warnings emitted during any phase
+  are also subject to buffering, though stderr is usually unbuffered.
 - The lost bytes are not discarded: they are written later to whatever fd 1 points to.
   During a later capture that contaminates that phase's output; outside any capture it
   writes into the worker's inherited stdout, which is the MCP stdio transport. That is
@@ -92,16 +101,14 @@ libmaude's print paths, not of Harold's protocol.
   an exception from `executor.run_session`.
 - `maude_program_diagnostics` uses the same capture helper and has the same exposure.
 
-## Fix direction (for the design phase)
+## Fix (implemented)
 
-- In `capture_streams`, flush the C streams **inside** the capture window, before
+- `capture_streams` flushes Python and C/C++ stdio **inside** the capture window, before
   restoring fds, and on the exception path too:
-  `ctypes.CDLL(None).fflush(None)` (after setting `argtypes`/`restype`). Consider also
-  flushing Python's `sys.stdout`/`sys.stderr` if worker Python code can write there.
-- Add regression tests as regular integration tests:
-  - bounded search as the last command → its result is in `load_output["stdout"]`;
-  - a search step → Maude's textual block is in the step's captured stdout;
-  - run a session with fd 1 redirected to a sink and assert no bytes leak.
+  `ctypes.CDLL(None).fflush(None)` plus `sys.stdout`/`sys.stderr` flushes. A flush
+  failure is suppressed so it cannot mask the phase result or exception.
+- Regression tests: unit C `printf` capture and no-leak cases; an integration fixture
+  whose last command is a bounded search; the load output contains the solution.
 - Keep parsing warnings from the full stderr (the flush makes the tail available before
   truncation).
 

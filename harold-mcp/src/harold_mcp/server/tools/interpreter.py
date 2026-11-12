@@ -14,6 +14,7 @@ from fastmcp.dependencies import Depends
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
+from harold_mcp.logging import get_logger
 from harold_mcp.maude import (
     BindingDict,
     CapturedOutput,
@@ -33,6 +34,8 @@ from harold_mcp.maude import (
 from harold_mcp.server.server import mcp
 from harold_mcp.server.tags import INTERPRETER, harold_tags
 from harold_mcp.settings import Settings, get_settings
+
+_log = get_logger(__name__)
 
 # `maude.Module` theory types: FUNCTIONAL_THEORY, SYSTEM_THEORY, STRATEGY_THEORY and
 # OBJECT_ORIENTED_THEORY. Spelled out because the server process never imports `maude`.
@@ -483,6 +486,17 @@ def _defined_modules_detail(defined_modules: Sequence[str]) -> str:
     return ", ".join(defined_modules) if defined_modules else "none"
 
 
+def _exception_detail(exc: Exception) -> str:
+    """Render an unexpected exception for the tool error message.
+
+    MCP clients see only the `MaudeRunError` text. Without the type and message an
+    unexpected worker failure is indistinguishable from any other, which hides the
+    cause of non-deterministic failures.
+    """
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
 def _to_wire_result(result: SessionResult, path: Path, module: str) -> MaudeRunResult:
     """Reject whole-call failures and adapt a successful session result.
 
@@ -633,7 +647,10 @@ def maude_run(
     except MaudeWorkerError as exc:
         raise MaudeRunError(f"Maude interpreter session failed: {exc.reason}") from exc  # noqa: TRY003
     except Exception as exc:
-        raise MaudeRunError("Unexpected failure running the Maude interpreter session") from exc  # noqa: TRY003
+        _log.exception("Unexpected failure running the Maude interpreter session")
+        raise MaudeRunError(  # noqa: TRY003
+            f"Unexpected failure running the Maude interpreter session: {_exception_detail(exc)}"
+        ) from exc
     return _to_wire_result(result, resolved, module)
 
 

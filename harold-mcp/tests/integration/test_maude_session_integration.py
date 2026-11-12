@@ -157,6 +157,20 @@ def test_embedded_red_output_appears_in_the_load_capture(executor: MaudeExecutor
     assert result["warnings"] == [{"file": "warns_and_prints.maude", "line": 2, "message": "missing is keyword."}]
 
 
+def test_bounded_search_at_the_end_of_the_load_is_captured(executor: MaudeExecutor) -> None:
+    """Regression: libmaude buffers a bounded search that stops at its bound.
+
+    Without the capture flush the result block stays in the C/C++ buffer when the load
+    phase ends, so it is missing from `load_output` and can leak to the worker's stdout.
+    """
+    result = _run(executor, _request("bounded_search_last.maude", "BOUNDED-SEARCH-LAST", []))
+
+    stdout = result["load_output"]["stdout"]
+    assert "search [1] in BOUNDED-SEARCH-LAST : a =>* Z:S ." in stdout
+    assert "Solution 1 (state 0)" in stdout
+    assert "Z:S --> a" in stdout
+
+
 def test_too_large_result_is_an_outcome(executor: MaudeExecutor) -> None:
     result = _run(executor, _request("hello.maude", "HELLO-WORLD", [_reduce("100 * 100")], max_result_length=1))
 

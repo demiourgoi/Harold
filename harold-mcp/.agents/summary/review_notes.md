@@ -245,13 +245,13 @@ heuristic-linter port. Older resolved issues are kept for the record.
     started" although `SearchStep.path`, the worker reconstruction, the fixture and the
     tests are in the tree. Treat the design and implementation plan as the record, or
     update the summary banner.
-12. **An unresolved search failure is under investigation.** The untracked planning record
-    `.agents/planning/Unexpected_failure_during_search/` reproduces a `maude_run` call that
-    fails with the generic "Unexpected failure running the Maude interpreter session"
-    error. The tool wraps any non-`MaudeWorkerError` exception in `MaudeRunError` with the
-    cause chained, but an MCP client sees only the generic message, so the exception type
-    and context are lost on the wire. The root cause is not yet identified; add the
-    exception details to the tool error and a regression test when fixing it.
+12. **The original search failure is still open; its two side issues are fixed.** The
+    untracked planning record `.agents/planning/Unexpected_failure_during_search/`
+    reproduces the missing load output (unflushed libmaude stdio buffers), now fixed with
+    unit and integration regressions. The tool also surfaces non-`MaudeWorkerError`
+    exception details (type and message) and logs the traceback, so an MCP client can
+    diagnose the next occurrence. The generic whole-call error itself has not been
+    reproduced on HEAD; it remains tied to the original (less powerful) host.
 
 ## Completeness gaps
 

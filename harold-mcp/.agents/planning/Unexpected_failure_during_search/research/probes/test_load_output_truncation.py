@@ -7,9 +7,10 @@ outside `tests/`, so the normal test suite does not collect it. Run it explicitl
         .agents/planning/Unexpected_failure_during_search/research/probes/test_load_output_truncation.py \
         -q -s
 
-On the current code, `test_a_bounded_search_last` captures only the search header (the
-solution is flushed after the capture ends) and `test_f_leftover_flushes_to_inherited_stdout`
-shows those bytes on the worker's inherited stdout.
+Before the fix, `test_a_bounded_search_last` captured only the search header (the
+solution was flushed after the capture ended) and `test_f_...` found those bytes on the
+worker's inherited stdout. With the capture flush in place, these probes assert the
+post-fix behavior: the solution is in `load_output` and nothing leaks.
 """
 
 import os
@@ -65,7 +66,10 @@ def _show(label: str, result: SessionResult) -> None:
 
 
 def test_a_bounded_search_last(tmp_path: Path) -> None:
-    _show("search [1] last", _run(_request(_probe(tmp_path, "search [1] a =>* Z:S ."))))
+    result = _run(_request(_probe(tmp_path, "search [1] a =>* Z:S .")))
+    _show("search [1] last", result)
+    assert "Solution 1" in result["load_output"]["stdout"]
+    assert "Z:S --> a" in result["load_output"]["stdout"]
 
 
 def test_b_unreached_bound_last(tmp_path: Path) -> None:
@@ -96,13 +100,11 @@ def test_e_repeat_bounded_search_last(tmp_path: Path) -> None:
     for attempt in range(5):
         result = _run(_request(_probe(tmp_path, "search [1] a =>* Z:S .")))
         captured = result["load_output"]["stdout"]
-        print(
-            f"attempt {attempt}: solution_in_load={'Solution 1' in captured!r} "
-            f"no_more_in_load={'No more solutions.' in captured!r}"
-        )
+        print(f"attempt {attempt}: solution_in_load={'Solution 1' in captured!r}")
+        assert "Solution 1" in captured
 
 
-def test_f_leftover_flushes_to_inherited_stdout(tmp_path: Path) -> None:
+def test_f_no_leftover_flush_to_inherited_stdout(tmp_path: Path) -> None:
     request = _request(_probe(tmp_path, "search [1] a =>* Z:S ."))
     with tempfile.TemporaryFile(mode="w+b") as sink:
         saved_stdout = os.dup(1)
@@ -116,5 +118,5 @@ def test_f_leftover_flushes_to_inherited_stdout(tmp_path: Path) -> None:
         leaked = sink.read().decode("utf-8", errors="replace")
     print(f"\nLEAKED TO INHERITED STDOUT: {leaked!r}")
     print(f"CAPTURED IN LOAD OUTPUT: {result['load_output']['stdout']!r}")
-    assert "Solution 1" in leaked
-    assert "Solution 1" not in result["load_output"]["stdout"]
+    assert "Solution 1" in result["load_output"]["stdout"]
+    assert "Solution 1" not in leaked

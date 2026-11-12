@@ -1,8 +1,12 @@
 # Reproduction — `maude_run` search failure
 
-Status: **cannot reproduce on the current worktree (`main`, `6b7a19f`, `0.0.5.dev0`)**.
-The failure is tied to the build/environment that produced the report, which the
-attached MCP server does not represent.
+Status: **the reported `Unexpected failure running the Maude interpreter session` is not
+reproducible on the current worktree (`main`, `6b7a19f`, `0.0.5.dev0`), but the
+bounded-search output-loss/leak reported by the original host is reproducible
+deterministically.** These are two different symptoms: the whole-call error is still tied
+to the build/environment that produced the report (which the attached MCP server does not
+represent); the output bug is a separate, confirmed defect. The follow-up reproduction
+and mechanism are in `load-output-truncation.md`.
 
 ## Reported call
 
@@ -52,7 +56,10 @@ A temporary integration test built the `SessionRequest` exactly as `_to_request`
 
 ## Results on current HEAD
 
-All variants completed in ~1.4 s total; no exception.
+All variants completed in ~1.4 s total; no exception. The calls succeed, but their
+**captured output is incomplete** — the load and search-step captures lose the tail of
+the last Maude command when it does not flush (see the confirmed defect below and
+`load-output-truncation.md`).
 
 | Variant | Result |
 | --- | --- |
@@ -83,13 +90,18 @@ Consequence: to reproduce through the tool, the server must be restarted or repo
 this checkout. Until then, the reported error can only be attributed to a build this
 session cannot exercise.
 
-## Side observation from the load phase
+## Load-output truncation (confirmed)
 
 Captured load stdout contains the results of the file's first two embedded searches and
 only the header line of the third (`search [1, 10] initial =>* < right | right | right |
 right | H > .` in `SHEPHERD-TRACE`). The same trace search run as a session step returns
-200 solutions promptly. This looks like an output-flush boundary in the captured tail,
-not a failure; worth confirming if load-output fidelity matters to the investigation.
+200 solutions structurally, but its textual block appears after the capture ends (on the
+inherited stdout in our run).
+
+This is not a failure of the session: it is the unflushed libmaude C/C++ stdio buffer in
+`capture_streams`. `load-output-truncation.md` proves it (`fflush(NULL)` inside the
+capture window recovers the complete block) and documents the leak to the worker's
+inherited stdout. It is a real defect, separate from the whole-call error.
 
 ## Open questions for the next research decision
 
