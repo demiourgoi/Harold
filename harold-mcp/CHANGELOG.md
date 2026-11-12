@@ -1,41 +1,11 @@
 # Changelog
 
-## [0.0.6]
-
-Search paths in `maude_run`: every `search` solution can now carry the rewrite path
-that reached it, reconstructed safely at any search depth.
-
-### Added
-
-- **Search paths in `maude_run`** — each `search` step takes `path`: `"labels"`
-  (the default) returns the ordered rule labels of the solution's rewrite path,
-  `"full"` also the full rule text and the intermediate states, and `"none"` omits
-  the path. A path is `{initial, transitions}` where `initial` is the search subject
-  and each transition carries the applied rule (label, and text in `"full"` mode;
-  `null` for an unlabeled rule's label) and, in `"full"` mode, the state it produced
-  (the last state equals the solution's `term`); zero-transition paths (reflexive
-  `=>*`, `=>#`) have an empty `transitions` list. Paths are reconstructed
-  iteratively from the search graph's parent links in the worker, so a deep search
-  reports a bounded `too-large` step outcome instead of failing the call.
-- **`HAROLD_INTERPRETER_MAX_PATH_STEPS`** — new setting (default `100`) bounding
-  the transitions per solution path. A path over that cap, or any path string over
-  `HAROLD_INTERPRETER_MAX_RESULT_LENGTH`, makes the step `too-large` with the limit
-  and a `message` naming the setting to raise.
-
-### Changed
-
-- **`too-large` outcomes name their limit** — every `too-large` step outcome now
-  carries a `message` naming the exceeded setting (`interpreter_max_result_length`,
-  `interpreter_max_path_steps`), so the two equal-valued caps can be told apart.
-  Search solutions that omit `path` now receive the labels path by default; clients
-  that want the previous payload can set `path: "none"`.
-
 ## [0.0.5]
 
 New `maude_run` tool: bounded Maude interpreter sessions — load one file, select a module,
 and run `reduce`, `rewrite`, `frewrite`, `erewrite`, `match` and `search` steps with
-REPL-style threading. A shared stream-capture layer also closes a latent stdout leak in
-the diagnostics worker.
+REPL-style threading, and every `search` solution can carry its rewrite path. A shared
+stream-capture layer also closes a latent stdout leak in the diagnostics worker.
 
 ### Added
 
@@ -63,6 +33,20 @@ the diagnostics worker.
 - **Worker session engine (`harold_mcp.maude.session`)** — the bounded session
   implementation and its worker protocol types, exposed through
   `MaudeExecutor.run_session`.
+- **Search paths in `maude_run`** — each `search` step takes `path`: `"labels"`
+  (the default) returns the ordered rule labels of the solution's rewrite path,
+  `"full"` also the full rule text and the intermediate states, and `"none"` omits
+  the path. A path is `{initial, transitions}` where `initial` is the search subject
+  and each transition carries the applied rule (label, and text in `"full"` mode;
+  `null` for an unlabeled rule's label) and, in `"full"` mode, the state it produced
+  (the last state equals the solution's `term`); zero-transition paths (reflexive
+  `=>*`, `=>#`) have an empty `transitions` list. Paths are reconstructed
+  iteratively from the search graph's parent links in the worker, so a deep search
+  reports a bounded `too-large` step outcome instead of failing the call.
+- **`HAROLD_INTERPRETER_MAX_PATH_STEPS`** — new setting (default `100`) bounding
+  the transitions per solution path. A path over that cap, or any path string over
+  `HAROLD_INTERPRETER_MAX_RESULT_LENGTH`, makes the step `too-large` with the limit
+  and a `message` naming the setting to raise.
 
 ### Changed
 
@@ -78,6 +62,11 @@ the diagnostics worker.
   directory is not the client's.
 - **Concurrent-call wording** — `HAROLD_MAUDE_WORKERS` is documented as the cap on
   concurrent diagnostics and interpreter sessions; workers are still recycled per call.
+- **`too-large` outcomes name their limit** — every `too-large` step outcome now
+  carries a `message` naming the exceeded setting (`interpreter_max_result_length`,
+  `interpreter_max_path_steps`), so the two equal-valued caps can be told apart.
+  Search solutions that omit `path` now receive the labels path by default; clients
+  that want the previous payload can set `path: "none"`.
 
 ### Fixed
 
