@@ -1,0 +1,133 @@
+--- =====================================================================
+--- The Shepherd's River Crossing Problem
+--- ---------------------------------------------------------------------
+--- A shepherd must ferry a cabbage, a dog and a sheep across a river in
+--- a boat that carries the shepherd plus at most one item.
+---
+--- A bank is dangerous when the shepherd is not on it and
+---   * it holds the sheep together with the cabbage (the sheep eats it),
+---   * or it holds the sheep together with the dog (the dog eats it).
+--- The dog has no interest in the cabbage, so {dog, cabbage} is safe.
+--- =====================================================================
+
+
+--- ---------------------------------------------------------------------
+--- Domain: the sides of the river, the cargo, and when a bank is safe.
+--- ---------------------------------------------------------------------
+fmod SHEPHERD-BASE is
+  protecting BOOL .
+
+  sort Side .
+  ops left right : -> Side [ctor] .
+
+  op opposite : Side -> Side .
+  eq opposite(left)  = right .
+  eq opposite(right) = left .
+
+  sort Item .
+  ops cabbage dog sheep : -> Item [ctor] .
+
+  --- safe(S, C, D, Sh): S is the shepherd's bank and C, D, Sh are the
+  --- banks of the cabbage, the dog and the sheep.  A forbidden pair is
+  --- eaten only when the shepherd is away, i.e. when the pair sits on a
+  --- bank other than S.
+  vars S C D Sh : Side .
+  op safe : Side Side Side Side -> Bool .
+  eq safe(S, C, D, Sh) =
+       (not ((C == Sh) and (S =/= C)))    --- sheep alone with cabbage
+    and (not ((D == Sh) and (S =/= D)))   --- dog alone with sheep
+  .
+endfm
+
+
+--- ---------------------------------------------------------------------
+--- The puzzle as a rewrite theory.
+--- State: < shepherd | cabbage | dog | sheep >
+--- ---------------------------------------------------------------------
+mod SHEPHERD is
+  protecting SHEPHERD-BASE .
+
+  sort Conf .
+  op <_|_|_|_> : Side Side Side Side -> Conf [ctor] .
+
+  op initial : -> Conf .
+  eq initial = < left | left | left | left > .
+
+  vars S C D Sh : Side .
+
+  --- The shepherd crosses alone.
+  crl [solo] : < S | C | D | Sh > => < opposite(S) | C | D | Sh >
+    if safe(opposite(S), C, D, Sh) .
+
+  --- ... or takes along the one item that is on his bank.  A crossing is
+  --- allowed only if it leaves both banks safe.
+  crl [carry-cabbage] :
+      < S | C | D | Sh > => < opposite(S) | opposite(S) | D | Sh >
+    if (C == S) /\ safe(opposite(S), opposite(S), D, Sh) .
+
+  crl [carry-dog] :
+      < S | C | D | Sh > => < opposite(S) | C | opposite(S) | Sh >
+    if (D == S) /\ safe(opposite(S), C, opposite(S), Sh) .
+
+  crl [carry-sheep] :
+      < S | C | D | Sh > => < opposite(S) | C | D | opposite(S) >
+    if (Sh == S) /\ safe(opposite(S), C, D, opposite(S)) .
+endm
+
+
+--- Is the goal reachable?  Maude answers with the shortest run (7 crossings).
+search [1] initial =>* < right | right | right | right > .
+
+--- Safety check: no reachable state is dangerous.  The state space has
+--- only 2^4 = 16 states, so this search is exhaustive and terminates.
+search initial =>* < S | C | D | Sh > such that not safe(S, C, D, Sh) .
+
+
+--- ---------------------------------------------------------------------
+--- The same system, but recording every crossing so that Maude can print
+--- the solution itself.
+--- State: < shepherd | cabbage | dog | sheep | crossings-so-far >
+--- ---------------------------------------------------------------------
+mod SHEPHERD-TRACE is
+  protecting SHEPHERD-BASE .
+
+  --- The crossings, kept oldest first.
+  sort Move .
+  ops solo carry-cabbage carry-dog carry-sheep : -> Move [ctor] .
+
+  sort History .
+  op start : -> History [ctor] .
+  op _then_ : History Move -> History [ctor] .
+
+  sort Conf .
+  op <_|_|_|_|_> : Side Side Side Side History -> Conf [ctor] .
+
+  op initial : -> Conf .
+  eq initial = < left | left | left | left | start > .
+
+  vars S C D Sh : Side .
+  var H : History .
+
+  crl [solo] :
+      < S | C | D | Sh | H > => < opposite(S) | C | D | Sh | H then solo >
+    if safe(opposite(S), C, D, Sh) .
+
+  crl [carry-cabbage] :
+      < S | C | D | Sh | H >
+      => < opposite(S) | opposite(S) | D | Sh | H then carry-cabbage >
+    if (C == S) /\ safe(opposite(S), opposite(S), D, Sh) .
+
+  crl [carry-dog] :
+      < S | C | D | Sh | H >
+      => < opposite(S) | C | opposite(S) | Sh | H then carry-dog >
+    if (D == S) /\ safe(opposite(S), C, opposite(S), Sh) .
+
+  crl [carry-sheep] :
+      < S | C | D | Sh | H >
+      => < opposite(S) | C | D | opposite(S) | H then carry-sheep >
+    if (Sh == S) /\ safe(opposite(S), C, D, opposite(S)) .
+endm
+
+--- The solution: the shortest run that ends with everybody on the right
+--- bank, with the crossing log returned as part of the answer.
+search [1, 10] initial =>* < right | right | right | right | H > .

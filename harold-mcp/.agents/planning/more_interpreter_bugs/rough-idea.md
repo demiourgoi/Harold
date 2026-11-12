@@ -13,6 +13,8 @@ The first reproduction attempt was done on .agents/planning/Unexpected_failure_d
 
 Specifically .agents/planning/more_interpreter_bugs/reproduction_attempt-3.diff is the uncommitted changes on top of commit fbff888, after .agents/planning/more_interpreter_bugs/reproduction_attempt-3.md
 
+Also, consider if using a pool with several process is actual a bad idea, because the failure of one process leads to crashing all the other process in the pool. Maybe using several pools with 1 process is a better idea, so we have the managed communication with the subprocess and subprocess lifecyle, but we improve the isolation between processes. Another option is replacing https://docs.python.org/3/library/multiprocessing.html#multiprocessing.pool.Pool with https://pebble.readthedocs.io/en/latest/#pebble-processpool. pebble's docs state worker restart/transparent crash handling (https://pebble.readthedocs.io/en/latest/), while the stdlib docs state the whole-pool-broken failure mode (https://docs.python.org/3/library/concurrent.futures.html#processpoolexecutor). No single doc asserts both. See more in https://github.com/noxdafox/pebble
+
 Please see .agents/summary/index.md for an introduction to this codebase
 
 We have to 

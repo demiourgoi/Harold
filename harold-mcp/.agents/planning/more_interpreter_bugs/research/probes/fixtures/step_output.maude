@@ -1,0 +1,12 @@
+--- Fixture for step-output capture probes.
+---
+--- The file ends with a bounded search that reaches its bound: Maude prints no
+--- "No more solutions." terminator for it (the previous PDD's load-capture bug).
+mod STEPS is
+  sort S .
+  ops a b c : -> S [ctor] .
+  rl [ab] : a => b .
+  rl [bc] : b => c .
+endm
+
+search [1] a =>* Z:S .

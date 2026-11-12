@@ -1,0 +1,25 @@
+--- Fixture for the pool/cascade probes (modules LOOP and SLOW).
+--- Non-terminating rewrite (iterative: grows the term one layer per rule step).
+mod LOOP is
+  sort S .
+  op a : -> S [ctor] .
+  op f : S -> S .
+  var X : S .
+  rl [step] : f(X) => f(f(X)) .
+endm
+
+fmod SLOW is
+  protecting NAT .
+  op count : Nat -> Nat .
+  var N : Nat .
+  eq count(0) = 0 .
+  eq count(s(N)) = count(N) .
+endfm
+
+--- Finite but constant-memory: one rewrite per successor step, stops at M.
+mod SPIN is
+  protecting NAT .
+  op spin : Nat Nat -> Nat .
+  vars N M : Nat .
+  crl [spin] : spin(N, M) => spin(N + 1, M) if N =/= M .
+endm
