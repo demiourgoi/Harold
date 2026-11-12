@@ -81,8 +81,9 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
   transport. This closes the remaining case behind the "no stdout leak" fix above.
 - **Diagnosable unexpected failures** — a non-`MaudeWorkerError` from `maude_run` now
   reports the exception type and message in the client-visible `MaudeRunError` (the cause
-  stays chained) and logs the traceback server-side, instead of returning only the
-  generic "Unexpected failure running the Maude interpreter session" text.
+  stays chained) and logs the traceback, with the file and module, server-side, instead
+  of returning only the generic "Unexpected failure running the Maude interpreter
+  session" text.
 
 ### General fixes
 

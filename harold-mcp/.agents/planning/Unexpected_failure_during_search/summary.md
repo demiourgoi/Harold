@@ -36,11 +36,15 @@ is what will make the next occurrence diagnosable there.
   before restoring the descriptors.
 - `src/harold_mcp/server/tools/interpreter.py`: `_exception_detail()` appends the
   exception type and message to the generic `MaudeRunError`; the traceback is logged
-  with the module logger; the cause stays chained.
+  with the module logger together with the resolved path and module; the cause stays
+  chained.
 - Tests:
   - unit: buffered C output is captured and does not leak to a stdout sink;
-  - unit: unexpected exception text includes `ValueError: boom`, and an empty-message
-    exception surfaces its type;
+  - unit: failing Python and libc flushes are suppressed, leaving the phase result and
+    captured output unchanged;
+  - unit: unexpected exception text includes `ValueError: boom`, the empty-message case
+    surfaces its type, and the recording logger sees the traceback call with the
+    path/module arguments;
   - integration: a fixture ending in a bounded search reports the solution in
     `load_output`.
 - `CHANGELOG.md`: two Fixed entries under `[0.0.5]` (the release is still unreleased, so
@@ -51,9 +55,11 @@ is what will make the next occurrence diagnosable there.
 ## Validation
 
 - `make check`: lockfile, ruff, format, mypy, basedpyright and deptry all pass.
-- `make test`: **358 passed**.
+- `make test`: **360 passed**.
 - Research probes (outside the suite): 7 passed after the fix; complete load output,
   empty inherited stdout.
+- Review feedback `pdd_review-1` applied for findings 2-4; finding 1 (knowledge base
+  refresh) was deferred at the user's request.
 
 ## Artifacts
 
@@ -64,6 +70,8 @@ is what will make the next occurrence diagnosable there.
 - `research/probes/` — executable evidence (load truncation; flush recovery).
 - `design/detailed-design.md` — standalone design.
 - `implementation/plan.md` — steps, tests and implementation notes with deviations.
+- `pdd_review-1.md` — review of the PDD and implementation; findings 2-4 applied,
+  finding 1 deferred to the knowledge-base refresh.
 
 ## Next steps
 

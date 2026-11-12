@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
+import harold_mcp.server.tools.interpreter as interpreter_module
 from harold_mcp.maude import MaudeWorkerTimeoutError
 from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict
 from harold_mcp.server.tools.interpreter import (
@@ -39,6 +40,16 @@ class FakeExecutor:
         if self.exc is not None:
             raise self.exc
         return self.result
+
+
+class _RecordingLogger:
+    """Capture `exception` calls instead of emitting them to the test log."""
+
+    def __init__(self) -> None:
+        self.exceptions: list[tuple[str, tuple[object, ...]]] = []
+
+    def exception(self, message: str, *args: object) -> None:
+        self.exceptions.append((message, args))
 
 
 def _session_result(**overrides: Any) -> SessionResult:
@@ -637,7 +648,9 @@ def test_worker_error_is_chained(maude_file: Path) -> None:
     assert exc_info.value.__cause__ is cause
 
 
-def test_unexpected_exception_is_chained(maude_file: Path) -> None:
+def test_unexpected_exception_is_chained(maude_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logger = _RecordingLogger()
+    monkeypatch.setattr(interpreter_module, "_log", logger)
     cause = ValueError("boom")
     executor = FakeExecutor(exc=cause)
 
@@ -646,6 +659,12 @@ def test_unexpected_exception_is_chained(maude_file: Path) -> None:
 
     assert "ValueError: boom" in str(exc_info.value)
     assert exc_info.value.__cause__ is cause
+    assert logger.exceptions == [
+        (
+            "Unexpected failure running the Maude interpreter session for %s (module %s)",
+            (maude_file.resolve(), "M"),
+        )
+    ]
 
 
 def test_unexpected_exception_without_a_message_names_its_type(maude_file: Path) -> None:

@@ -38,7 +38,8 @@ the exception type and message in the wire error while logging the traceback.
   output gain content.
 - **R5 — Diagnosable errors.** A non-`MaudeWorkerError` exception from the executor must
   produce a `MaudeRunError` whose text includes the exception type and message and whose
-  `__cause__` is the original exception. The server must log the traceback.
+  `__cause__` is the original exception. The server must log the traceback with the
+  request path and module.
 - **R6 — Regression tests.** Unit tests must cover buffered C output and the no-leak
   property; an integration test must cover the bounded-search-at-end-of-load case; the
   error tests must assert the surfaced details.
@@ -96,7 +97,9 @@ sequenceDiagram
 - New private helper `_exception_detail(exc)`:
   - returns `"TypeName: message"`, or `"TypeName"` when the message is empty.
 - The generic `except Exception` branch:
-  - logs the exception with traceback via the module logger (`get_logger(__name__)`);
+  - logs the exception with traceback via the module logger (`get_logger(__name__)`),
+    including the resolved request path and module so the log line can be correlated
+    with the client call;
   - raises `MaudeRunError("Unexpected failure running the Maude interpreter session: "
     "<detail>") from exc`;
   - leaves the `MaudeWorkerError` branch (crash/timeout) unchanged.
@@ -144,9 +147,12 @@ Test-driven, smallest first:
 
 1. Unit test for buffered C output (fails before `_flush_stdio`, passes after).
 2. Unit test for the no-leak property.
-3. Integration test for a bounded search at the end of a load (fails before the fix).
-4. Unit tests for the error text, including the empty-message case.
-5. Full suite (`make test`) plus static checks (`make check`); the research probes under
+3. Unit tests that make the Python and libc flushes raise and assert the phase result and
+   captured output are unchanged (the R3 suppression contract).
+4. Integration test for a bounded search at the end of a load (fails before the fix).
+5. Unit tests for the error text, including the empty-message case, plus a recording
+   logger that asserts the ERROR log call and its path/module arguments.
+6. Full suite (`make test`) plus static checks (`make check`); the research probes under
    the planning record are kept as executable evidence and updated to assert post-fix
    behavior.
 

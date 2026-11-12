@@ -647,7 +647,11 @@ def maude_run(
     except MaudeWorkerError as exc:
         raise MaudeRunError(f"Maude interpreter session failed: {exc.reason}") from exc  # noqa: TRY003
     except Exception as exc:
-        _log.exception("Unexpected failure running the Maude interpreter session")
+        _log.exception(
+            "Unexpected failure running the Maude interpreter session for %s (module %s)",
+            resolved,
+            module,
+        )
         raise MaudeRunError(  # noqa: TRY003
             f"Unexpected failure running the Maude interpreter session: {_exception_detail(exc)}"
         ) from exc

@@ -54,9 +54,14 @@ cannot raise inside `executor.run_session`. The generic text still requires a no
   `MaudeRunError("Unexpected failure running the Maude interpreter session: <detail>")`
   and keeps `from exc`.
 - `get_logger(__name__).exception(...)` logs the traceback (including the remote worker
-  traceback that `concurrent.futures` attaches) to the server log before raising.
-  This is separate from the worker capture: it runs in the server process on stderr.
-- Tests extend the existing chaining test and cover the empty-message case.
+  traceback that `concurrent.futures` attaches) to the server log before raising,
+  together with the request path and module so the log line can be correlated with the
+  client call. This runs in the server process on stderr, separate from the worker
+  capture.
+- Tests extend the existing chaining test with a recording logger that asserts the
+  ERROR log call and its path/module arguments. The capture fix's flush-failure
+  suppression is covered by unit tests that make the Python and libc flushes raise and
+  check that the phase result and captured output are unchanged.
 
 ## What this does and does not solve
 

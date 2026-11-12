@@ -9,9 +9,11 @@ stream objects.
 import ctypes
 import os
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 
+from harold_mcp.maude import capture as capture_module
 from harold_mcp.maude.capture import (
     TRUNCATION_MARKER,
     capture_streams,
@@ -121,6 +123,40 @@ def test_capture_streams_does_not_leak_buffered_c_output() -> None:
         leaked = sink.read()
 
     assert leaked == b""
+
+
+class _FailingStream:
+    def flush(self) -> None:
+        raise OSError("flush failed")  # noqa: TRY003
+
+
+def _phase_writing_to_streams() -> int:
+    _write_to_streams(b"out\n", b"err\n")
+    return 42
+
+
+def test_capture_streams_suppresses_python_flush_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing Python flush must not replace the phase result (design R3)."""
+    monkeypatch.setattr(capture_module, "sys", SimpleNamespace(stdout=_FailingStream(), stderr=_FailingStream()))
+
+    result, captured = capture_streams(_phase_writing_to_streams)
+
+    assert result == 42
+    assert captured == {"stdout": "out\n", "stderr": "err\n"}
+
+
+def test_capture_streams_suppresses_c_flush_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing libc flush must not replace the phase result (design R3)."""
+
+    def failing_cdll(_: str | None) -> None:
+        raise OSError("libc unavailable")  # noqa: TRY003
+
+    monkeypatch.setattr(capture_module.ctypes, "CDLL", failing_cdll)
+
+    result, captured = capture_streams(_phase_writing_to_streams)
+
+    assert result == 42
+    assert captured == {"stdout": "out\n", "stderr": "err\n"}
 
 
 def test_strip_ansi_leaves_plain_text_untouched() -> None:

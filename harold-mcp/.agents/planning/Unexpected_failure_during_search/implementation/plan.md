@@ -36,7 +36,9 @@ signature and return shape unchanged.
 
 **Tests.** Write the failing unit test first: call C `printf` for text without a newline
 inside `capture_streams` and assert it is captured. Add the companion test that the same
-bytes do not reach a stdout sink after the capture.
+bytes do not reach a stdout sink after the capture. Add suppression tests for a failing
+Python flush and a failing libc flush: the phase result and captured output must still
+come back unchanged.
 
 **Integration.** No other module changes are needed; `maude.load` and the session engine
 call the helper through the existing interface.
@@ -48,7 +50,8 @@ including the C-buffer and no-leak cases.
 then `ctypes.CDLL(None).fflush(None)` with explicit `argtypes`/`restype`; failures are
 suppressed. The helper is called before the redirect and again in the `finally` before
 restoring fds. basedpyright's unused-call-result rule required `_ =` on the Python
-flushes. The new unit tests pass, and the existing capture tests are unchanged.
+flushes. The new unit tests pass, including the C-buffer, no-leak and both flush-failure
+suppression cases, and the existing capture tests are unchanged.
 
 ## Step 2: Integration regression for a bounded search at the end of a load
 
@@ -85,11 +88,13 @@ the server log.
 
 **Guidance.** Render the exception as `TypeName: message` (or `TypeName` when the
 message is empty), include it in the existing `Unexpected failure ...` message, keep the
-original exception chained, and log the traceback with the module logger before raising.
-Leave the `MaudeWorkerError` branch untouched.
+original exception chained, and log the traceback with the module logger before raising,
+including the resolved request path and module. Leave the `MaudeWorkerError` branch
+untouched.
 
 **Tests.** Extend the existing chaining test to assert `ValueError: boom` appears in the
 message; add a test for an empty-message exception that asserts only the type appears.
+Use a recording logger to assert the ERROR log call and its path/module arguments.
 
 **Integration.** The tool boundary is unchanged for expected failures; the new text is
 the only wire-visible difference.
@@ -97,9 +102,11 @@ the only wire-visible difference.
 **Demo.** `uv run python -m pytest tests/unit/test_interpreter_tool.py -q` passes.
 
 **Implementation notes.** Added `_exception_detail`, the module-level logger, and
-`_log.exception(...)` in the generic branch. The message now appends the detail and the
-cause remains chained. Both new assertions pass. Logging runs in the server process on
-stderr; it does not interact with the worker capture.
+`_log.exception(...)` in the generic branch with the resolved path and module. The
+client message appends the detail and the cause remains chained. The chaining test now
+uses a recording logger and asserts both the wire text and the log call; the
+empty-message test passes. Logging runs in the server process on stderr; it does not
+interact with the worker capture.
 
 ## Step 4: Full validation, changelog and planning records
 
@@ -116,9 +123,23 @@ notes. Do not bump the version: the changes belong to the unreleased `0.0.5` sec
 **Demo.** `make check` and `make test` both succeed.
 
 **Implementation notes.** `make check` passes (lockfile, ruff, format, mypy,
-basedpyright, deptry). `make test` passes: 358 tests. The changelog has two Fixed
+basedpyright, deptry). `make test` passes: 360 tests. The changelog has two Fixed
 entries. The research probes were updated to assert post-fix behavior and pass when run
 explicitly (7 passed; complete load output, empty inherited stdout). No version bump was
 made because `0.0.5` is not released yet. Remaining follow-up: reproduce the original
 generic failure on the slower host now that the error text and traceback are available,
 and refresh the committed knowledge base.
+
+## Review feedback applied (`pdd_review-1`)
+
+- **Finding 2 (flush-failure suppression had no test).** Added
+  `test_capture_streams_suppresses_python_flush_failures` and
+  `test_capture_streams_suppresses_c_flush_failures`; both assert the phase result and
+  captured output are unchanged.
+- **Finding 3 (traceback logging was not asserted).** The existing chaining test now
+  replaces the module logger with a recording logger and asserts one ERROR record for
+  the unexpected failure.
+- **Finding 4 (no request context in the log line).** The log call now includes the
+  resolved path and module, and the recording logger test asserts both arguments.
+- **Finding 1 (knowledge base refresh)** was deferred at the user's request; the user
+  will run the codebase-summary refresh.
