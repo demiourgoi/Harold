@@ -95,8 +95,10 @@ Yes, always. `harold_mcp.maude.worker.init_maude` is the worker-pool initializer
 - Capture scope: the fd capture in `load_diagnostics` and in `session.run_session` wraps
   only the `maude.load`/term work, through the shared `maude/capture.py` helper (both fds);
   anything the prelude prints while loading at init is outside the tool results. The
-  diagnostics tool parses the captured stderr and discards the captured stdout; `maude_run`
-  returns both streams per phase.
+  helper flushes Python and libmaude's C/C++ stdio while the capture fds are still in
+  place, so a phase's tail (e.g. a bounded search ending a load) is captured rather than
+  leaking to the worker's inherited stdout. The diagnostics tool parses the captured
+  stderr and discards the captured stdout; `maude_run` returns both streams per phase.
 
 ## `MAUDE_LIB` and version matching
 

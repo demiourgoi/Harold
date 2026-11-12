@@ -15,8 +15,8 @@
 
 The diagnostics seam, the heuristic linter and the interpreter-session engine added **no**
 runtime dependencies: they are stdlib-only (`dataclasses`, `typing`, `functools`, `re`,
-`unicodedata`, `hashlib`, `importlib`, `datetime`, `collections`, `os`, `tempfile`),
-which keeps the server process independent of the worker stack.
+`unicodedata`, `hashlib`, `importlib`, `datetime`, `collections`, `contextlib`, `ctypes`,
+`os`, `sys`, `tempfile`), which keeps the server process independent of the worker stack.
 
 ## Dev group
 

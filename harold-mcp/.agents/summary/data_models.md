@@ -49,7 +49,7 @@ The result models:
 
 | Model | Field | Type | Notes |
 | --- | --- | --- | --- |
-| `MaudeCapturedOutput` | `stdout` / `stderr` | `str` | ANSI-stripped; each stream capped separately |
+| `MaudeCapturedOutput` | `stdout` / `stderr` | `str` | ANSI-stripped; each stream capped separately; complete up to the cap (the capture flushes C/C++ stdio before restoring the fds) |
 | `MaudeLoadWarning` | `file` / `line` / `message` | `str` / `int` / `str` | as Maude reported it (dependency or `<standard input>` included) |
 | `MaudeLoadInfo` | `warnings`, `output` | `list[MaudeLoadWarning]`, `MaudeCapturedOutput` | load phase only |
 | `MaudeBinding` | `variable` / `value` | `str` / `str` | one substitution pair |
@@ -144,7 +144,9 @@ Defined in `harold_mcp.maude.capture`, `harold_mcp.maude.worker` and
   dependency, or `<standard input>` for some first-line warnings); the provider uses it to
   attribute the warning instead of pinning everything on the diagnosed file.
 - `CapturedOutput` (`capture.py`) — `{stdout: str, stderr: str}`, ANSI-stripped and
-  decoded lossily.
+  decoded lossily. `capture_streams` flushes Python and libmaude's C/C++ stream buffers
+  while the capture fds are still in place, so the captured text includes output Maude had
+  not flushed (e.g. a bounded search ending a load).
 - `LoadDiagnosticsResult` (`worker.py`) — `{ok: bool, warnings: list[WarningDict]}`. `ok`
   is the `maude.load` return value: `True` for every parseable input (Maude recovers from
   arbitrary garbage), `False` for missing files / unrecoverable parse failures.
@@ -189,7 +191,7 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 
 | Type | Base | Attributes | Raised by |
 | --- | --- | --- | --- |
-| `MaudeRunError` | `RuntimeError` | — | whole-call failure of `maude_run`; the `MaudeWorkerError` cause is chained |
+| `MaudeRunError` | `RuntimeError` | — | whole-call failure of `maude_run`; the `MaudeWorkerError` cause is chained, and an unexpected non-worker exception contributes its type and message to the text |
 
 `MaudeFileNotFoundError` no longer exists (removed in 0.0.4): the diagnostics tool's input
 error is `SourceFileNotFoundError`, because a missing file is a diagnostics-tool concern,

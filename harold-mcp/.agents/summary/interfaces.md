@@ -83,7 +83,10 @@
     - Load warnings do not stop evaluation (use `maude_program_diagnostics` for a full
       diagnosis). Whole-call failures raise `MaudeRunError`: missing/unreadable path, load
       failure, module not defined (the message lists the modules the load defined), a
-      theory module, or a worker crash/timeout (the `MaudeWorkerError` is chained).
+      theory module, or a worker crash/timeout (the `MaudeWorkerError` is chained). An
+      unexpected non-worker exception is reported with its type and message appended
+      (`ValueError: boom`, or the bare type when it has no message) and logged with a
+      traceback server-side; the original exception stays chained.
     - All caps come from settings (step count, rewrite bound, solutions, term/result/
       output length, search-path transitions); `timeout_secs` overrides
       `HAROLD_INTERPRETER_TIMEOUT_SECS`. The timeout covers interpreter startup and is
@@ -224,6 +227,9 @@ Invalid values fail fast at import (pydantic validation).
   - `_run_task(fn, *args, timeout) -> T` — generic submit-and-await runner for worker ops.
 - `harold_mcp.maude.capture` — worker-side capture helpers: `capture_streams`,
   `parse_warnings`, `strip_ansi`, `truncate_output`, `WarningDict`, `CapturedOutput`.
+  `capture_streams` flushes Python and C/C++ stdio buffers before the redirect and again
+  before restoring the descriptors (`_flush_stdio`; libmaude writes through C++ streams),
+  suppressing flush failures so the phase result is never altered.
 - `harold_mcp.maude.session` — the bounded session engine and protocol: `run_session`,
   `CommandName`, `StepStatus`, `StepRequest`, `SessionRequest`, `BindingDict`,
   `PathRuleDict`, `PathTransitionDict`, `PathDict`, `SolutionDict`, `StepOutcomeDict`,

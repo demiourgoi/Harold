@@ -2,9 +2,11 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-11-12 refresh covers
-search paths in `maude_run` (`SearchStep.path`, worker `path_mode`/`max_path_steps`,
-`MaudeSearchPath`, the new setting, tests and fixture, and the README/CHANGELOG updates);
+Findings from the consistency and completeness review. The 2026-11-12 refresh has two
+parts: capture completeness plus failure surfacing (the stdio flush in `capture_streams`
+and detailed `maude_run` unexpected-failure messages), and search paths in `maude_run`
+(`SearchStep.path`, worker `path_mode`/`max_path_steps`, `MaudeSearchPath`, the new
+setting, tests and fixture, and the README/CHANGELOG updates);
 the 2026-10-28 refresh covers the `maude_run` interpreter-session tool (new
 `maude/session.py`, `maude/capture.py`, `server/tools/interpreter.py`, new settings, tests
 and docs); the 2026-10-14 refresh covers the provider-registry FastMCP dependency; the
@@ -13,7 +15,43 @@ interpreters, the new workers default, dependency-warning attribution, path
 absolutization, and the test-suite rework); the 2026-09-29 refresh covered the
 heuristic-linter port. Older resolved issues are kept for the record.
 
-## Changes absorbed into this refresh (2026-11-12)
+## Changes absorbed into this refresh (2026-11-12, capture flush and failure surfacing)
+
+- **Complete captured output.** `maude/capture.py` gained `_flush_stdio()`: it flushes
+  Python's `sys.stdout`/`sys.stderr` and the C/C++ stdio buffer (`libc.fflush(NULL)` via
+  `ctypes`), suppressing every failure so flushing can never change a phase result. It
+  runs before the fd redirect (keeping pre-existing buffered bytes out of the capture) and
+  in the `finally` while the capture fds are still in place. Without the final flush,
+  libmaude's independently buffered output was restored to the real fds before being
+  written: a load whose last command is a bounded `search` that stops at its bound lost
+  that result block, and the bytes could surface in a later phase or on the worker's
+  inherited stdout (the MCP stdio transport).
+- **Diagnosable unexpected failures.** A non-`MaudeWorkerError` from the worker now reaches
+  the client as `MaudeRunError` with the exception type and message appended
+  (`_exception_detail`; an empty message yields just the type). The tool logs the
+  traceback server-side with the resolved path and module, and keeps the original
+  exception as `__cause__`.
+- **Tests and fixtures.** Unit tests pin the C-buffer flush (buffered output captured and
+  not leaked to the restored stdout) and the suppression of failing Python/libc flushes;
+  `test_interpreter_tool.py` asserts the `ValueError: boom` / bare-type message and the
+  logging call. The integration fixture `bounded_search_last.maude` plus
+  `test_bounded_search_at_the_end_of_the_load_is_captured` cover the original tail-loss
+  case against the real interpreter.
+- **Planning record.** `.agents/planning/Unexpected_failure_during_search/` is now a
+  tracked, complete PDD cycle (`rough-idea.md`, `research/` incl. executable probes,
+  `design/`, `implementation/plan.md`, `pdd_review-1.md`, `summary.md`). It confirms the
+  flush defect, records that the generic whole-call error was not reproduced on this
+  checkout, and documents the two fixes above. Its `summary.md` item 2 (this refresh) is
+  now done; the original failure remains open pending reproduction on the original host.
+- **Changelog.** Two `Fixed` entries under `[0.0.5]` record complete captured output and
+  diagnosable unexpected failures. The version stays `0.0.5.dev0` (the release is still
+  unreleased).
+- **Docs consistency.** This refresh updates `codebase_info.md`, `architecture.md`,
+  `components.md`, `interfaces.md`, `data_models.md`, `workflows.md`, `dependencies.md`
+  (stdlib list gains `contextlib`/`ctypes`/`sys`) and `maude-lib.md` (capture scope), plus
+  `AGENTS.md`; no other knowledge-base file changed.
+
+## Changes absorbed into this refresh (2026-11-12, search paths)
 
 - **Search paths in `maude_run`.** `SearchStep.path` (`"none" | "labels" | "full"`,
   default `"labels"`) is exposed through the tool; solutions now carry
@@ -37,7 +75,7 @@ heuristic-linter port. Older resolved issues are kept for the record.
   `UNLABELED`, `CHAIN`, `BRANCH`); unit tests cover the path contract, fake iterators and
   adapter; integration tests cover labels/full/none, zero-transition paths, unlabeled
   rules, per-solution laziness, `max_solutions=1`, exact and over-cap paths, deep
-  1500-step searches, and the end-to-end tool path; 30 fixtures total.
+  1500-step searches, and the end-to-end tool path.
 - **Docs and planning.** `README.md` and `CHANGELOG.md` already documented the feature;
   this refresh brings the knowledge base and `AGENTS.md` in line. The
   `.agents/planning/maude_eval_search_path/` PDD record contains the requirements,
@@ -72,8 +110,8 @@ heuristic-linter port. Older resolved issues are kept for the record.
   `settings.diagnostics_timeout_secs` to `start()`. The pool remains shared, fresh per task.
 - **Tests and fixtures.** New unit suites `test_maude_capture.py` and
   `test_interpreter_tool.py`; new integration suites `test_maude_session_integration.py`
-  and `test_maude_run_integration.py`; 3 new fixtures (`counter.maude`,
-  `assoc_match.maude`, `warns_and_prints.maude`), 29 total. `test_maude_worker.py` now
+  and `test_maude_run_integration.py`; new fixtures (`counter.maude`,
+  `assoc_match.maude`, `warns_and_prints.maude`). `test_maude_worker.py` now
   covers stderr-only warning parsing.
 - **Docs and planning.** `docs/modules.md` renders the three new modules; the knowledge
   base adds this material. `port-repair.py/` is a new early planning record (no code yet).
@@ -128,7 +166,7 @@ heuristic-linter port. Older resolved issues are kept for the record.
   warnings to whole-file diagnostics naming the dependency and suggesting this tool
   (`_to_diagnostic` / `_dependency_message`).
 - **Integration suite rework** — new isolation/race/dependency regression tests and
-  9 new fixtures (26 total); the `heuristic_executor` workaround is gone;
+  new fixtures; the `heuristic_executor` workaround is gone;
   `test_maude_executor_integration.py` keeps only real concurrency (via the
   `rendezvous_pid` marker helper, replacing interval witnesses that flaked under xdist);
   `test_mcp_smoke` kills the server if the graceful SIGTERM exit exceeds 15 s under
@@ -246,7 +284,7 @@ heuristic-linter port. Older resolved issues are kept for the record.
     tests are in the tree. Treat the design and implementation plan as the record, or
     update the summary banner.
 12. **The original search failure is still open; its two side issues are fixed.** The
-    untracked planning record `.agents/planning/Unexpected_failure_during_search/`
+    planning record `.agents/planning/Unexpected_failure_during_search/`
     reproduces the missing load output (unflushed libmaude stdio buffers), now fixed with
     unit and integration regressions. The tool also surfaces non-`MaudeWorkerError`
     exception details (type and message) and logs the traceback, so an MCP client can
@@ -267,7 +305,8 @@ heuristic-linter port. Older resolved issues are kept for the record.
    input, `skipped:`/`unable to locate file:` formats and the `(fmod X) :` spelling are
    pinned; `<standard input>` warnings are attributed to the diagnosed file; multi-line
    Maude warning messages are still not exercised (none observed). The capture helper now
-   handles both streams; diagnostics intentionally ignores stdout.
+   handles both streams and flushes C/C++ stdio before restoring the fds; the bounded-search
+   regression pins the previously lost tail, and diagnostics intentionally ignores stdout.
 4. **The server CLI wiring is untested.** `main.py` (cyclopts app, `serve` subcommand,
    default command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
    The snapshot CLI, by contrast, has in-process tests in
@@ -288,12 +327,14 @@ heuristic-linter port. Older resolved issues are kept for the record.
 ## Recommendations
 
 1. Keep `.agents/planning/` notes in sync with implementations — the diagnostics tool, the
-   linter port, `maude_run` and the search-path feature followed their PDD cycles; future
-   tools should follow the same process (`port-repair.py/` is the next candidate). Update
-   stale status banners (`maude_eval_search_path/summary.md`).
+   linter port, `maude_run`, the search-path feature and the capture-flush/failure-surfacing
+   fixes followed their PDD cycles; future tools should follow the same process
+   (`port-repair.py/` is the next candidate). Update stale status banners
+   (`maude_eval_search_path/summary.md`).
 2. Add real tests as tools are implemented, and keep `docs/modules.md` current.
 3. Re-run the codebase-summary process after significant architecture changes so this
    knowledge base does not drift from the code.
-4. The `[0.0.5]` changelog now records `maude_run`, search paths, the shared capture layer
-   and the settings rename; review those notes before tagging, and resolve or archive the
-   untracked `Unexpected_failure_during_search/` investigation.
+4. The `[0.0.5]` changelog now records `maude_run`, search paths, the shared capture layer,
+   the capture flush and diagnosable unexpected failures; review those notes before
+   tagging. The `Unexpected_failure_during_search/` investigation is tracked and its two
+   side issues are fixed; archive it or retry the original call on its host to close it.

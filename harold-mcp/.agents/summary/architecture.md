@@ -59,7 +59,7 @@ graph TB
     maudepkg --> executor[maude/executor.py<br>MaudeExecutor client]
     executor --> worker[maude/worker.py<br>worker-side ops]
     executor --> session[maude/session.py<br>bounded session engine]
-    worker --> capture[maude/capture.py<br>fd 1/2 capture + warning parser]
+    worker --> capture[maude/capture.py<br>fd 1/2 capture + flush + warning parser]
     session --> capture
     executor --> settings[settings.py<br>pydantic-settings]
     worker -->|only inside worker process| bindings[maude bindings<br>SWIG external package]
@@ -173,7 +173,10 @@ graph TB
     to pydantic wire models. Load warnings are data (evaluation proceeds); per-step
     failures (`parse-error`, `too-large`) are outcomes and stop the run, while a missing
     path, load failure, undefined module, theory module or worker failure fails the whole
-    call with `MaudeRunError`. Steps thread a current term REPL-style: rewriting commands
+    call with `MaudeRunError`. An unexpected non-`MaudeWorkerError` is reported with its
+    exception type and message (the cause stays chained) and its traceback is logged with
+    the resolved path and module, so a non-deterministic failure is diagnosable from the
+    client and the server log. Steps thread a current term REPL-style: rewriting commands
     replace it, `match`/`search` leave it unchanged. Search steps can attach the rewrite
     path to each solution (`path="labels"`, the default; `"full"` adds rule text and
     intermediate states; `"none"` skips path work). All caps are settings (see decision
@@ -182,7 +185,16 @@ graph TB
     files, not pipes), ANSI stripping, lossy UTF-8 decoding, warning parsing and output
     truncation. `worker.load_diagnostics` uses it to parse warnings (stdout is discarded,
     which keeps embedded `red` output away from the MCP transport); `session.run_session`
-    uses it for both the load and every step (both streams are returned).
+    uses it for both the load and every step (both streams are returned). Because
+    libmaude writes through C/C++ streams whose buffers are independent of the Python
+    objects wrapping fds 1/2, `capture_streams` calls `_flush_stdio()` before the
+    redirect and again in the `finally` **while the capture fds are still in place**
+    (Python `flush()` plus libc `fflush(NULL)`; failures suppressed). The first flush
+    keeps pre-existing buffered bytes out of the capture; the second recovers output that
+    Maude left buffered — notably a bounded `search` at the end of a load, which prints no
+    `No more solutions.` and does not flush itself — so the tail is neither lost from the
+    result nor written to the worker's inherited stdout (the MCP stdio transport) after
+    the restore.
 15. **Search paths are reconstructed in the worker, bounded, and never via `pathTo`.**
     `maude/session.py` reads a solution's state number from `iterator.getStateNr()` while
     the search iterator is positioned on that solution (the bindings' yielded path thunk
@@ -219,7 +231,7 @@ graph TB
     integration --> i[maude worker/executor/session,<br>maude_run, lifespan, diagnostics integration]
     integration --> fixtures[fixtures/<br>interpreter + linter + session,<br>isolation/q, dependency and run fixtures]
     docs[docs/] --> dmodules[modules.md]
-    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
+    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>Unexpected_failure_during_search (implemented fixes),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
     agents --> summary[summary/<br>this knowledge base]
     root --> cfg[pyproject.toml, Makefile, tox.ini,<br>mkdocs.yml, uv.lock, README.md,<br>CONTRIBUTING.md, DEVELOPER_GUIDE.md,<br>CHANGELOG.md]
 ```
@@ -238,6 +250,10 @@ graph TB
   bindings research (state numbers, lazy path thunks, `getRule(0)` crash, recursive
   `pathTo`), design reviews, and the implemented design; note that its `summary.md`
   predates the implementation and still says "implementation has not started"
+- `.agents/planning/Unexpected_failure_during_search/` — the capture-flush and
+  failure-surfacing investigation (fixes implemented): the bounded-search reproduction,
+  the verified buffering mechanism, the error-detail design, executable probes, and the
+  still-open original whole-call failure (not reproducible on this checkout)
 - `.agents/planning/sigsegv-under-load/issue.md` — the SIGSEGV history that motivates the
   worker process
 - `.agents/planning/no_new_module_quirk/design/detailed-design.md` — the per-call

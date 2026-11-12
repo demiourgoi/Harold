@@ -103,6 +103,11 @@
     `module_found=False` and theory module types; adapts load warnings/output and the
     executed step outcomes, including `PathDict` → `MaudeSearchPath`). `timeout_secs`
     overrides the interpreter setting.
+  - Unexpected failures: a non-`MaudeWorkerError` propagates as `MaudeRunError` whose text
+    includes `_exception_detail(exc)` (`"<Type>: <message>"`, or just `"<Type>"` when the
+    message is empty) with the original exception chained. The tool logs the traceback via
+    its module logger, together with the resolved path and module, because MCP clients see
+    only the error text; this makes non-deterministic worker failures diagnosable.
   - Registered with the same read-only annotation profile and
     `tags=harold_tags(INTERPRETER)`. The description documents commands, threading, search
     paths, load warnings, per-step failure semantics, output limits and the timeout
@@ -231,6 +236,13 @@ replacing it (findings are heuristics and may be false positives).
     pipe-buffer blocking, worker is single-threaded), restores them in `finally`, and
     returns `(result, {"stdout", "stderr"})` with ANSI CSI sequences stripped and lossy
     UTF-8 decoding. Nothing may log/print while both fds are redirected.
+  - `_flush_stdio()` flushes Python's `sys.stdout`/`sys.stderr` and the C/C++ stdio buffer
+    (`ctypes.CDLL(None).fflush(NULL)`), suppressing every failure. `capture_streams` calls
+    it before the redirect (so pre-existing buffered bytes do not enter the capture) and
+    in the `finally` before restoring the fds, while the capture files are still fd 1/2.
+    This recovers output libmaude buffers independently — a bounded `search` ending a load
+    does not print its terminator or flush itself — so the tail stays in the result and
+    cannot leak to a later phase or the MCP stdio transport.
   - `parse_warnings(text)` parses `Warning:` lines (quoted or `<standard input>` file,
     line, optional `(fmod X)` context, both colon spellings) into `WarningDict`s;
     `strip_ansi` and `truncate_output` (appends `TRUNCATION_MARKER`) complete the helper.
@@ -333,8 +345,9 @@ replacing it (findings are heuristics and may be false positives).
     result forwarded) with the `maude` bindings faked via `sys.modules`.
   - `test_maude_capture.py` — the shared capture helper: fd 1/2 separation, return value,
     restoration on success and exception, ANSI stripping, lossy decoding, truncation
-    marker, and the warning parser (quoted/`<standard input>`/`(fmod X) :` formats,
-    order, unmatched/advisory lines).
+    marker, the C-buffer flush (buffered output captured, not leaked to the restored
+    stdout, and failing Python/libc flushes suppressed), and the warning parser
+    (quoted/`<standard input>`/`(fmod X) :` formats, order, unmatched/advisory lines).
   - `test_maude_executor.py` — fake executors/futures: `start()` ping/init check
     (success/fail), broken submit, crash/timeout mapping + kill, exception propagation,
     exactly-once concurrent replacement, singleton.
@@ -356,7 +369,9 @@ replacing it (findings are heuristics and may be false positives).
     timeout override, request caps (including `max_path_steps`), every outcome shape
     (rewriting, match, search with/without a path, parse-error, too-large with a named
     limit), whole-call errors (load failure, missing module with defined-module list,
-    theory module, worker/unexpected exception chaining).
+    theory module, worker/unexpected exception chaining; the unexpected case asserts the
+    type-and-message text, the bare-type message when the exception has no text, and the
+    recording logger's path/module arguments).
   - `test_maude_session.py` — the session engine's path reconstruction with fake search
     iterators: path assembly in labels/full modes, state-number capture while the
     iterator is positioned, zero-transition paths, unlabeled rules, per-solution
@@ -397,7 +412,8 @@ replacing it (findings are heuristics and may be false positives).
     worker level and the tool level respectively (file docstring says so).
   - `test_maude_session_integration.py` — the worker session engine against the real
     interpreter: reduce and current-term threading, parse errors as outcomes, missing
-    module reporting, load warnings and embedded `red` output, too-large results and
+    module reporting, load warnings and embedded `red` output, a bounded search ending
+    the load (its complete result block must be captured), too-large results and
     output truncation without hiding warnings, hermetic sessions, the rewriting family
     (`rewrite`/`frewrite`/`erewrite`, bounds and gas), match hit/miss and depth modes,
     match leaving the current term unchanged, every search type, solution caps and
@@ -429,7 +445,7 @@ replacing it (findings are heuristics and may be false positives).
     `heuristic-linter`/`prelude-sort-redeclared`/`info` diagnostic) and the hermetic +
     dependency sentences of the served description. Tags are intentionally not asserted on
     the wire: mcp SDK 1.29 does not serialize them.
-- `tests/integration/fixtures/` — 30 files:
+- `tests/integration/fixtures/`:
   - interpreter baseline: `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
     (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude
     recovers from everything parseable), `no_new_module.maude`;
@@ -437,7 +453,8 @@ replacing it (findings are heuristics and may be false positives).
     rewrite bounds), `assoc_match.maude` (associative `_;` for match-depth modes),
     `warns_and_prints.maude` (load warning plus a top-level `red`), `search_path.maude`
     (`SHEPHERD` river-crossing path, `UNLABELED`, the unbounded `CHAIN`, and the
-    one-state branching `BRANCH` system);
+    one-state branching `BRANCH` system), `bounded_search_last.maude` (a bounded search
+    as the last load command, for the capture-flush regression);
   - isolation/`q .` regressions: `quit_command.maude`, `q_with_trailing_text.maude`,
     `dep_q.maude` + `loads_dependency_q.maude`;
   - dependency handling: `dep_clean.maude` + `loads_dependency.maude`, `dep_bad.maude` +
@@ -476,10 +493,13 @@ replacing it (findings are heuristics and may be false positives).
   (revision 4), three design-review rounds, and `implementation/plan.md` (five TDD steps).
   Its `summary.md` predates the implementation and still says "implementation has not
   started" — the code, fixture and tests exist; treat the design and plan as the record.
-- `Unexpected_failure_during_search/` — **untracked, in-progress** investigation of a
-  `maude_run` search that fails with the generic "Unexpected failure running the Maude
-  interpreter session" error (`rough-idea.md`, `shepherd.maude`; the research/design/
-  implementation directories are still empty). No fix or design yet.
+- `Unexpected_failure_during_search/` — complete PDD cycle for the missing captured
+  output and the generic unexpected-failure message (both fixes implemented):
+  `rough-idea.md`; `research/reproduction.md`, `load-output-truncation.md` (verified
+  libmaude buffering mechanism), `error-surfacing.md` and executable probes;
+  `design/detailed-design.md`; `implementation/plan.md`; `pdd_review-1.md`; `summary.md`.
+  The original whole-call failure was not reproduced on this checkout and remains open;
+  the new error detail and server traceback make the next occurrence diagnosable.
 - `port-repair.py/` — early planning record for a future repair/fix-application tool:
   `rough-idea.md`, `idea-honing.md`, `research/`, `summary.md`. No production code yet.
 - `no_new_module_quirk/` — complete PDD cycle for the deferred `q .` parser-residue bug

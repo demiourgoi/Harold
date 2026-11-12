@@ -101,7 +101,10 @@ interpreter).
   `message` naming the setting (`interpreter_max_result_length` or
   `interpreter_max_path_steps`). Whole-call conditions raise `MaudeRunError`: missing path,
   load failure, module not defined (the message lists the modules the load defined),
-  theory module, or worker crash/timeout (chained).
+  theory module, or worker crash/timeout (chained). An unexpected non-`MaudeWorkerError`
+  contributes its type and message to the `MaudeRunError` text and is logged with a
+  traceback (including the resolved path and module) on the server side, so the next
+  non-deterministic failure is diagnosable even though clients see only the error text.
 - A provider bug that is not a `DiagnosticProviderError` is reported with its exception
   type, so the message says what actually broke.
 
@@ -144,13 +147,20 @@ interpreter).
   and proceeds.
 - Output capture: `maude/capture.py` redirects both fds around the load and every step
   (temp files, not pipes), strips ANSI codes, decodes lossily and truncates each stream at
-  the output cap. Diagnostics parses warnings from the full stderr and discards stdout; a
-  session returns both streams per phase.
+  the output cap. Before the redirect and again before restoring the fds it flushes
+  Python and C/C++ stdio buffers (`_flush_stdio`; libmaude buffers independently), so a
+  stream never loses a tail that Maude had not flushed — a bounded `search` ending a load
+  is the canonical case — and buffered bytes cannot leak to a later phase or the MCP stdio
+  transport. Flush failures are suppressed and can never change the phase result.
+  Diagnostics parses warnings from the full stderr and discards stdout; a session returns
+  both streams per phase.
 - Regression coverage: the isolation tests (each `q .` fixture followed by a clean
   diagnosis), the dependency tests,
   `test_parallel_diagnostics_do_not_share_interpreter_state` (4 concurrent workers, every
-  interpreter-clean fixture swept), the relative-path test, and the session hermeticity
-  test (`test_sessions_are_hermetic`).
+  interpreter-clean fixture swept), the relative-path test, the session hermeticity
+  test (`test_sessions_are_hermetic`), and the capture-flush tests (unit: buffered C
+  output captured and not leaked, failing flushes suppressed; integration:
+  `bounded_search_last.maude` reports the complete search block).
 
 ## Worker crash recovery
 
@@ -204,14 +214,15 @@ flowchart TD
 ## Planning workflow
 
 - Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`,
-  `port-linter.py/`, `port-maude_eval.py/` and `maude_eval_search_path/` with
-  `rough-idea.md`, `idea-honing.md`, `research/`, `design/`, `implementation/`,
-  `summary.md`). Design rationale for existing code is recorded there too (e.g.
-  `sigsegv-under-load/issue.md`). `maude_run` followed its PDD cycle
-  (`port-maude_eval.py/`), and its search-path feature followed `maude_eval_search_path/`;
-  `port-repair.py/` is an early record for a future repair tool. An untracked
-  `Unexpected_failure_during_search/` record documents an unresolved search failure (no
-  design or fix yet).
+  `port-linter.py/`, `port-maude_eval.py/`, `maude_eval_search_path/` and
+  `Unexpected_failure_during_search/` with `rough-idea.md`, `idea-honing.md`, `research/`,
+  `design/`, `implementation/`, `summary.md`). Design rationale for existing code is
+  recorded there too (e.g. `sigsegv-under-load/issue.md`). `maude_run` followed its PDD
+  cycle (`port-maude_eval.py/`), its search-path feature followed
+  `maude_eval_search_path/`, and the capture-flush/failure-surfacing fixes followed
+  `Unexpected_failure_during_search/` (both fixes implemented; the original whole-call
+  failure remains open pending reproduction on its host). `port-repair.py/` is an early
+  record for a future repair tool.
 
 ## Packaging and release
 
