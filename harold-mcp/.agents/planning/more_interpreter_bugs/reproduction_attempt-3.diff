@@ -1,0 +1,357 @@
+diff --git a/harold-mcp/src/harold_mcp/logging.py b/harold-mcp/src/harold_mcp/logging.py
+index 56c29fd..cbae697 100644
+--- a/harold-mcp/src/harold_mcp/logging.py
++++ b/harold-mcp/src/harold_mcp/logging.py
+@@ -2,7 +2,7 @@ import logging
+ 
+ from fastmcp.utilities.logging import get_logger
+ 
+-__all__ = ["Logging", "get_logger"]
++__all__ = ["Logging", "describe_exception_chain", "get_logger"]
+ 
+ 
+ class Logging:
+@@ -12,3 +12,25 @@ class Logging:
+     def _log(self) -> logging.Logger:
+         """The logger for this class"""
+         return get_logger(self.__class__.__name__)
++
++
++def describe_exception_chain(exc: BaseException, max_length: int = 2000) -> str:
++    """Render an exception and its cause/context chain as `Type: message <- Type: message`.
++
++    Server-side diagnostics only: MCP clients receive a wrapper's message, so an
++    unexpected failure's type and chained causes are otherwise lost. Truncated to
++    `max_length` characters (a non-positive `max_length` disables truncation) so the
++    text can also be embedded in a client-visible error message.
++    """
++    parts: list[str] = []
++    seen: set[int] = set()
++    current: BaseException | None = exc
++    while current is not None and id(current) not in seen:
++        seen.add(id(current))
++        message = str(current)
++        parts.append(f"{type(current).__name__}: {message}" if message else type(current).__name__)
++        current = current.__cause__ if current.__cause__ is not None else current.__context__
++    text = " <- ".join(parts)
++    if max_length <= 0 or len(text) <= max_length:
++        return text
++    return text[:max_length] + "..."
+diff --git a/harold-mcp/src/harold_mcp/maude/executor.py b/harold-mcp/src/harold_mcp/maude/executor.py
+index 5d458e3..e86b13c 100644
+--- a/harold-mcp/src/harold_mcp/maude/executor.py
++++ b/harold-mcp/src/harold_mcp/maude/executor.py
+@@ -13,7 +13,7 @@ from typing import Any, TypeVar, cast
+ 
+ from fastmcp.dependencies import Depends
+ 
+-from harold_mcp.logging import Logging
++from harold_mcp.logging import Logging, describe_exception_chain
+ from harold_mcp.maude import session, worker
+ from harold_mcp.settings import Settings, get_settings
+ 
+@@ -83,6 +83,7 @@ class MaudeExecutor(Logging):
+     _executor_factory: ExecutorFactory
+     _executor: ProcessPoolExecutor | None
+     _executor_lock: threading.RLock
++    _generation: int
+ 
+     def __init__(
+         self,
+@@ -93,12 +94,16 @@ class MaudeExecutor(Logging):
+         self._settings = settings if settings is not None else Settings()
+         self._executor_factory = executor_factory or self._default_executor
+         self._executor = None
++        # Bumped whenever a pool is created, so failures can be attributed to the
++        # pool generation that was current when the task was submitted.
++        self._generation = 0
+         # Reentrant: `_submit` holds it while calling `_reset_executor`.
+         self._executor_lock = threading.RLock()
+ 
+     def _default_executor(self) -> ProcessPoolExecutor:
+         self._log.info(
+-            "Launching new process pool for %s workers",
++            "Launching new process pool generation %d for %s workers",
++            self._generation,
+             self._settings.maude_workers,
+         )
+         return ProcessPoolExecutor(
+@@ -110,6 +115,24 @@ class MaudeExecutor(Logging):
+             max_tasks_per_child=1,
+         )
+ 
++    def _create_executor(self) -> ProcessPoolExecutor:
++        """Create the pool for the next generation, logging (and propagating) failure.
++
++        A spawn-time failure (`OSError`, `RuntimeError` after shutdown, ...) escapes
++        the crash/timeout mapping and reaches the tool's generic wrapper, so its
++        type and cause chain would otherwise leave no trace.
++        """
++        self._generation += 1
++        try:
++            return self._executor_factory()
++        except BaseException as exc:
++            self._log.exception(
++                "Failed to create Maude process pool generation %d: %s",
++                self._generation,
++                describe_exception_chain(exc),
++            )
++            raise
++
+     def _reset_executor(
+         self,
+         *,
+@@ -128,11 +151,20 @@ class MaudeExecutor(Logging):
+                 # avoid a duplicated replace due to concurrent calls
+                 return
+             old = self._executor
+-            self._executor = self._executor_factory() if replace else None
++            old_generation = self._generation
++            self._executor = self._create_executor() if replace else None
+         if old is not None:
+-            self._log.info("Killing old process pool")
+-            old.kill_workers()
+-            self._log.info("Old process pool killed")
++            self._log.info("Killing old process pool generation %d", old_generation)
++            try:
++                old.kill_workers()
++            except BaseException as exc:
++                self._log.exception(
++                    "Failed to kill old process pool generation %d: %s",
++                    old_generation,
++                    describe_exception_chain(exc),
++                )
++                raise
++            self._log.info("Old process pool generation %d killed", old_generation)
+ 
+     def start(self, timeout: float) -> None:
+         """Create the pool and verify every worker can initialize Maude.
+@@ -168,19 +200,37 @@ class MaudeExecutor(Logging):
+         """Submit a worker task."""
+         return self._submit(fn, *args)[1]
+ 
+-    def _submit(self, fn: Callable[..., Any], *args: Any) -> tuple[ProcessPoolExecutor, Future[Any]]:
++    def _submit(self, fn: Callable[..., Any], *args: Any) -> tuple[ProcessPoolExecutor, Future[Any], int]:
+         with self._executor_lock:
+-            if self._executor is None:
+-                self._executor = self._executor_factory()
++            executor = self._executor
++            if executor is None:
++                executor = self._create_executor()
++                self._executor = executor
++            generation = self._generation
+             try:
+-                self._log.debug("Submitting task to Maude worker: %s", fn.__name__)
+-                return self._executor, self._executor.submit(fn, *args)
++                self._log.debug("Submitting task %s to Maude worker (pool generation %d)", fn.__name__, generation)
++                return executor, executor.submit(fn, *args), generation
+             except BrokenProcessPool as exc:
+                 # The pool is already known broken: replace it and let the MCP
+                 # client retry — there is no reason to assume a retry would succeed.
+-                self._log.error("Maude process pool is broken; recovering with a fresh pool")
+-                self._reset_executor(failed=self._executor)
++                self._log.exception(
++                    "Maude process pool generation %d is broken; recovering with a fresh pool: %s",
++                    generation,
++                    describe_exception_chain(exc),
++                )
++                self._reset_executor(failed=executor)
+                 raise MaudeWorkerCrashedError() from exc
++            except BaseException as exc:
++                # Anything else (spawn failure, a shut-down executor, an unpicklable
++                # task) bypasses the crash/timeout mapping and reaches the tool's
++                # generic wrapper, so record its type and cause before re-raising.
++                self._log.exception(
++                    "Failed to submit task %s to Maude worker (pool generation %d): %s",
++                    fn.__name__,
++                    generation,
++                    describe_exception_chain(exc),
++                )
++                raise
+ 
+     def _run_task(self, fn: Callable[..., T], *args: Any, timeout: float) -> T:
+         """Run a worker task to completion, mapping crash/timeout failures.
+@@ -191,17 +241,41 @@ class MaudeExecutor(Logging):
+         replaced so the next call works. Other worker exceptions propagate
+         unchanged.
+         """
+-        executor, future = self._submit(fn, *args)
++        executor, future, generation = self._submit(fn, *args)
+         # Reset here too: submit only sees failures at submission time, not a
+         # worker that dies mid-task.
+         try:
+             return cast(T, future.result(timeout=timeout))
+         except BrokenProcessPool as exc:
++            self._log.exception(
++                "Maude worker pool generation %d broke while running %s: %s",
++                generation,
++                fn.__name__,
++                describe_exception_chain(exc),
++            )
+             self._reset_executor(failed=executor)
+             raise MaudeWorkerCrashedError() from exc
+         except TimeoutError as exc:
++            self._log.error(
++                "Maude worker task %s timed out after %.1fs (pool generation %d); replacing the pool",
++                fn.__name__,
++                timeout,
++                generation,
++            )
+             self._reset_executor(failed=executor)
+             raise MaudeWorkerTimeoutError() from exc
++        except BaseException as exc:
++            # Neither a crash nor a timeout: the worker raised (the stored traceback
++            # includes the remote traceback) or the future was cancelled. This log
++            # line is the only record of what reaches `maude_run`'s generic wrapper.
++            self._log.exception(
++                "Maude worker task %s failed with %s (pool generation %d): %s",
++                fn.__name__,
++                type(exc).__name__,
++                generation,
++                describe_exception_chain(exc),
++            )
++            raise
+ 
+     def diagnostics(self, path: str) -> worker.LoadDiagnosticsResult:
+         """Run `load_diagnostics` in the worker, with crash/timeout mapping."""
+diff --git a/harold-mcp/src/harold_mcp/server/tools/interpreter.py b/harold-mcp/src/harold_mcp/server/tools/interpreter.py
+index f562471..5108695 100644
+--- a/harold-mcp/src/harold_mcp/server/tools/interpreter.py
++++ b/harold-mcp/src/harold_mcp/server/tools/interpreter.py
+@@ -14,6 +14,7 @@ from fastmcp.dependencies import Depends
+ from mcp.types import ToolAnnotations
+ from pydantic import BaseModel, ConfigDict, Field
+ 
++from harold_mcp.logging import describe_exception_chain, get_logger
+ from harold_mcp.maude import (
+     BindingDict,
+     CapturedOutput,
+@@ -34,6 +35,8 @@ from harold_mcp.server.server import mcp
+ from harold_mcp.server.tags import INTERPRETER, harold_tags
+ from harold_mcp.settings import Settings, get_settings
+ 
++_LOG = get_logger(__name__)
++
+ # `maude.Module` theory types: FUNCTIONAL_THEORY, SYSTEM_THEORY, STRATEGY_THEORY and
+ # OBJECT_ORIENTED_THEORY. Spelled out because the server process never imports `maude`.
+ _THEORY_MODULE_TYPES = frozenset({2, 3, 7, 11})
+@@ -633,7 +636,20 @@ def maude_run(
+     except MaudeWorkerError as exc:
+         raise MaudeRunError(f"Maude interpreter session failed: {exc.reason}") from exc  # noqa: TRY003
+     except Exception as exc:
+-        raise MaudeRunError("Unexpected failure running the Maude interpreter session") from exc  # noqa: TRY003
++        # The client only receives the wrapper's message, so log the type and the
++        # whole cause chain (with the worker's remote traceback) server-side, and
++        # keep a short summary in the message so a reproduction carries context.
++        _LOG.exception(
++            "Unexpected failure in maude_run (path=%s, module=%s, steps=%d, timeout=%ss): %s",
++            resolved,
++            module,
++            len(steps),
++            timeout,
++            describe_exception_chain(exc),
++        )
++        raise MaudeRunError(
++            "Unexpected failure running the Maude interpreter session: " + describe_exception_chain(exc, 500)
++        ) from exc
+     return _to_wire_result(result, resolved, module)
+ 
+ 
+diff --git a/harold-mcp/tests/unit/test_interpreter_tool.py b/harold-mcp/tests/unit/test_interpreter_tool.py
+index 038de00..83fda49 100644
+--- a/harold-mcp/tests/unit/test_interpreter_tool.py
++++ b/harold-mcp/tests/unit/test_interpreter_tool.py
+@@ -645,3 +645,6 @@ def test_unexpected_exception_is_chained(maude_file: Path) -> None:
+         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
+ 
+     assert exc_info.value.__cause__ is cause
++    # The type and message reach the client: this is the only context a
++    # reproduction carries when the server-side log is unavailable.
++    assert "ValueError: boom" in str(exc_info.value)
+diff --git a/harold-mcp/tests/unit/test_maude_executor.py b/harold-mcp/tests/unit/test_maude_executor.py
+index acc0209..00b8654 100644
+--- a/harold-mcp/tests/unit/test_maude_executor.py
++++ b/harold-mcp/tests/unit/test_maude_executor.py
+@@ -1,5 +1,6 @@
+ """Unit tests for `MaudeExecutor` using fake executors and futures."""
+ 
++import logging
+ import threading
+ from concurrent.futures.process import BrokenProcessPool
+ from typing import Any
+@@ -65,15 +66,19 @@ class FakeExecutor:
+         self,
+         *,
+         fail_submit: bool = False,
++        submit_exc: BaseException | None = None,
+         futures: list[FakeFuture] | None = None,
+     ) -> None:
+         self.fail_submit = fail_submit
++        self.submit_exc = submit_exc
+         self._futures = list(futures or [])
+         self.submit_calls: list[tuple[Any, tuple[Any, ...]]] = []
+         self.killed = False
+ 
+     def submit(self, fn: Any, *args: Any) -> FakeFuture:
+         self.submit_calls.append((fn, args))
++        if self.submit_exc is not None:
++            raise self.submit_exc
+         if self.fail_submit:
+             raise BrokenProcessPool()
+         if self._futures:
+@@ -202,6 +207,55 @@ def test_worker_task_exceptions_propagate_without_replacement() -> None:
+     assert calls["n"] == 1
+ 
+ 
++def test_unexpected_worker_exception_is_logged_with_its_chain(caplog: pytest.LogCaptureFixture) -> None:
++    """Anything that is not a crash/timeout reaches `maude_run`'s generic wrapper.
++
++    The log line is the only record of its type, so it must carry the chain and the
++    remote traceback (bug 2 can only be diagnosed from here).
++    """
++    executor = make_executor(lambda: FakeExecutor(futures=[FakeFuture(exc=ValueError("boom"))]))
++
++    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="boom"):
++        executor.diagnostics("hello.maude")
++
++    records = [record for record in caplog.records if "failed with ValueError" in record.getMessage()]
++    assert len(records) == 1
++    assert "ValueError: boom" in records[0].getMessage()
++    assert records[0].exc_info is not None
++
++
++def test_unexpected_submit_failure_is_logged_and_propagates(caplog: pytest.LogCaptureFixture) -> None:
++    """A shut-down pool raises `RuntimeError`, which the crash/timeout mapping misses."""
++    shutdown = RuntimeError("cannot schedule new futures after shutdown")
++    executor = make_executor(lambda: FakeExecutor(submit_exc=shutdown))
++
++    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="cannot schedule"):
++        executor.diagnostics("hello.maude")
++
++    records = [record for record in caplog.records if "Failed to submit task" in record.getMessage()]
++    assert len(records) == 1
++    assert "RuntimeError: cannot schedule new futures after shutdown" in records[0].getMessage()
++    assert records[0].exc_info is not None
++
++
++def test_pool_creation_failure_is_logged_and_propagates(caplog: pytest.LogCaptureFixture) -> None:
++    """A spawn failure (`OSError`) also bypasses the crash/timeout mapping."""
++    spawn_error = OSError("cannot spawn")
++
++    def factory() -> FakeExecutor:
++        raise spawn_error
++
++    executor = make_executor(factory)
++
++    with caplog.at_level(logging.ERROR), pytest.raises(OSError, match="cannot spawn"):
++        executor.diagnostics("hello.maude")
++
++    records = [record for record in caplog.records if "Failed to create Maude process pool" in record.getMessage()]
++    assert len(records) == 1
++    assert "OSError: cannot spawn" in records[0].getMessage()
++    assert records[0].exc_info is not None
++
++
+ def test_next_call_succeeds_after_crash() -> None:
+     calls = {"n": 0}
+ 
