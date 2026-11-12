@@ -55,7 +55,7 @@ queued work inside a slot, so the undecidable queued-vs-running case disappears.
 Cost: N manager threads (one per pool) and a slot manager; still far simpler than
 owning the IPC.
 
-## O2 — pebble `ProcessPool`
+## O2 — pebble `ProcessPool` (rejected on license)
 
 Probe results (`probes/probe_pebble.py`):
 
@@ -87,6 +87,30 @@ Implications:
 
 Docs: <https://pebble.readthedocs.io/en/latest/>.
 
+## O2b — billiard `Pool`
+
+`billiard` is the Celery team's hardened fork of `multiprocessing.Pool`
+(`billiard==4.3.2`, BSD-3-Clause, Python >= 3.10). Full evidence in
+`billiard.md`; summary:
+
+| | |
+| --- | --- |
+| Isolation | per job: a crashed or hard-timed-out job kills only its worker |
+| Crash | job → `WorkerLostError`; the pool replaces the worker; other jobs continue |
+| Hard timeout | job → `TimeLimitExceeded`; only that worker is killed and replaced; other jobs continue |
+| Timeout requirements | **must** construct with `enable_timeouts=True` **and** `synack=True`; `apply_async(timeout=...)` alone silently does nothing |
+| Queued tasks | timeout starts at acceptance, so a queued task is not timed out; a client-side `get(timeout)` and slot admission (or `terminate_job(pid)`) are still needed |
+| Fresh interpreter | `maxtasksperchild=1` gives a distinct pid and initializer run per task |
+| Exceptions | arrive wrapped in `ExceptionWithTraceback`; the real exception is `exc.exc` |
+| License | BSD-3-Clause: GPL-compatible, unlike pebble |
+| Main risk | pool threads call `os._exit(1)` on unexpected exceptions and SIGTERM the parent on `RestartFreqExceeded`; an initializer failure can churn workers and a pool-internal bug can kill the MCP server |
+| Complexity | replace the executor internals, unwrap exceptions, add the timeout adapter and pool recreation |
+
+Billiard does fix the reproduced bugs and is the only third-party option that
+passes the license bar. It is kept as the fallback to O1, mainly because of the
+parent-process-kill behavior and the non-obvious `enable_timeouts`/`synack`
+requirements.
+
 ## O3 — One dedicated `multiprocessing.Process` per call
 
 Parent spawns a process per call, sends the `SessionRequest` over a `Pipe`/`Queue`,
@@ -109,38 +133,45 @@ own and test.
 
 ## Comparison
 
-| Criterion | O0 shared pool | O1 N single pools | O2 pebble | O3 process per call |
-| --- | --- | --- | --- | --- |
-| Failure isolation | none | per slot | per task | per call |
-| Timeout kills only target | no | yes | yes (running; queued via `cancel()`) | yes |
-| Whole-call timeout | yes, but kills all | yes | adapter (`result` + `cancel`) | yes |
-| Crash isolation | no | per slot | yes | yes |
-| Fresh interpreter per call | yes | yes | yes (`max_tasks=1`) | yes |
-| Extra dependency | no | no | **LGPL-3.0** | no |
-| New code | none | slot manager | adapter + exception mapping | IPC + lifecycle |
-| Init failure | breaks pool | breaks one slot | breaks pool (recreate) | fails one call |
+| Criterion | O0 shared pool | O1 N single pools | O2 pebble | O2b billiard | O3 process per call |
+| --- | --- | --- | --- | --- | --- |
+| Failure isolation | none | per slot | per task | per job | per call |
+| Timeout kills only target | no | yes | yes (running; queued via `cancel()`) | yes (hard timeout or `terminate_job`) | yes |
+| Whole-call timeout | yes, but kills all | yes | adapter (`result` + `cancel`) | adapter (`get` + `terminate_job` / slot admission) | yes |
+| Crash isolation | no | per slot | yes | yes (`WorkerLostError`) | yes |
+| Fresh interpreter per call | yes | yes | yes (`max_tasks=1`) | yes (`maxtasksperchild=1`) | yes |
+| Extra dependency | no | no | **LGPL-3.0 (blocked)** | **BSD-3-Clause (ok)** | no |
+| New code | none | slot manager | adapter + exception mapping | adapter + exception unwrapping + timeout flags | IPC + lifecycle |
+| Parent-process risk | no | no | no | **pool threads can `os._exit`/SIGTERM the server** | no |
+| Init failure | breaks pool | breaks one slot | breaks pool (recreate) | hangs the job; churns workers | fails one call |
 
 ## Recommendation for the design phase
 
-- If adding pebble is acceptable (including the LGPL/GPL check), **O2** is the least
-  code for the strongest verified isolation, with one adapter: enforce the whole-call
-  budget with `result(timeout)` + `cancel()` rather than relying on `schedule(timeout)`.
-- If the project should stay dependency-free, **O1** is the best fit: it keeps the
-  stdlib, makes queued-vs-running irrelevant by construction, and isolates failures
-  per slot. It is more code than O2 but less than O3.
-- **O3** is the fallback if the pool abstractions keep producing surprises; it has no
-  hidden shared-fate semantics.
-- **O0** must change: the reproduction shows the shared-fate failure is deterministic
-  under load, not a rare race.
+**Primary: O1 (N independent single-worker pools).** It is stdlib-only, has no
+license or dependency risk, and one in-flight call per pool makes the
+queued-vs-running ambiguity impossible by construction. The slot manager can be a
+`queue.SimpleQueue` of `ProcessPoolExecutor(max_workers=1)` slots: acquire a slot,
+submit, wait; on crash/timeout kill and replace that slot; other slots are
+untouched. `start()` pings one task per slot; `shutdown()` kills every slot.
+
+**Fallback: O2b (billiard)** if the slot manager proves too costly and the team
+accepts a BSD dependency plus the parent-process-kill risk. Billiard has the best
+per-job semantics, but it does not remove the need for slot admission or a
+client-side timeout, and its timeout configuration is a trap.
+
+**O2 (pebble) is rejected** on the LGPL-3.0/GPL-2.0-only incompatibility.
+**O3 is not preferred** by the user; it remains the last resort if pool semantics
+keep producing surprises.
 
 Open questions for the design:
 
-1. Is a GPL-2.0 project allowed to depend on LGPL-3.0 pebble (license decision)?
-2. Should a call cancelled by another call's failure be reported as
+1. Should a call cancelled by another call's failure be reported as
    `MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`, or a new
-   `MaudeWorkerCancelledError`?
-3. Should `maude_workers` remain the concurrency bound in O1/O2 (slot count vs
-   `max_workers`)?
-4. Keep the attempt-3 instrumentation (pool generation, submit/create logging) or
+   `MaudeWorkerCancelledError`? (Under O1 the external-cancellation case disappears.)
+2. Should `maude_workers` remain the concurrency bound in O1 (slot count)?
+3. Keep the attempt-3 instrumentation (pool generation, submit/create logging) or
    reduce it to the tool-level traceback once isolation removes the shared-pool
    cascade?
+4. What is the slot policy when a call times out during spawn/init (before the task
+   starts)? Killing that slot's pool is safe under O1 and should map to
+   `MaudeWorkerTimeoutError`.

@@ -70,6 +70,7 @@ Scope decisions agreed with the user:
 - `research/step-output.md` — step capture findings.
 - `research/error-taxonomy.md` — hierarchy/reachability for B5/B6.
 - `research/architecture-options.md` — pool isolation options and trade-offs.
+- `research/billiard.md` — billiard license and verified capabilities.
 
 ## Status (research complete)
 
@@ -78,8 +79,9 @@ All probes have run on `HEAD` = `9272529`, Python 3.14.2:
 - B1/B2/B3 reproduced deterministically (`reproduction.md`).
 - B4/B7 do not reproduce on this checkout (`step-output.md`).
 - B5/B6 analyzed for reachability (`error-taxonomy.md`).
-- Pool options evaluated with the stdlib source and a pebble 5.2.3 probe
-  (`architecture-options.md`).
+- Pool options evaluated: pebble rejected on LGPL-3.0/GPL-2.0 grounds, billiard
+  verified and license-compatible but with parent-process-kill risks
+  (`architecture-options.md`, `billiard.md`).
 
-Open decision before design: accept pebble (LGPL-3.0) or implement N single-worker
-pools (stdlib only).
+Recommendation: N single-worker pools (option B), with billiard as the fallback if
+the slot manager is judged too costly.
