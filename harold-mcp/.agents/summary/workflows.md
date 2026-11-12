@@ -72,10 +72,19 @@ flowchart TD
     F --> G[run_session: init, load, capture, warnings, getModules diff]
     G --> H{load ok and module found<br>and not a theory?}
     H -->|no| I[MaudeRunError isError<br>missing module lists defined modules]
-    H -->|yes| J[run steps until first failure]
+    H -->|yes| J[run steps until first failure<br>search: reconstruct each solution path]
     J --> K[adapt to MaudeRunResult<br>load info plus step outcomes]
     K --> L[structuredContent plus JSON text]
 ```
+
+Within a `search` step, the worker reads each solution's state number while the search
+iterator is positioned on it, walks the search graph's parent links iteratively (bounded
+by `HAROLD_INTERPRETER_MAX_PATH_STEPS`), and attaches a `{initial, transitions}` path to
+the solution. `"labels"` (the default) returns only rule labels; `"full"` adds rule text
+and intermediate states; `"none"` skips the path work. Reflexive `=>*` and branching
+`=>#` solutions have an empty transition list. The bindings' recursive `pathTo` is never
+used (it overflows on deep paths), and `getRule(0)` is never called (it SIGSEGVs the
+interpreter).
 
 ### Failure semantics
 
@@ -88,9 +97,11 @@ flowchart TD
   chained cause.
 - `maude_run`: per-step failures are **data**, not errors. A `parse-error` or `too-large`
   outcome is returned with the outcomes of the steps that ran, `completed` is false, and
-  later steps are skipped. Whole-call conditions raise `MaudeRunError`: missing path, load
-  failure, module not defined (the message lists the modules the load defined), theory
-  module, or worker crash/timeout (chained).
+  later steps are skipped. A `too-large` outcome carries the exceeded `limit` and a
+  `message` naming the setting (`interpreter_max_result_length` or
+  `interpreter_max_path_steps`). Whole-call conditions raise `MaudeRunError`: missing path,
+  load failure, module not defined (the message lists the modules the load defined),
+  theory module, or worker crash/timeout (chained).
 - A provider bug that is not a `DiagnosticProviderError` is reported with its exception
   type, so the message says what actually broke.
 
@@ -119,6 +130,10 @@ flowchart TD
   `MaudeExecutor.start()` pings are a fail-fast initialization check, not a warm-up. To
   carry state across `maude_run` calls, re-submit a saved result term or write a wrapper
   module.
+- Search state numbers are per search and die with the interpreter, so Harold never
+  exposes them or offers a separate `show path` step; each solution carries its path,
+  reconstructed during the same search call (see
+  `.agents/planning/maude_eval_search_path/`).
 - Relative input paths are absolutized before the worker sees them, because a fresh
   worker's working directory is not the client's: `SourceFile.from_path` does it for
   diagnostics and `_resolve_path` for `maude_run`; both results echo the absolute path.
@@ -178,14 +193,25 @@ flowchart TD
 - `make docs` — serve docs locally with MkDocs.
 - Docs are generated from docstrings via mkdocstrings; add new modules to `docs/modules.md`.
 
+## Review workflow
+
+- `make review PROMPT="<prompt>"` runs the read-only `ponytail-reviewer` agent through
+  `vibe` with the repository in view; the report is written to `.review.md` (each run
+  overwrites it). `DEVELOPER_GUIDE.md` has ready-made prompts for technical-design,
+  step-code, commit-range and final-PDD reviews. The agent is read-only, so it cannot
+  modify the working tree.
+
 ## Planning workflow
 
 - Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`,
-  `port-linter.py/` and `port-maude_eval.py/` with `rough-idea.md`, `idea-honing.md`,
-  `research/`, `design/`, `implementation/`, `summary.md`). Design rationale for existing
-  code is recorded there too (e.g. `sigsegv-under-load/issue.md`). `maude_run` followed
-  its PDD cycle (`port-maude_eval.py/`); `port-repair.py/` is an early record for a future
-  repair tool.
+  `port-linter.py/`, `port-maude_eval.py/` and `maude_eval_search_path/` with
+  `rough-idea.md`, `idea-honing.md`, `research/`, `design/`, `implementation/`,
+  `summary.md`). Design rationale for existing code is recorded there too (e.g.
+  `sigsegv-under-load/issue.md`). `maude_run` followed its PDD cycle
+  (`port-maude_eval.py/`), and its search-path feature followed `maude_eval_search_path/`;
+  `port-repair.py/` is an early record for a future repair tool. An untracked
+  `Unexpected_failure_during_search/` record documents an unresolved search failure (no
+  design or fix yet).
 
 ## Packaging and release
 

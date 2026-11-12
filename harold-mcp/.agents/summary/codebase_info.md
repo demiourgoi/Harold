@@ -4,7 +4,7 @@
 
 ## Identity
 
-- **Project**: `harold-mcp` v0.0.5.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.5]` section that does not yet record the implemented `maude_run` tool or the settings rename; `[0.0.4]` documents the heuristic-linter port and the hermetic-calls/isolation work)
+- **Project**: `harold-mcp` v0.0.5.dev0 (WIP; `CHANGELOG.md` has an open `[0.0.5]` section that records the implemented `maude_run` tool, search paths, the shared capture layer and the settings rename; `[0.0.4]` documents the heuristic-linter port and the hermetic-calls/isolation work)
 - **Author**: Juan Rodriguez (`juanrh@pm.me`)
 - **Repository**: <https://github.com/demiourgoi/harold>
 - **Documentation site**: <https://demiourgoi.github.io/Harold/> (MkDocs, built from `docs/`)
@@ -59,7 +59,7 @@ The heuristic linter and the diagnostics seam added **no** runtime dependencies:
 
 - Console script `harold-mcp` → `harold_mcp.main:app` (defined in `pyproject.toml` `[project.scripts]`). `main.py` builds a **cyclopts** CLI: the default command and the `serve` subcommand both run the MCP server over stdio (`--help`/`--version` come from cyclopts).
 - Console script `harold-update-prelude-sorts` → `harold_mcp.heuristic.prelude_extract:app` — regenerates (or verifies with `--check`) the bundled Maude prelude sort snapshot.
-- MCP tools: `maude_program_diagnostics` (interpreter load + heuristic linter) and `maude_run` (bounded interpreter sessions with `reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search`).
+- MCP tools: `maude_program_diagnostics` (interpreter load + heuristic linter) and `maude_run` (bounded interpreter sessions with `reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search`, where each search solution can carry its rewrite path in `labels` or `full` form).
 - The Maude interpreter lives in a dedicated worker process; the heuristic linter runs in the server process.
 
 ## Related documents

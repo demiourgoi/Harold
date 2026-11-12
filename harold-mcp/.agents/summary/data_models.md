@@ -42,7 +42,7 @@ discriminated union on `command`:
 | `_GassedStep` | + `gas: int \| None` (`>= 0`) | per-position fair-rewriting gas |
 | `_PatternStep` | `pattern: str`, `subject: str \| None`, `depth: int \| None` | depth `-1` … `2147483647` (Maude int32) |
 | `ReduceStep` / `RewriteStep` / `FrewriteStep` / `ErewriteStep` | respective base fields + `command` literal | rewriting family |
-| `MatchStep` / `SearchStep` | pattern fields + `command` literal; search adds `search_type` | `search_type` is `one-step`/`at-least-one-step`/`any-steps`/`normal-form`/`branch` |
+| `MatchStep` / `SearchStep` | pattern fields + `command` literal; search adds `search_type` and `path` | `search_type` is `one-step`/`at-least-one-step`/`any-steps`/`normal-form`/`branch`; `path` is `none`/`labels`/`full` (default `labels`) |
 | `MaudeStep` | `Annotated[union, Field(discriminator="command")]` | the wire step type |
 
 The result models:
@@ -54,8 +54,11 @@ The result models:
 | `MaudeLoadInfo` | `warnings`, `output` | `list[MaudeLoadWarning]`, `MaudeCapturedOutput` | load phase only |
 | `MaudeBinding` | `variable` / `value` | `str` / `str` | one substitution pair |
 | `MaudeMatch` | `bindings` | `list[MaudeBinding]` | empty for a ground match |
-| `MaudeSearchSolution` | `term`, `rewrites`, `bindings` | `str`, `int`, `list[MaudeBinding]` | the rewrite counter includes equational rewrites |
-| `MaudeStepOutcome` | `index`, `command`, `status`, `term`, `rewrites`, `matches`, `solutions`, `truncated`, `message`, `limit`, `output` | mixed | fields that do not apply are `None`; `status` is `ok`/`parse-error`/`too-large` |
+| `MaudeRuleRef` | `label`, `text` | `str \| None`, `str \| None` | the applied rule; `text` is present only in `path="full"`; `label` is `null` for unlabeled rules |
+| `MaudePathTransition` | `rule`, `state` | `MaudeRuleRef`, `str \| None` | one transition; `state` is present only in `path="full"` |
+| `MaudeSearchPath` | `initial`, `transitions` | `str`, `list[MaudePathTransition]` | the path from the search subject to the solution; `transitions` is empty for reflexive `=>*` and branching `=>#` |
+| `MaudeSearchSolution` | `term`, `rewrites`, `bindings`, `path` | `str`, `int`, `list[MaudeBinding]`, `MaudeSearchPath \| None` | the rewrite counter includes equational rewrites; `path` is `null` only when the step requested `path="none"` |
+| `MaudeStepOutcome` | `index`, `command`, `status`, `term`, `rewrites`, `matches`, `solutions`, `truncated`, `message`, `limit`, `output` | mixed | fields that do not apply are `None`; `status` is `ok`/`parse-error`/`too-large`; a `too-large` `message` names the exceeded setting |
 | `MaudeRunResult` | `path`, `module`, `load`, `completed`, `steps` | `str`, `str`, `MaudeLoadInfo`, `bool`, `list[MaudeStepOutcome]` | `steps` is shorter when a step failed |
 
 ### Field docs: `_ResultModel` and `use_attribute_docstrings`
@@ -146,11 +149,15 @@ Defined in `harold_mcp.maude.capture`, `harold_mcp.maude.worker` and
   is the `maude.load` return value: `True` for every parseable input (Maude recovers from
   arbitrary garbage), `False` for missing files / unrecoverable parse failures.
 - `StepRequest` / `SessionRequest` (`session.py`) — one flat step (every command-specific
-  field present, `None` when not applicable) and the whole session (path, module, steps,
-  `max_solutions`, `max_result_length`, `max_output_length`).
-- `BindingDict` / `SolutionDict` / `StepOutcomeDict` / `SessionResult` (`session.py`) —
-  `{variable, value}`, `{term, rewrites, bindings}`, one executed-step outcome (same
-  fields as the wire outcome, with the capture), and the load/module/outcomes envelope.
+  field present, `None` when not applicable, including `path_mode`) and the whole session
+  (path, module, steps, `max_solutions`, `max_result_length`, `max_path_steps`,
+  `max_output_length`).
+- `BindingDict` / `PathRuleDict` / `PathTransitionDict` / `PathDict` / `SolutionDict` /
+  `StepOutcomeDict` / `SessionResult` (`session.py`) — `{variable, value}`; the rule, the
+  rule+state transition, and the `{initial, transitions}` path; `{term, rewrites,
+  bindings, path}` (with `path=None` when the request did not ask for one); one executed
+  step outcome (same fields as the wire outcome, with the capture); and the
+  load/module/outcomes envelope.
 - `CommandName`, `RewritingCommand`, `MatchingCommand`, `StepStatus` — `Literal` aliases
   for the closed command/status vocabularies.
 

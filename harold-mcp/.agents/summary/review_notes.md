@@ -2,14 +2,49 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-10-28 refresh covers the
-`maude_run` interpreter-session tool (new `maude/session.py`, `maude/capture.py`,
-`server/tools/interpreter.py`, new settings, tests and docs); the 2026-10-14 refresh covers
-the provider-registry FastMCP dependency; the 2026-10-12 refresh covers the
-`no_new_module_quirk` implementation (hermetic per-call interpreters, the new workers
-default, dependency-warning attribution, path absolutization, and the test-suite rework);
-the 2026-09-29 refresh covered the heuristic-linter port. Older resolved issues are kept
-for the record.
+Findings from the consistency and completeness review. The 2026-11-12 refresh covers
+search paths in `maude_run` (`SearchStep.path`, worker `path_mode`/`max_path_steps`,
+`MaudeSearchPath`, the new setting, tests and fixture, and the README/CHANGELOG updates);
+the 2026-10-28 refresh covers the `maude_run` interpreter-session tool (new
+`maude/session.py`, `maude/capture.py`, `server/tools/interpreter.py`, new settings, tests
+and docs); the 2026-10-14 refresh covers the provider-registry FastMCP dependency; the
+2026-10-12 refresh covers the `no_new_module_quirk` implementation (hermetic per-call
+interpreters, the new workers default, dependency-warning attribution, path
+absolutization, and the test-suite rework); the 2026-09-29 refresh covered the
+heuristic-linter port. Older resolved issues are kept for the record.
+
+## Changes absorbed into this refresh (2026-11-12)
+
+- **Search paths in `maude_run`.** `SearchStep.path` (`"none" | "labels" | "full"`,
+  default `"labels"`) is exposed through the tool; solutions now carry
+  `MaudeSearchPath {initial, transitions: [{rule: {label, text}, state}]}`. Labels mode is
+  the compact default; full mode adds rule text and intermediate states; `none` restores
+  the previous payload shape. Unlabeled rules have `label=null`; reflexive `=>*` and
+  branching `=>#` solutions have zero transitions.
+- **Worker protocol and reconstruction.** `StepRequest` gained `path_mode`, `SessionRequest`
+  gained `max_path_steps`, and `SolutionDict` gained `path`; the new `PathRuleDict`,
+  `PathTransitionDict` and `PathDict` TypedDicts cross the process boundary. The session
+  engine reads `iterator.getStateNr()` while the iterator is positioned (the bindings'
+  path thunk is lazy and would return the wrong state), walks `getStateParent()`
+  iteratively (the bindings' `pathTo` is recursive), calls `getRule()` only for non-root
+  states (`getRule(0)` SIGSEGVs), and stops at the cap before formatting strings.
+- **New setting `HAROLD_INTERPRETER_MAX_PATH_STEPS`** (default `100`), plus named
+  `too-large` messages: a path over the cap reports
+  `path exceeds interpreter_max_path_steps`; an over-long path element reports
+  `path element exceeds interpreter_max_result_length`. Rewriting/match/search `too-large`
+  outcomes now carry a message naming `interpreter_max_result_length`.
+- **Tests and fixture.** New `tests/integration/fixtures/search_path.maude` (`SHEPHERD`,
+  `UNLABELED`, `CHAIN`, `BRANCH`); unit tests cover the path contract, fake iterators and
+  adapter; integration tests cover labels/full/none, zero-transition paths, unlabeled
+  rules, per-solution laziness, `max_solutions=1`, exact and over-cap paths, deep
+  1500-step searches, and the end-to-end tool path; 30 fixtures total.
+- **Docs and planning.** `README.md` and `CHANGELOG.md` already documented the feature;
+  this refresh brings the knowledge base and `AGENTS.md` in line. The
+  `.agents/planning/maude_eval_search_path/` PDD record contains the requirements,
+  bindings research (lazy state numbers, `getRule(0)` crash, recursive `pathTo`), three
+  design-review rounds, revision 4 of the design and a five-step TDD plan. The `Makefile`
+  `review` target and its `DEVELOPER_GUIDE.md` prompts are now documented in
+  `workflows.md` and `AGENTS.md`.
 
 ## Changes absorbed into this refresh (2026-10-28)
 
@@ -65,7 +100,9 @@ for the record.
   `get_diagnostic_providers` parameter (`MaudeExecutor`) keeps it. Documented in
   `data_models.md` and `AGENTS.md`.
 - **Version bookkeeping.** 0.0.4 was released; `pyproject.toml` is now `0.0.5.dev0` with
-  an open (empty) `[0.0.5]` changelog section — `codebase_info.md` updated accordingly.
+  an open `[0.0.5]` changelog section (empty at the time of the 2026-10-14 refresh; it now
+  records `maude_run`, search paths, the capture layer and the settings rename) —
+  `codebase_info.md` updated accordingly.
 - Verified unchanged: `workflows.md` (the provider-registry change does not alter any
   documented flow), `maude-lib.md` (manually maintained, still accurate) and the rest of
   this knowledge base apart from the items above and `functools` added to the stdlib list
@@ -203,6 +240,18 @@ for the record.
 10. **`maude_run` has no dedicated timeout integration test.** As with the diagnostics
     timeout path, the mapping is unit-tested only; a real non-terminating reduction is the
     documented way to trigger it, but no fixture/CI case does so.
+11. **The search-path planning summary is stale.**
+    `.agents/planning/maude_eval_search_path/summary.md` still says "Implementation has not
+    started" although `SearchStep.path`, the worker reconstruction, the fixture and the
+    tests are in the tree. Treat the design and implementation plan as the record, or
+    update the summary banner.
+12. **An unresolved search failure is under investigation.** The untracked planning record
+    `.agents/planning/Unexpected_failure_during_search/` reproduces a `maude_run` call that
+    fails with the generic "Unexpected failure running the Maude interpreter session"
+    error. The tool wraps any non-`MaudeWorkerError` exception in `MaudeRunError` with the
+    cause chained, but an MCP client sees only the generic message, so the exception type
+    and context are lost on the wire. The root cause is not yet identified; add the
+    exception details to the tool error and a regression test when fixing it.
 
 ## Completeness gaps
 
@@ -223,6 +272,11 @@ for the record.
    default command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
    The snapshot CLI, by contrast, has in-process tests in
    `tests/unit/test_prelude_extract_cli.py`.
+5. **No MCP output-schema assertion for `maude_run`.** The stdio smoke test asserts the
+   interpreter tool's input schema, description and annotations, but not its output schema
+   (the search-path field descriptions) or the search-path sentences in the description;
+   those models are covered by unit and integration tests. Worth extending when the smoke
+   test is next touched.
 
 ## Language-support limitations
 
@@ -234,10 +288,12 @@ for the record.
 ## Recommendations
 
 1. Keep `.agents/planning/` notes in sync with implementations — the diagnostics tool, the
-   linter port and `maude_run` followed their PDD cycles; future tools should follow the
-   same process (`port-repair.py/` is the next candidate). Update stale status banners.
+   linter port, `maude_run` and the search-path feature followed their PDD cycles; future
+   tools should follow the same process (`port-repair.py/` is the next candidate). Update
+   stale status banners (`maude_eval_search_path/summary.md`).
 2. Add real tests as tools are implemented, and keep `docs/modules.md` current.
 3. Re-run the codebase-summary process after significant architecture changes so this
    knowledge base does not drift from the code.
-4. Record `maude_run` and the settings rename in `CHANGELOG.md`, then bump the version
-   (the session design proposed `0.1.0`) before the next release.
+4. The `[0.0.5]` changelog now records `maude_run`, search paths, the shared capture layer
+   and the settings rename; review those notes before tagging, and resolve or archive the
+   untracked `Unexpected_failure_during_search/` investigation.

@@ -58,7 +58,8 @@
       optional `bound`, `gas`), `erewrite` (same; the original term is kept).
     - `match` (`pattern`, optional `subject`, `depth`) and `search` (`pattern`, optional
       `subject`, `depth`, required `search_type` = `one-step` | `at-least-one-step` |
-      `any-steps` | `normal-form` | `branch`).
+      `any-steps` | `normal-form` | `branch`, and optional `path` = `labels` (default) |
+      `full` | `none`).
     - The input is a discriminated union on `command`; all fields are optional except
       where required. A step may omit its `term`/`subject` to use the current term: the
       session starts with none (so the first step must provide one), rewriting commands
@@ -70,15 +71,25 @@
       step (`index`, `command`, `status`, `term`, `rewrites`, `matches`/`solutions`,
       `truncated`, `message`, `limit`, `output`). `status` is `ok`, `parse-error` or
       `too-large`; the run stops at the first failure and later steps are not executed.
+    - A `search` solution carries `path: {initial, transitions}` unless the step requested
+      `path="none"` (then `path` is `null`). `initial` is the search subject; each
+      transition has `rule: {label, text}` and `state`. `labels` mode returns labels only
+      (`text` and `state` are `null`); `full` also returns the full rule text and the
+      intermediate states (the last state equals the solution's `term`); unlabeled rules
+      have `label=null`; reflexive `=>*` and branching `=>#` solutions have an empty
+      `transitions` list. A path over `HAROLD_INTERPRETER_MAX_PATH_STEPS`, or any path
+      string over `HAROLD_INTERPRETER_MAX_RESULT_LENGTH`, makes the step `too-large` with
+      the limit and a message naming the setting.
     - Load warnings do not stop evaluation (use `maude_program_diagnostics` for a full
       diagnosis). Whole-call failures raise `MaudeRunError`: missing/unreadable path, load
       failure, module not defined (the message lists the modules the load defined), a
       theory module, or a worker crash/timeout (the `MaudeWorkerError` is chained).
     - All caps come from settings (step count, rewrite bound, solutions, term/result/
-      output length); `timeout_secs` overrides `HAROLD_INTERPRETER_TIMEOUT_SECS`. The
-      timeout covers interpreter startup and is best effort (a hung reduction fails the
-      call and replaces the pool). Each phase reports captured stdout/stderr with ANSI
-      codes stripped; over-long streams are truncated and marked.
+      output length, search-path transitions); `timeout_secs` overrides
+      `HAROLD_INTERPRETER_TIMEOUT_SECS`. The timeout covers interpreter startup and is
+      best effort (a hung reduction fails the call and replaces the pool). Each phase
+      reports captured stdout/stderr with ANSI codes stripped; over-long streams are
+      truncated and marked.
     - Annotated with the same full read-only profile and tagged
       `tags=harold_tags(INTERPRETER)` (`{maude, programming, interpreter}`). Only the
       prose above `Args:` becomes the description; field docstrings describe the output
@@ -155,7 +166,8 @@ sequenceDiagram
 | `HAROLD_INTERPRETER_MAX_REWRITE_BOUND` | `1000` | maximum accepted `bound` per rewrite step |
 | `HAROLD_INTERPRETER_MAX_SOLUTIONS` | `200` | maximum match substitutions / search solutions per step |
 | `HAROLD_INTERPRETER_MAX_TERM_LENGTH` | `100000` | maximum characters of a term, pattern or subject |
-| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | `1000000` | maximum characters of a returned term; longer results become `too-large` outcomes |
+| `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | `1000000` | maximum characters of a returned term or path string; longer results become `too-large` outcomes |
+| `HAROLD_INTERPRETER_MAX_PATH_STEPS` | `100` | maximum transitions per search solution path; a longer path becomes a `too-large` outcome |
 | `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | `1000000` | maximum characters per captured stream per phase (longer captures are truncated and marked) |
 
 Invalid values fail fast at import (pydantic validation).
@@ -214,12 +226,14 @@ Invalid values fail fast at import (pydantic validation).
   `parse_warnings`, `strip_ansi`, `truncate_output`, `WarningDict`, `CapturedOutput`.
 - `harold_mcp.maude.session` — the bounded session engine and protocol: `run_session`,
   `CommandName`, `StepStatus`, `StepRequest`, `SessionRequest`, `BindingDict`,
-  `SolutionDict`, `StepOutcomeDict`, `SessionResult`.
+  `PathRuleDict`, `PathTransitionDict`, `PathDict`, `SolutionDict`, `StepOutcomeDict`,
+  `SessionResult`.
 - `harold_mcp.server.tools.interpreter` — `maude_run`, `MaudeRunError`, the step input
   models (`ReduceStep`, `RewriteStep`, `FrewriteStep`, `ErewriteStep`, `MatchStep`,
-  `SearchStep`) and the result models (`MaudeRunResult`, `MaudeLoadInfo`,
-  `MaudeLoadWarning`, `MaudeCapturedOutput`, `MaudeStepOutcome`, `MaudeMatch`,
-  `MaudeSearchSolution`, `MaudeBinding`).
+  `SearchStep` with its `path` mode) and the result models (`MaudeRunResult`,
+  `MaudeLoadInfo`, `MaudeLoadWarning`, `MaudeCapturedOutput`, `MaudeStepOutcome`,
+  `MaudeMatch`, `MaudeSearchSolution`, `MaudeSearchPath`, `MaudePathTransition`,
+  `MaudeRuleRef`, `MaudeBinding`).
 - `harold_mcp.maude.InterpreterDiagnosticProvider(executor)` — the interpreter provider
   (warning mapping + synthesized whole-file error; own-file/`<standard input>` warnings
   keep their line, foreign-file warnings become whole-file dependency diagnostics naming

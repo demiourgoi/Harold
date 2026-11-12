@@ -114,8 +114,8 @@ graph TB
    `default_factory`), `diagnostics_timeout_secs` (default 60), `interpreter_timeout_secs`
    (default 60), and the interpreter caps `interpreter_max_steps` (200),
    `interpreter_max_rewrite_bound` (1000), `interpreter_max_solutions` (200),
-   `interpreter_max_term_length` (100000), `interpreter_max_result_length` (1000000) and
-   `interpreter_max_output_length` (1000000).
+   `interpreter_max_term_length` (100000), `interpreter_max_result_length` (1000000),
+   `interpreter_max_path_steps` (100) and `interpreter_max_output_length` (1000000).
    `get_maude_executor(settings=Depends(get_settings))` is a lazy, lock-guarded
    singleton — FastMCP nested dependency injection; the diagnostics tool module's
    `get_diagnostic_providers` nests one level deeper (providers → executor → settings),
@@ -174,13 +174,29 @@ graph TB
     failures (`parse-error`, `too-large`) are outcomes and stop the run, while a missing
     path, load failure, undefined module, theory module or worker failure fails the whole
     call with `MaudeRunError`. Steps thread a current term REPL-style: rewriting commands
-    replace it, `match`/`search` leave it unchanged. All caps are settings (see decision
+    replace it, `match`/`search` leave it unchanged. Search steps can attach the rewrite
+    path to each solution (`path="labels"`, the default; `"full"` adds rule text and
+    intermediate states; `"none"` skips path work). All caps are settings (see decision
     7).
 14. **Shared stream capture.** `maude/capture.py` owns the fd-1/fd-2 redirect (temp
     files, not pipes), ANSI stripping, lossy UTF-8 decoding, warning parsing and output
     truncation. `worker.load_diagnostics` uses it to parse warnings (stdout is discarded,
     which keeps embedded `red` output away from the MCP transport); `session.run_session`
     uses it for both the load and every step (both streams are returned).
+15. **Search paths are reconstructed in the worker, bounded, and never via `pathTo`.**
+    `maude/session.py` reads a solution's state number from `iterator.getStateNr()` while
+    the search iterator is positioned on that solution (the bindings' yielded path thunk
+    reads the *current* state lazily, so calling an old thunk would return the wrong
+    path), then walks `getStateParent()` iteratively to build the state chain. The walk
+    stops as soon as it exceeds `interpreter_max_path_steps` (O(cap) work, no string
+    formatting for an over-cap path); `getRule()` is called only for states with a parent
+    because `getRule(0)` on the root SIGSEGVs the interpreter. The bindings' recursive
+    `pathTo` is deliberately not used: it overflows the Python stack on deep paths. An
+    over-cap path or over-long path element becomes a per-step `too-large` outcome whose
+    `limit` and `message` name the setting, never a whole-call failure. `"labels"` (the
+    default) returns labels only; `"full"` also returns rule text and intermediate states;
+    `"none"` skips the work. Reflexive `=>*` and branching `=>#` solutions have a path with
+    an empty `transitions` list.
 
 ## Directory organization
 
@@ -203,7 +219,7 @@ graph TB
     integration --> i[maude worker/executor/session,<br>maude_run, lifespan, diagnostics integration]
     integration --> fixtures[fixtures/<br>interpreter + linter + session,<br>isolation/q, dependency and run fixtures]
     docs[docs/] --> dmodules[modules.md]
-    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
+    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
     agents --> summary[summary/<br>this knowledge base]
     root --> cfg[pyproject.toml, Makefile, tox.ini,<br>mkdocs.yml, uv.lock, README.md,<br>CONTRIBUTING.md, DEVELOPER_GUIDE.md,<br>CHANGELOG.md]
 ```
@@ -218,6 +234,10 @@ graph TB
   rules, snapshot and error-layering design
 - `.agents/planning/port-maude_eval.py/design/detailed-design.md` — the `maude_run` session
   design (steps, caps, outcomes, capture)
+- `.agents/planning/maude_eval_search_path/` — the search-path feature: requirements,
+  bindings research (state numbers, lazy path thunks, `getRule(0)` crash, recursive
+  `pathTo`), design reviews, and the implemented design; note that its `summary.md`
+  predates the implementation and still says "implementation has not started"
 - `.agents/planning/sigsegv-under-load/issue.md` — the SIGSEGV history that motivates the
   worker process
 - `.agents/planning/no_new_module_quirk/design/detailed-design.md` — the per-call

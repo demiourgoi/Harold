@@ -23,7 +23,8 @@
   60; renamed from `maude_worker_timeout_secs`), `interpreter_timeout_secs` (default 60),
   and the interpreter caps `interpreter_max_steps` (200), `interpreter_max_rewrite_bound`
   (1000), `interpreter_max_solutions` (200), `interpreter_max_term_length` (100000),
-  `interpreter_max_result_length` (1000000), `interpreter_max_output_length` (1000000).
+  `interpreter_max_result_length` (1000000), `interpreter_max_path_steps` (100) and
+  `interpreter_max_output_length` (1000000).
   All are `gt=0`. Workers are transient (`max_tasks_per_child=1`), so `maude_workers`
   caps concurrent per-call interpreters (≈100 MB each), not warm workers. Invalid values
   fail at import.
@@ -84,21 +85,28 @@
     `FrewriteStep`, `ErewriteStep`, `MatchStep`, `SearchStep`, sharing `_StepBase`
     (`term`), `_BoundedStep` (`bound`), `_GassedStep` (`gas`) and `_PatternStep`
     (`pattern`, `subject`, `depth`). `bound`/`gas` are `>= 0`; `depth` is constrained to
-    Maude's int32 range (`-1` … `2147483647`).
+    Maude's int32 range (`-1` … `2147483647`). `SearchStep` adds the required
+    `search_type` and `path: Literal["none", "labels", "full"] = "labels"`.
   - Result models: `MaudeRunResult`, `MaudeLoadInfo`, `MaudeLoadWarning`,
     `MaudeCapturedOutput`, `MaudeStepOutcome`, `MaudeMatch`, `MaudeSearchSolution`,
-    `MaudeBinding` (all under `_ResultModel`, with field docstrings).
+    `MaudeSearchPath`, `MaudePathTransition`, `MaudeRuleRef`, `MaudeBinding` (all under
+    `_ResultModel`, with field docstrings). A search solution's `path` is `None` only
+    when the step requested `path="none"`; otherwise it carries the initial state and
+    the ordered transitions.
   - `MaudeRunError` — whole-call failure (missing/unreadable path, load failure,
     undefined module, theory module, worker crash/timeout), chaining the worker cause.
   - Tool flow: `_resolve_path` (expanduser + `resolve`, require a regular file) →
     `_validate_steps` (non-empty, step count, term/pattern/subject length, rewrite-bound
-    cap, current-term threading) → `_to_request` (flat `SessionRequest` carrying the caps)
-    → `executor.run_session(request, timeout)` → `_to_wire_result` (rejects `load_ok=False`,
+    cap, current-term threading) → `_to_request` (flat `SessionRequest` carrying the caps,
+    including `max_path_steps`, and every step's `path_mode`) →
+    `executor.run_session(request, timeout)` → `_to_wire_result` (rejects `load_ok=False`,
     `module_found=False` and theory module types; adapts load warnings/output and the
-    executed step outcomes). `timeout_secs` overrides the interpreter setting.
+    executed step outcomes, including `PathDict` → `MaudeSearchPath`). `timeout_secs`
+    overrides the interpreter setting.
   - Registered with the same read-only annotation profile and
-    `tags=harold_tags(INTERPRETER)`. The description documents commands, threading, load
-    warnings, per-step failure semantics, output limits and the timeout behavior.
+    `tags=harold_tags(INTERPRETER)`. The description documents commands, threading, search
+    paths, load warnings, per-step failure semantics, output limits and the timeout
+    behavior.
 
 ### `harold_mcp.diagnostics` (package)
 
@@ -215,7 +223,8 @@ replacing it (findings are heuristics and may be false positives).
 - **`__init__.py`** — re-exports the public API: error hierarchy, `MaudeExecutor`,
   `get_maude_executor`, `InterpreterDiagnosticProvider`, and the capture/session protocol
   types (`CapturedOutput`, `WarningDict`, `BindingDict`, `CommandName`, `SessionRequest`,
-  `SessionResult`, `SolutionDict`, `StepOutcomeDict`, `StepRequest`, `StepStatus`).
+  `SessionResult`, `SolutionDict`, `StepOutcomeDict`, `StepRequest`, `StepStatus`,
+  `PathRuleDict`, `PathTransitionDict`, `PathDict`).
   Importing the package never imports the SWIG `maude` bindings.
 - **`capture.py`** — the shared worker-side stream capture (stdlib only):
   - `capture_streams(fn)` redirects fd 1 and fd 2 to temp files (not pipes: no
@@ -249,20 +258,29 @@ replacing it (findings are heuristics and may be false positives).
   server process only for the function reference pickled to the pool; `maude` is lazily
   imported inside `run_session`):
   - Protocol TypedDicts: `StepRequest` (every command field present, `None` when not
-    applicable), `SessionRequest` (path, module, steps, caps), `BindingDict`,
-    `SolutionDict`, `StepOutcomeDict` (per-step failures are data), `SessionResult`
-    (load outcome, module lookup/type, defined modules, warnings, load output, outcomes).
-    Aliases `CommandName`, `RewritingCommand`, `MatchingCommand` and `StepStatus`.
+    applicable, including `path_mode`), `SessionRequest` (path, module, steps, caps
+    including `max_path_steps`), `BindingDict`, `PathRuleDict`, `PathTransitionDict`,
+    `PathDict`, `SolutionDict` (now with `path`), `StepOutcomeDict` (per-step failures are
+    data), `SessionResult` (load outcome, module lookup/type, defined modules, warnings,
+    load output, outcomes). Aliases `CommandName`, `RewritingCommand`, `MatchingCommand`
+    and `StepStatus`.
   - `run_session` captures the load (both fds), diffs `maude.getModules()` to report the
     modules the load defined, parses warnings from the full stderr before truncation,
     looks up the module, and runs steps until the first non-`ok` outcome.
   - Rewriting commands parse the term and run `reduce`/`rewrite(bound)`/
     `frewrite(bound, gas)`/`erewrite(bound, gas)` (omitted bounds become the bindings'
     `-1`), report the interpreter rewrite counter and `str(term)`, and mark
-    `parse-error`/`too-large`. `match`/`search` parse subject and pattern, use the
-    search-type constants (spelled out to avoid importing `maude`), cap results lazily at
-    `max_solutions + 1` (setting `truncated`), and enforce `max_result_length` on every
-    serialized term/binding.
+    `parse-error`/`too-large` with a message naming the exceeded setting. `match`/`search`
+    parse subject and pattern, use the search-type constants (spelled out to avoid
+    importing `maude`), iterate lazily (at most `max_solutions`, plus one item only to set
+    `truncated`), and enforce `max_result_length` on every serialized term/binding.
+  - Search paths: when `path_mode` is `"labels"` or `"full"`, `_collect_solutions` reads
+    the solution's state number from `iterator.getStateNr()` while the iterator is
+    positioned, then `_reconstruct_path` walks `getStateParent()` iteratively (never the
+    recursive `pathTo`), stops at `max_path_steps`, and calls `getRule()` only for states
+    with a parent (`getRule(0)` crashes the interpreter). `"full"` also serializes rule
+    text and intermediate states; every string is checked against `max_result_length`.
+    Over-cap paths/elements produce a named `too-large` outcome.
   - Current-term threading happens here: rewriting outcomes carry the new term;
     match/search outcomes leave it unchanged (`term=None`).
 - **`provider.py`** — `InterpreterDiagnosticProvider` (v1 behavior behind the seam):
@@ -306,8 +324,8 @@ replacing it (findings are heuristics and may be false positives).
 
 - `tests/unit/` (hermetic, mocked):
   - `test_settings.py` — the default formula (`max(1, min(3, cpu_count // 2))`,
-    monkeypatched `cpu_count` matrix incl. `None`), env overrides, case-insensitivity,
-    invalid values, singleton.
+    monkeypatched `cpu_count` matrix incl. `None`), env overrides (including
+    `interpreter_max_path_steps`), case-insensitivity, invalid values, singleton.
   - `test_tags.py` — the shared vocabulary: `harold_tags` always adds the domain tags,
     and the tag strings are pinned (they are part of the client-visible interface).
   - `test_maude_worker.py` — `init_maude` sequence (success/failure, IO lockdown,
@@ -334,10 +352,16 @@ replacing it (findings are heuristics and may be false positives).
     remaining providers still attempted, unexpected bugs reported with their type.
   - `test_interpreter_tool.py` — `maude_run` validation and adaptation: path pre-check,
     empty/too-many steps, term/pattern/subject length caps, rewrite-bound cap, first-step
-    threading, omitted terms later, `bound`/`gas`/`depth`/`search_type` forwarding, timeout
-    override, request caps, every outcome shape (rewriting, match, search, parse-error,
-    too-large), whole-call errors (load failure, missing module with defined-module list,
+    threading, omitted terms later, `bound`/`gas`/`depth`/`search_type`/`path` forwarding,
+    timeout override, request caps (including `max_path_steps`), every outcome shape
+    (rewriting, match, search with/without a path, parse-error, too-large with a named
+    limit), whole-call errors (load failure, missing module with defined-module list,
     theory module, worker/unexpected exception chaining).
+  - `test_maude_session.py` — the session engine's path reconstruction with fake search
+    iterators: path assembly in labels/full modes, state-number capture while the
+    iterator is positioned, zero-transition paths, unlabeled rules, per-solution
+    laziness, path and element cap overflow, and the named `too-large` reasons; also
+    invalid `path_mode` contract handling.
   - `test_diagnostics.py` — the tool with the real provider registry wired to a fake
     executor (`_providers` helper): warning/error mapping and the
     synthesized whole-file error, `info`-only success, summary counts, whole-file ranges,
@@ -377,10 +401,15 @@ replacing it (findings are heuristics and may be false positives).
     output truncation without hiding warnings, hermetic sessions, the rewriting family
     (`rewrite`/`frewrite`/`erewrite`, bounds and gas), match hit/miss and depth modes,
     match leaving the current term unchanged, every search type, solution caps and
-    result-length caps, and parse errors in match/search.
+    result-length caps, parse errors in match/search, and search paths (labels/full/none,
+    zero-transition paths for reflexive and branching searches, unlabeled rules, lazy
+    per-solution paths, `max_solutions=1`, deep 1500-step searches, exact-cap and
+    over-cap behavior).
   - `test_maude_run_integration.py` — the `maude_run` tool end to end: reduce, missing
     module listing defined modules, a broken file as a whole-call failure, reduce-then-
-    rewrite threading, failing middle step stopping the run, and match/search threading.
+    rewrite threading, failing middle step stopping the run, match/search threading, and
+    search paths (`labels`/`full`/`none`, normal-form paths, and cap overflow as a
+    `too-large` step).
   - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-pool drive.
   - `test_diagnostics_integration.py` — the acceptance suite, per source: interpreter
     fixtures; the relative-path regression test; the isolation regressions (`quit_command`,
@@ -400,13 +429,15 @@ replacing it (findings are heuristics and may be false positives).
     `heuristic-linter`/`prelude-sort-redeclared`/`info` diagnostic) and the hermetic +
     dependency sentences of the served description. Tags are intentionally not asserted on
     the wire: mcp SDK 1.29 does not serialize them.
-- `tests/integration/fixtures/` — 29 files:
+- `tests/integration/fixtures/` — 30 files:
   - interpreter baseline: `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
     (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude
     recovers from everything parseable), `no_new_module.maude`;
   - interpreter sessions: `counter.maude` (unbounded `inc` rule, used for threading and
     rewrite bounds), `assoc_match.maude` (associative `_;` for match-depth modes),
-    `warns_and_prints.maude` (load warning plus a top-level `red`);
+    `warns_and_prints.maude` (load warning plus a top-level `red`), `search_path.maude`
+    (`SHEPHERD` river-crossing path, `UNLABELED`, the unbounded `CHAIN`, and the
+    one-state branching `BRANCH` system);
   - isolation/`q .` regressions: `quit_command.maude`, `q_with_trailing_text.maude`,
     `dep_q.maude` + `loads_dependency_q.maude`;
   - dependency handling: `dep_clean.maude` + `loads_dependency.maude`, `dep_bad.maude` +
@@ -438,6 +469,17 @@ replacing it (findings are heuristics and may be false positives).
   `implementation/plan.md` (six TDD steps) plus step reviews, and `summary.md` (closing
   record; the code is in `maude/session.py`, `server/tools/interpreter.py` and the
   integration tests).
+- `maude_eval_search_path/` — PDD cycle for search paths in `maude_run` (implemented):
+  `rough-idea.md`, `idea-honing.md` (eight settled decisions), `research/` (bindings
+  path API, current implementation, design options, related commands, executable probes
+  and transcripts for `SHEPHERD`/`UNLABELED`/`CHAIN`/`BRANCH`), `design/detailed-design.md`
+  (revision 4), three design-review rounds, and `implementation/plan.md` (five TDD steps).
+  Its `summary.md` predates the implementation and still says "implementation has not
+  started" — the code, fixture and tests exist; treat the design and plan as the record.
+- `Unexpected_failure_during_search/` — **untracked, in-progress** investigation of a
+  `maude_run` search that fails with the generic "Unexpected failure running the Maude
+  interpreter session" error (`rough-idea.md`, `shepherd.maude`; the research/design/
+  implementation directories are still empty). No fix or design yet.
 - `port-repair.py/` — early planning record for a future repair/fix-application tool:
   `rough-idea.md`, `idea-honing.md`, `research/`, `summary.md`. No production code yet.
 - `no_new_module_quirk/` — complete PDD cycle for the deferred `q .` parser-residue bug
