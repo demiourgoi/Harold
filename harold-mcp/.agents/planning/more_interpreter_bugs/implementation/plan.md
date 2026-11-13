@@ -56,8 +56,8 @@ increment and the foundation for the worker rewrite.
   `format_error_report(exc, *, context, max_chars, category=None)`:
   - first line `<category>: <message>` (or `<Type>: <message>` when no category);
   - merged context (`{**getattr(exc, "context", {}), **context}`, caller wins);
-  - cause chain starting with the exception itself, then `__cause__`/`__context__`,
-    then `remote_type: remote_message` when present;
+  - cause chain starting with the exception itself, then `__cause__`/`__context__`
+    with a cycle guard, then `remote_type: remote_message` when present;
   - originating traceback via
     `traceback.format_exception(type(exc), exc, exc.__traceback__)` for local
     failures, or `remote_traceback`;
@@ -77,6 +77,10 @@ increment and the foundation for the worker rewrite.
   build the context (resolved path, module, step count, timeout), log the uncapped
   report (`max_chars=0`), raise `MaudeRunError` with the capped report; do the same
   in the generic branch. Keep per-step `parse-error`/`too-large` data untouched.
+- Make the input-error raise sites (path/steps validation, missing file, missing
+  module, theory module) include the same context line while keeping their specific
+  messages; the context line applies to every whole-call failure, not only the two
+  except branches.
 - Make `diagnostics.aggregate.DiagnosticCollectionError` carry the failing
   `(provider_name, exception)` pairs and render provider sections with the same
   formatter; keep all-or-nothing aggregation.
@@ -90,12 +94,15 @@ increment and the foundation for the worker rewrite.
 
 - New `tests/unit/test_errors.py`: first-line shapes, category resolution,
   context-merge precedence, cause chain including the exception itself and the
-  remote cause, stored exception outside a handler (no `NoneType: None`),
-  traceback selection, truncation order, huge-first-line last resort,
-  `max_chars <= 0` unbounded, no secrets.
+  remote cause, **cycle guard**, stored exception outside a handler (no
+  `NoneType: None`), traceback selection, truncation order and **marker**,
+  huge-first-line last resort, `max_chars <= 0` unbounded, no secrets.
 - Update `tests/unit/test_interpreter_tool.py`: timeout, crash, init, remote,
   spawn, cancelled and protocol errors produce the rich capped text; the log
-  record holds the uncapped report; per-step data is unchanged.
+  record holds the uncapped report; per-step data is unchanged; input errors
+  (missing file, missing module, theory module) keep their specific message and
+  include the context line.
+- `tests/unit/test_settings.py`: `error_detail_max_chars` default.
 - Add/update diagnostics unit tests: a provider failure renders its chain and a
   real traceback (not `NoneType: None`), the collection lists every provider, and
   the all-or-nothing contract is unchanged.
@@ -131,8 +138,13 @@ Step 3.
     printing on failure), first `recv_bytes` catching `(EOFError, OSError)`, JSON
     and payload validation inside the try, protocol errors with category
     `protocol`, dispatch `ping`/`diagnostics`/`session` with lazy
-    `worker`/`session` imports, and a close in `finally`;
+    `worker`/`session` imports and a close in `finally`; `_dispatch` always calls
+    `worker.init_maude()` first, so `ping` is a real initialization check;
   - `ChildProtocolError`, `_format_exc`, `_worker_context`.
+- Add a small annotation to `maude/session.py`: `run_session` wraps the load and
+  each step, setting `exc.worker_context = {"phase": "load"}` or
+  `{"phase": "step", "step": index, "command": command}` on unexpected
+  exceptions; `_worker_context` reads it into the envelope.
 - Add a stdlib-only `harold_mcp.maude.runner`:
   - `ProcessRunner` protocol and `PipeProcessRunner(settings, *, target=...)`;
   - spawn + `Pipe`, parent closes the child end, register under a lock, check the
@@ -142,7 +154,9 @@ Step 3.
     the deadline, `recv_bytes(maxlength=settings.ipc_max_response_bytes)` with the
     EOF/mid-message/oversized mappings, decode and map by `error.category`;
   - `kill_all()` sets `_closed` then snapshots under the lock and kills/joins
-    outside it; `active_count()` for tests; close/kill/join in `finally`.
+    outside it; `active_count()` for tests; close/kill/join in `finally`;
+  - constructed runner errors carry `pid=proc.pid` in their `context` (None when
+    spawn failed), so ER-3's pid is present in the client text.
 - Add `Settings.ipc_max_response_bytes` (`HAROLD_IPC_MAX_RESPONSE_BYTES`, default
   2147483648 / 2 GiB, `gt=0`); the oversize error names the setting.
 - The transport/runner must not import `maude` at module level.
@@ -153,10 +167,19 @@ Step 3.
   unknown operation, protocol-category error, first-recv `OSError` treated as
   closed, redirect failure exits without output, stored-exception traceback helper,
   no version field.
+- Envelope-mapping tests: a fake connection returns an `init`, `remote` and
+  `protocol` error envelope and the parent raises `MaudeInitError`,
+  `MaudeWorkerRemoteError` and `MaudeWorkerProtocolError` respectively; a
+  fake-dispatch test asserts `init_maude` is called first and `serve_one` can
+  dispatch without importing Maude.
+- Session phase annotation tests: load and step exceptions carry `phase`/`step`/
+  `command`; `test_load_failure_has_phase_load` and the step variant.
 - Unit runner tests with fake process/connection: success, EOF, mid-message
   `OSError`, timeout, oversized response naming the setting, `BrokenPipeError` on
   send, spawn failure, shutdown registration race, active-map cleanup after every
-  exit path.
+  exit path; constructed errors carry the child pid in `context`.
+- `tests/unit/test_settings.py`: `ipc_max_response_bytes` default and the combined
+  new-settings assertions.
 - Integration tests with the real `spawn` context: an injected crash target
   (`os._exit`), a timeout target, a large request (> 64 KiB), a large response with
   a lowered `ipc_max_response_bytes`, and a real `ping`/`load_diagnostics` through
@@ -256,7 +279,8 @@ abstractions.
   fix it in the executor/runner and add the focused unit test.
 
 **Test requirements.** The integration/bug matrix from the design: B0–B7 and the
-review findings; B1/B2/B3 tests must fail on the old pool architecture and pass
+review findings (including the session phase annotation and envelope-mapping tests
+added in Step 2); B1/B2/B3 tests must fail on the old pool architecture and pass
 here. No sleeps as synchronization; use markers, explicit deadlines or
 `active_count`. Add the test names from the design (the names are illustrative).
 
