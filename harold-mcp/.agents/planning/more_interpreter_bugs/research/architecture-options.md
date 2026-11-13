@@ -147,31 +147,26 @@ own and test.
 
 ## Recommendation for the design phase
 
-**Primary: O1 (N independent single-worker pools).** It is stdlib-only, has no
-license or dependency risk, and one in-flight call per pool makes the
-queued-vs-running ambiguity impossible by construction. The slot manager can be a
-`queue.SimpleQueue` of `ProcessPoolExecutor(max_workers=1)` slots: acquire a slot,
-submit, wait; on crash/timeout kill and replace that slot; other slots are
-untouched. `start()` pings one task per slot; `shutdown()` kills every slot.
+**Chosen direction: O3 (one dedicated process per call, one-shot Pipe IPC).**
+The user prefers it, and the IPC probe (`ipc.md`) validates the mechanics: 1 MB
+payloads, EOF on crash, deadline + kill, concurrent calls. It removes the pool
+abstractions that caused the reproduced bugs, matches the existing
+fresh-interpreter-per-call behavior, and keeps the `MaudeExecutor` public surface.
 
-**Fallback: O2b (billiard)** if the slot manager proves too costly and the team
-accepts a BSD dependency plus the parent-process-kill risk. Billiard has the best
-per-job semantics, but it does not remove the need for slot admission or a
-client-side timeout, and its timeout configuration is a trap.
+**Fallbacks if O3 proves too costly:** O1 (N single-worker pools) is the stdlib-only
+pool alternative; O2b (billiard) has the best per-job semantics but adds a BSD
+dependency and a parent-process-kill risk.
 
 **O2 (pebble) is rejected** on the LGPL-3.0/GPL-2.0-only incompatibility.
-**O3 is not preferred** by the user; it remains the last resort if pool semantics
-keep producing surprises.
 
 Open questions for the design:
 
-1. Should a call cancelled by another call's failure be reported as
-   `MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`, or a new
-   `MaudeWorkerCancelledError`? (Under O1 the external-cancellation case disappears.)
-2. Should `maude_workers` remain the concurrency bound in O1 (slot count)?
+1. Should a remote worker exception surface as a `MaudeWorkerError` ("Maude
+   interpreter session failed: ...") or keep the existing generic
+   "Unexpected failure ...: Type: message" wrapper with the cause chained?
+2. JSON over `send_bytes` or pickle over `send`/`recv` for the request and result?
+   (JSON is explicit and safe; pickle preserves the pool's current behavior.)
 3. Keep the attempt-3 instrumentation (pool generation, submit/create logging) or
-   reduce it to the tool-level traceback once isolation removes the shared-pool
-   cascade?
-4. What is the slot policy when a call times out during spawn/init (before the task
-   starts)? Killing that slot's pool is safe under O1 and should map to
-   `MaudeWorkerTimeoutError`.
+   reduce it to the tool-level traceback once the pool is gone?
+4. What should `shutdown()` do to in-flight calls (kill them and return a
+   cancelled/timeout error), and how is that reported to the client?

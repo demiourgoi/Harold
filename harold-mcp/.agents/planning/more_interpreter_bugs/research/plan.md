@@ -71,6 +71,7 @@ Scope decisions agreed with the user:
 - `research/error-taxonomy.md` — hierarchy/reachability for B5/B6.
 - `research/architecture-options.md` — pool isolation options and trade-offs.
 - `research/billiard.md` — billiard license and verified capabilities.
+- `research/ipc.md` — one-shot Pipe IPC probe and protocol implications for O3.
 
 ## Status (research complete)
 
@@ -82,6 +83,9 @@ All probes have run on `HEAD` = `9272529`, Python 3.14.2:
 - Pool options evaluated: pebble rejected on LGPL-3.0/GPL-2.0 grounds, billiard
   verified and license-compatible but with parent-process-kill risks
   (`architecture-options.md`, `billiard.md`).
+- The one-shot Pipe IPC for O3 is validated (`ipc.md`): 1 MB payloads, EOF on
+  crash, deadline + kill, concurrent calls.
 
-Recommendation: N single-worker pools (option B), with billiard as the fallback if
-the slot manager is judged too costly.
+Direction: the user leans towards **O3 (dedicated process per call)**; the research
+confirms it is the simplest fit and avoids the pool abstractions that caused the
+reproduced bugs. Pending confirmation to proceed to the detailed design.
