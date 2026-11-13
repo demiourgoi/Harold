@@ -212,8 +212,10 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
    server log.
 5. Diagnostics reports every failing provider with its cause and preserves its
    success/summary behavior.
-6. `make check`, `make test` and `make docs-test` pass; the new regression tests
-   fail on the old architecture and pass on the new one.
+6. `make check`, `make test` and `make docs-test` pass; the B1/B2/B3 regression
+   tests fail on the old shared-pool architecture and pass on the new one.
+   New-machinery tests (formatter, shutdown race, target seam) have no
+   old-architecture counterpart.
 7. No orphan processes remain after normal use, timeouts, crashes or shutdown.
 
 ### 2.5 Out of scope
@@ -340,16 +342,17 @@ class MaudeExecutor:
 ```
 
 `submit()` is removed: there is no pool and no arbitrary task submission. The
-pool-only helpers `worker.sleep` and `worker.rendezvous_pid` are removed from the
-worker module; their behavior is replaced by injectable test targets on the runner
-(§4.2, §7.2).
+pool-only helpers `worker.sleep`, `worker.rendezvous_pid` and `worker._crash` are
+removed from the worker module; their behavior is replaced by injectable test
+targets on the runner (§4.2, §7.2).
 
 Internals:
 
-- `_settings`, `_semaphore`, `_closed: threading.Event`, `_runner:
-  ProcessRunner`.
+- `_settings`, `_semaphore`, `_closed: threading.Event`, `_runner_factory`,
+  `_runner: ProcessRunner | None`.
 - `__init__(settings=None, *, runner_factory=None)` keeps a test seam analogous
-  to the old `executor_factory`.
+  to the old `executor_factory`; `_runner` is created lazily by the first call or
+  by `start()`, like the old pool.
 - `_run_operation(operation, payload, timeout, context)`:
   1. compute a monotonic deadline;
   2. acquire the semaphore with the remaining timeout (false → timeout error with
@@ -363,15 +366,17 @@ Internals:
   settings.diagnostics_timeout_secs, context)`.
 - `run_session(request, timeout)` calls `_run_operation("session", request,
   timeout, context)`.
-- `start(timeout)` clears `_closed`, runs `maude_workers` `ping` operations in
-  parallel (a `ThreadPoolExecutor` limited to `maude_workers` is sufficient;
-  the runner itself is thread-safe), waits for all with the shared deadline, and
-  raises `MaudeInitError` with the first failure as its cause. On failure it kills
-  the runner's active processes.
+- `start(timeout)` builds a **fresh** runner from `runner_factory` (so the
+  runner's closed flag is new), clears `_closed`, runs `maude_workers` `ping`
+  operations in parallel (a `ThreadPoolExecutor` limited to `maude_workers` is
+  sufficient; the runner itself is thread-safe), waits for all with the shared
+  deadline, and raises `MaudeInitError` with the first failure as its cause. On
+  failure it kills the runner's active processes. `start()` is lifecycle-only: it
+  must not race with in-flight calls; the lifespan calls it before serving.
 - `shutdown()` sets `_closed`, calls `runner.kill_all()` (which sets the runner's
   own closed flag before snapshotting), and clears the active set. It is safe to
-  call more than once and is terminal for the instance; the lifespan starts one
-  executor. A test that needs a fresh start constructs a new `MaudeExecutor`.
+  call more than once. Calling `start()` again builds a fresh runner and clears the
+  executor flag, so a restart works; the lifespan starts one executor.
 
 ### 4.2 `PipeProcessRunner`
 
@@ -519,7 +524,8 @@ def format_error_report(exc: BaseException, *, context: Mapping[str, object],
 
 It renders, in order:
 
-1. a stable first line: `<category>: <exception type>: <message>`;
+1. a stable first line: `<category>: <exception type>: <message>`, or
+   `<exception type>: <message>` if no category applies;
 2. `context: key=value, ...` (ordered, only provided keys);
 3. the cause chain: `cause: Type: message <- Type: message <- ...` with a cycle
    guard;
@@ -528,6 +534,11 @@ It renders, in order:
    local one. Unlike `format_exc()`, this renders a stored exception outside its
    handler, which the diagnostics aggregation needs;
 5. a truncation marker when the cap shortened the report.
+
+`category` resolution: the explicit argument, else `getattr(exc, "category", None)`.
+If neither yields a category, the first line starts with `Type: message` and the
+caller's own prefix ("Maude interpreter session failed: " or "Unexpected failure
+...: ") supplies the context.
 
 The context is the exception's own `context` merged with the caller's context,
 with the caller's keys winning on collision
@@ -747,7 +758,9 @@ shortens the text.
 
 ### 6.3 Formatting algorithm
 
-1. Build the first line from the category, exception type and message.
+1. Resolve the category (explicit argument, else `getattr(exc, "category", None)`)
+   and build the first line as `<category>: <Type>: <message>`, or
+   `<Type>: <message>` when no category applies.
 2. Merge the exception's own `context` with the caller's context, caller keys
    winning (`{**getattr(exc, "context", {}), **context}`), and append the ordered
    `key=value` pairs (skip `None` values).
@@ -806,13 +819,15 @@ unchanged.
 runner's own `_closed` flag **before** snapshotting the active map, so a child
 whose registration lands after the snapshot is caught by the runner's
 post-registration check (§4.2 step 4): it is killed, joined and reported as
-`MaudeWorkerCancelledError`. A call blocked in `poll`/`recv_bytes` wakes with EOF;
-the executor checks `_closed` and raises `MaudeWorkerCancelledError` instead of
-crash. A call that has not yet acquired a slot checks `_closed` after acquiring
-and raises the same error before spawning. `shutdown()` is idempotent and
-kills/joins with a bounded wait, logging any process that refuses to die. A
-`concurrent.futures.CancelledError` from any library path is mapped to
-`MaudeWorkerCancelledError`; it never reaches the tool bare.
+`MaudeWorkerCancelledError`. Any runner crash detected while the executor is
+closed — EOF from `poll`/`recv_bytes`, a `BrokenPipeError` on the request send, or
+a failure while joining — is re-mapped by the executor to
+`MaudeWorkerCancelledError`, not only the receive path. A call that has not yet
+acquired a slot checks `_closed` after acquiring and raises the same error before
+spawning. `shutdown()` is idempotent and kills/joins with a bounded wait, logging
+any process that refuses to die. A `concurrent.futures.CancelledError` from any
+library path is mapped to `MaudeWorkerCancelledError`; it never reaches the tool
+bare.
 
 ## 7. Testing Strategy
 
@@ -820,7 +835,8 @@ kills/joins with a bounded wait, logging any process that refuses to die. A
 
 - **Formatter** (`errors`): type/message/cause/context/traceback rendering; cycle
   guard; remote traceback; a stored exception rendered outside its handler (not
-  "NoneType: None"); context-merge precedence (caller wins on collision);
+  "NoneType: None"); category resolution (explicit, `exc.category`, or none →
+  `Type: message`); context-merge precedence (caller wins on collision);
   truncation keeps the first line/category/type, including a message larger than
   the cap; marker; no secrets.
 - **Transport protocol**: request/response encoding; non-object JSON and invalid
@@ -834,8 +850,10 @@ kills/joins with a bounded wait, logging any process that refuses to die. A
   and raises `MaudeWorkerCancelledError`); asserts kill/join and active-set cleanup.
 - **Executor with a fake runner**: success; timeout; crash; spawn failure; init
   failure; remote error; protocol error; a stray `CancelledError` mapping; shutdown
-  cancellation; semaphore admission (a second call waits); `start()` pings
-  `maude_workers` times and fails fast; shutdown idempotence; `_closed` behavior.
+  cancellation; a crash while `_closed` re-maps to cancelled; semaphore admission
+  (a second call waits); `start()` pings `maude_workers` times and fails fast;
+  `start()` after `shutdown()` builds a fresh runner and succeeds; shutdown
+  idempotence; `_closed` behavior.
 - **Session phase annotation**: a fake load/step raising an unexpected exception
   carries `phase="load"` or `phase="step"` plus index/command into the envelope.
 - **Tool adapters**: rich text in `MaudeRunError`; per-step data unchanged;
@@ -852,9 +870,9 @@ Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude impo
   Production passes `transport.serve_one`; integration tests pass a crash target
   (`os._exit`) or a sleeping/rendezvous target. Tests construct
   `PipeProcessRunner(settings, target=...)` through the executor's `runner_factory`
-  and inject it into `MaudeExecutor`. `submit()`, `worker.sleep` and
-  `worker.rendezvous_pid` are removed; the tests that used them are rewritten
-  around the target seam.
+  and inject it into `MaudeExecutor`. `submit()`, `worker.sleep`,
+  `worker.rendezvous_pid` and `worker._crash` are removed; the tests that used them
+  are rewritten around the target seam.
 - Normal session and diagnostics results are semantically equal to the old behavior
   for representative fixtures.
 - **Abrupt child exit:** the crash target exits without a response; only that call
@@ -883,8 +901,9 @@ Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude impo
 
 ### 7.3 Regression tests
 
-The cascade, crash, timeout, shutdown-race and rich-error tests are added to the
-suite; they must fail on the old shared-pool architecture and pass on the new one.
+The B1/B2/B3 cascade/crash/timeout regression tests must fail on the old
+shared-pool architecture and pass on the new one. Formatter, shutdown-race and
+target-seam tests exercise new machinery and have no old-architecture counterpart.
 A regression test for the bounded-search-at-EOF load capture and for step stderr
 capture remains.
 
@@ -934,6 +953,17 @@ The design review's findings are all covered by tests:
 | 9. Load-phase context | `test_load_failure_has_phase_load` | Unit |
 | 10. Stale documentation sentence | `test_maude_run_description_does_not_mention_worker_pool`; `make docs-test` + documentation checklist | Unit + build/review |
 | 11. Context merge | `test_context_merge_caller_wins` | Unit |
+
+#### Review 2 coverage
+
+| Finding | Test / action | Type |
+| --- | --- | --- |
+| 1. Restart after shutdown | `test_start_after_shutdown_builds_fresh_runner` | Unit |
+| 2. Crash→cancelled on the send path | `test_shutdown_during_send_maps_crash_to_cancelled` | Unit |
+| 3. `worker._crash` removal | removal checklist / grep for `_crash` | Cleanup |
+| 4. Category-less formatter | `test_categoryless_report_omits_prefix` | Unit |
+| 5. Old-architecture claim | §7.3/AC-6 wording aligned | Doc |
+| 6. FR-11 wording | idea-honing FR-11 aligned | Doc |
 
 ### 7.6 Test type rationale
 

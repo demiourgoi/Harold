@@ -90,9 +90,12 @@ Each requirement is testable. "Call" means one `maude_run` or
   child processes, is idempotent, leaves no orphans/zombies, and never hangs the
   server exit. In-flight calls receive a shutdown/cancellation error if a client is
   still waiting.
-- **FR-11 — Wire robustness.** The parent caps the accepted response size with
+- **FR-11 — Wire robustness.** The parent always passes
   `recv_bytes(maxlength=...)`, distinguishes a malformed/oversized envelope from a
-  crash, and never blocks forever on a child that stops responding.
+  crash, and bounds the response wait by the call deadline. The request send has no
+  separate deadline but is bounded by child bootstrap (the child reads before
+  importing Maude), and a dead child yields `BrokenPipeError`; a bootstrap-level
+  hang is a residual risk with a watchdog fallback.
 - **FR-12 — No behavioral regression.** Existing success results, per-step
   semantics, diagnostics ordering/severity/fix behavior, and tool schemas are
   unchanged. Only failure messages and worker internals change.
