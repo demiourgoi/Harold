@@ -5,9 +5,8 @@ package never imports the SWIG `maude` bindings.
 """
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict
-from harold_mcp.maude.executor import (
+from harold_mcp.maude.errors import (
     MaudeError,
-    MaudeExecutor,
     MaudeInitError,
     MaudeWorkerCancelledError,
     MaudeWorkerCrashedError,
@@ -16,8 +15,8 @@ from harold_mcp.maude.executor import (
     MaudeWorkerRemoteError,
     MaudeWorkerSpawnError,
     MaudeWorkerTimeoutError,
-    get_maude_executor,
 )
+from harold_mcp.maude.executor import MaudeExecutor, get_maude_executor
 from harold_mcp.maude.provider import InterpreterDiagnosticProvider
 from harold_mcp.maude.session import (
     BindingDict,

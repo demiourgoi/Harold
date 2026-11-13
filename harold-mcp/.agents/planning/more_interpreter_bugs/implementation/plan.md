@@ -3,7 +3,7 @@
 ## Checklist
 
 - [x] Step 1 — Error model, formatter, and rich tool errors
-- [ ] Step 2 — One-shot IPC transport and process runner
+- [x] Step 2 — One-shot IPC transport and process runner
 - [ ] Step 3 — Replace the pool executor with per-call processes
 - [ ] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
 - [ ] Step 5 — Diagnostics end-to-end and error parity
@@ -244,6 +244,49 @@ component is exercised by unit and integration tests, not left dead.
 **Demo.** A focused integration test runs `load_diagnostics` through
 `PipeProcessRunner`; a crash target fails only its own call while a healthy target
 returns a result. Run the transport/runner tests.
+
+### Implementation notes (Step 2)
+
+Implemented as planned. Deviations and additions, with their rationale:
+
+- The worker error hierarchy moved to a new stdlib-only
+  `harold_mcp/maude/errors.py`; `maude/executor.py` and `maude/__init__.py` re-export
+  it, so the public import paths are unchanged. Step 3 makes `executor` import the
+  runner, and the runner needs the errors: with the classes still in `executor`, that
+  would be an import cycle. `maude/provider.py` now imports `MaudeWorkerError` from
+  `errors` (mypy does not treat imported names as re-exported without `__all__`).
+- `PipeProcessRunner` has an extra keyword-only `context=` seam for a fake
+  `multiprocessing` context. The design named only `target`; integration tests use
+  `target`, while the hermetic unit tests use both to inject connections, processes
+  and the shutdown race without spawning anything.
+- Transport/runner messages are raised through two `NoReturn` helpers,
+  `transport._fail_request` and `runner._fail_protocol`. Ruff's TRY003 flags *any*
+  message formatted at a `raise` site (not only long ones), and a helper keeps the
+  messages in one place without `# noqa` on every branch.
+- `session._annotate_worker_context` assigns the attribute through
+  `cast(Any, exc)`. Ruff B010 auto-fixes `setattr(exc, "worker_context", ...)` into
+  direct attribute assignment, which mypy rejects on `BaseException`.
+- `_validate_request` additionally requires `diagnostics.payload.path` to be a
+  string, so a malformed request is a `protocol` error rather than a remote
+  `KeyError`; the design only required the payload to be a JSON object.
+- `ProcessRunner.run`/`PipeProcessRunner.run` carry `# type: ignore[type-var]`:
+  `T` appears only in the return type by design (the caller knows the expected
+  result). Mypy flags it; the ignore is repeated on both definitions.
+- The session module/`run_session` docstrings were updated: the “process pool
+  pickles” wording is stale from Step 1's architecture. Step 6 still owns the
+  user-facing `maude_run` description and `docs/modules.md`.
+
+Tests: new `tests/unit/test_maude_transport.py` (22 tests),
+`tests/unit/test_maude_runner.py` (25), the two session phase-annotation tests in
+`test_maude_session.py`, the settings additions, and
+`tests/integration/test_maude_transport_integration.py` (real spawn: ping +
+`load_diagnostics`, crash isolation, timeout + follow-up, 100 kB request, 10 kB
+response, lowered response cap). No sleeps are used as synchronization: the crash
+peer test uses a barrier and the shutdown race uses a start hook/event.
+
+Validation: `make check` clean, `make test-unit` 368 passed, focused integration
+(`test_maude_transport_integration.py`, `test_diagnostics_integration.py`,
+`test_maude_run_integration.py`) 47 passed.
 
 ---
 

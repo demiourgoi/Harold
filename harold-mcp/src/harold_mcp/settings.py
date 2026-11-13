@@ -50,6 +50,10 @@ class Settings(BaseSettings):
       failed tool call returns to the client (default `4000`). The full report is
       always logged; a truncated client report ends with a marker pointing at the
       log.
+    - `HAROLD_IPC_MAX_RESPONSE_BYTES`: maximum size in bytes of one worker response
+      read by the parent (default `2147483648`, 2 GiB). This is hardening against a
+      buggy child, not a quality-of-service limit; an oversized response is a
+      protocol error naming this setting.
     """
 
     model_config = SettingsConfigDict(env_prefix="HAROLD_")
@@ -65,6 +69,7 @@ class Settings(BaseSettings):
     interpreter_max_path_steps: int = Field(default=100, gt=0)
     interpreter_max_output_length: int = Field(default=1_000_000, gt=0)
     error_detail_max_chars: int = Field(default=DEFAULT_ERROR_DETAIL_MAX_CHARS, gt=0)
+    ipc_max_response_bytes: int = Field(default=2_147_483_648, gt=0)
 
 
 settings = Settings()

@@ -1,16 +1,16 @@
 """Bounded Maude interpreter session: the worker-side implementation of `maude_run`.
 
-This module is imported by the server process only for the function reference the
-process pool pickles; the `maude` SWIG bindings are imported **lazily** inside
-`run_session`, so importing it never loads the interpreter outside a worker.
+This module runs in the worker process; the `maude` SWIG bindings are imported
+**lazily** inside `run_session`, so importing it never loads the interpreter outside
+a worker.
 
-A session is hermetic: the executor runs it in a fresh worker process (one task per
+A session is hermetic: the executor runs it in a fresh worker process (one call per
 process), it loads one file, selects one module, and runs the requested steps. The
 caller carries state across sessions by re-submitting a saved result term or by
 writing a wrapper module.
 """
 
-from typing import Any, Literal, NamedTuple, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict, cast
 
 from harold_mcp.maude.capture import CapturedOutput, WarningDict, capture_streams, parse_warnings, truncate_output
 
@@ -604,6 +604,11 @@ def _run_step(
             raise ValueError(f"unsupported command {command!r} in step {index}")  # noqa: TRY003 - programming error
 
 
+def _annotate_worker_context(exc: BaseException, **context: object) -> None:
+    """Attach the failing phase to an exception for the IPC error envelope."""
+    cast(Any, exc).worker_context = context
+
+
 def run_session(request: SessionRequest) -> SessionResult:
     """Run a bounded interpreter session in the current worker process.
 
@@ -612,17 +617,25 @@ def run_session(request: SessionRequest) -> SessionResult:
     requested module, and executes the steps until the first failure. Outputs are
     truncated to `max_output_length`; warnings and parse-error messages are parsed
     from the **full** stderr before truncation.
+
+    Unexpected exceptions carry `worker_context` (the phase and, for a step, its
+    index and command) so `transport.serve_one` can report where the failure
+    happened. Per-step `parse-error`/`too-large` outcomes are data and never raise.
     """
-    # Lazy import: the server process imports this module for the function reference
-    # the pool pickles, and must never load the SWIG bindings.
+    # Lazy import: this module defines the request and result types and is imported by
+    # the server process; it must never load the SWIG bindings there.
     import maude
 
-    modules_before = {header.name for header in maude.getModules()}
-    load_ok, load_capture = capture_streams(lambda: bool(maude.load(request["path"])))
-    defined_modules = sorted({header.name for header in maude.getModules()} - modules_before)
-    # Parse before truncating: a long stderr must not hide a warning.
-    warnings = parse_warnings(load_capture["stderr"])
-    load_output = _truncate_capture(load_capture, request["max_output_length"])
+    try:
+        modules_before = {header.name for header in maude.getModules()}
+        load_ok, load_capture = capture_streams(lambda: bool(maude.load(request["path"])))
+        defined_modules = sorted({header.name for header in maude.getModules()} - modules_before)
+        # Parse before truncating: a long stderr must not hide a warning.
+        warnings = parse_warnings(load_capture["stderr"])
+        load_output = _truncate_capture(load_capture, request["max_output_length"])
+    except BaseException as exc:
+        _annotate_worker_context(exc, phase="load")
+        raise
 
     if not load_ok:
         return {
@@ -650,7 +663,11 @@ def run_session(request: SessionRequest) -> SessionResult:
     outcomes: list[StepOutcomeDict] = []
     current: str | None = None
     for index, step in enumerate(request["steps"]):
-        outcome = _run_step(module, index, step, current, request)
+        try:
+            outcome = _run_step(module, index, step, current, request)
+        except BaseException as exc:
+            _annotate_worker_context(exc, phase="step", step=index, command=step["command"])
+            raise
         outcomes.append(outcome)
         if outcome["status"] != "ok":
             break

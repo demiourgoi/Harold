@@ -19,6 +19,7 @@ _ENV_VARS = [
     "HAROLD_INTERPRETER_MAX_PATH_STEPS",
     "HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH",
     "HAROLD_ERROR_DETAIL_MAX_CHARS",
+    "HAROLD_IPC_MAX_RESPONSE_BYTES",
 ]
 
 _POSITIVE_INT_SETTINGS = [env_var for env_var in _ENV_VARS if env_var != "HAROLD_MAUDE_WORKERS"]
@@ -44,6 +45,7 @@ def test_defaults() -> None:
     assert resolved.interpreter_max_path_steps == 100
     assert resolved.interpreter_max_output_length == 1_000_000
     assert resolved.error_detail_max_chars == 4000
+    assert resolved.ipc_max_response_bytes == 2_147_483_648
 
 
 def test_workers_default_scales_with_cpu_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +69,7 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
         "HAROLD_INTERPRETER_MAX_PATH_STEPS": ("interpreter_max_path_steps", 23),
         "HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH": ("interpreter_max_output_length", 19),
         "HAROLD_ERROR_DETAIL_MAX_CHARS": ("error_detail_max_chars", 500),
+        "HAROLD_IPC_MAX_RESPONSE_BYTES": ("ipc_max_response_bytes", 4096),
     }
     for env_var, (_, value) in overrides.items():
         monkeypatch.setenv(env_var, str(value))

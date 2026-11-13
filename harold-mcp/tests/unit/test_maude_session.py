@@ -5,11 +5,19 @@ root-state safety rule (`getRule` on the root crashes the real process), the
 over-cap early stop, and the element cap, without an interpreter.
 """
 
+import sys
+import types
 from typing import Any
 
 import pytest
 
-from harold_mcp.maude.session import _collect_solutions, _collect_step, _reconstruct_path
+from harold_mcp.maude import session as session_module
+from harold_mcp.maude.session import (
+    SessionRequest,
+    _collect_solutions,
+    _collect_step,
+    _reconstruct_path,
+)
 
 
 class FakeRule:
@@ -349,3 +357,77 @@ def test_invalid_path_mode_is_a_programming_error() -> None:
             1_000_000,
             100,
         )
+
+
+class _FakeModule:
+    def __init__(self, module_type: int = 0) -> None:
+        self._module_type = module_type
+
+    def getModuleType(self) -> int:
+        return self._module_type
+
+
+class _FakeMaude(types.ModuleType):
+    """Scriptable stand-in for the lazy `import maude` inside `run_session`."""
+
+    def __init__(self, *, load_error: BaseException | None = None) -> None:
+        super().__init__("maude")
+        self.load_error = load_error
+
+    def getModules(self) -> list[object]:
+        return []
+
+    def load(self, path: str) -> bool:
+        if self.load_error is not None:
+            raise self.load_error
+        return True
+
+    def getModule(self, name: str) -> _FakeModule:
+        return _FakeModule()
+
+
+def _request() -> SessionRequest:
+    return {
+        "path": "program.maude",
+        "module": "M",
+        "steps": [
+            {
+                "command": "reduce",
+                "term": "f",
+                "pattern": None,
+                "subject": None,
+                "bound": None,
+                "gas": None,
+                "depth": None,
+                "search_type": None,
+                "path_mode": None,
+            }
+        ],
+        "max_solutions": 200,
+        "max_result_length": 1_000_000,
+        "max_path_steps": 100,
+        "max_output_length": 1_000_000,
+    }
+
+
+def test_load_failure_has_phase_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "maude", _FakeMaude(load_error=RuntimeError("load exploded")))
+
+    with pytest.raises(RuntimeError, match="load exploded") as exc_info:
+        _ = session_module.run_session(_request())
+
+    assert exc_info.value.worker_context == {"phase": "load"}
+
+
+def test_step_failure_has_phase_step_index_and_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "maude", _FakeMaude())
+
+    def boom(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("step exploded")  # noqa: TRY003 - test double
+
+    monkeypatch.setattr(session_module, "_run_step", boom)
+
+    with pytest.raises(RuntimeError, match="step exploded") as exc_info:
+        _ = session_module.run_session(_request())
+
+    assert exc_info.value.worker_context == {"phase": "step", "step": 0, "command": "reduce"}
