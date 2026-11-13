@@ -245,7 +245,7 @@ def test_missing_file_raises_before_touching_the_provider(tmp_path: Path) -> Non
     missing = tmp_path / "does-not-exist.maude"
 
     with pytest.raises(SourceFileNotFoundError, match="does-not-exist"):
-        _ = maude_program_diagnostics(str(missing), providers=_providers(fake))
+        _ = maude_program_diagnostics(str(missing), providers=_providers(fake), settings=_settings())
 
     assert fake.calls == []  # the pre-check fires before any provider call
 
@@ -258,7 +258,7 @@ def test_unreadable_file_raises_before_touching_the_provider(tmp_path: Path) -> 
     path.chmod(0o000)
 
     with pytest.raises(SourceFileNotFoundError, match="unreadable"):
-        _ = maude_program_diagnostics(str(path), providers=_providers(fake))
+        _ = maude_program_diagnostics(str(path), providers=_providers(fake), settings=_settings())
 
     assert fake.calls == []
 

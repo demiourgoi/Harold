@@ -111,9 +111,7 @@ def _truncate_report(
     if traceback_section is not None:
         budget = max_chars - len(_with_marker(base)) - 1
         if budget > 0:
-            report = _with_marker([*base, traceback_section[:budget]])
-            if len(report) <= max_chars:
-                return report
+            return _with_marker([*base, traceback_section[:budget]])
     report = _with_marker(base)
     if len(report) <= max_chars:
         return report

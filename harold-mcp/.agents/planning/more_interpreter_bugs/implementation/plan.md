@@ -164,6 +164,13 @@ Validation: `make check`, `make test-unit` (317 passed) and the focused integrat
 runs (`test_diagnostics_integration.py`, `test_maude_run_integration.py`; 41 passed)
 are green.
 
+Review feedback (`step-1-review.md`, verdict Ship, two nice-to-have findings) was
+attended: the now-dead bounds check in the traceback truncation step was removed
+(the budget identity guarantees the fit), and the two diagnostics pre-check tests
+now pass `settings` like every other direct call, so they do not depend on the
+pre-check happening before the first settings read. Re-ran `make check` and
+`make test-unit`: green.
+
 ---
 
 ## Step 2: One-shot IPC transport and process runner
