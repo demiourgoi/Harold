@@ -18,12 +18,12 @@ from typing import Any, cast
 import pytest
 
 from harold_mcp.maude import transport
-from harold_mcp.maude.errors import (
+from harold_mcp.maude.runner import PipeProcessRunner
+from harold_mcp.maude.worker_errors import (
     MaudeWorkerCrashedError,
     MaudeWorkerProtocolError,
     MaudeWorkerTimeoutError,
 )
-from harold_mcp.maude.runner import PipeProcessRunner
 from harold_mcp.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

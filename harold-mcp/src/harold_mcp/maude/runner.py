@@ -21,7 +21,8 @@ from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from typing import Any, NoReturn, Protocol, cast
 
-from harold_mcp.maude.errors import (
+from harold_mcp.maude.transport import serve_one
+from harold_mcp.maude.worker_errors import (
     MaudeInitError,
     MaudeWorkerCancelledError,
     MaudeWorkerCrashedError,
@@ -30,7 +31,6 @@ from harold_mcp.maude.errors import (
     MaudeWorkerSpawnError,
     MaudeWorkerTimeoutError,
 )
-from harold_mcp.maude.transport import serve_one
 from harold_mcp.settings import Settings
 
 _JOIN_TIMEOUT_SECS = 5.0
@@ -55,8 +55,13 @@ class ProcessRunner(Protocol):
 
 
 def _terminate(proc: BaseProcess) -> None:
-    """Kill and reap a child, tolerating a process object that is already closed."""
-    with contextlib.suppress(ValueError):
+    """Kill and reap a child, tolerating a process object that is already closed.
+
+    `ProcessLookupError` is tolerated too: `kill_all()` and a call's own `finally`
+    can terminate the same child, and the loser's `kill()` finds no process. A raw
+    error here would replace the typed error the call is already raising.
+    """
+    with contextlib.suppress(ValueError, ProcessLookupError):
         if proc.is_alive():
             proc.kill()
     try:
@@ -164,7 +169,14 @@ class PipeProcessRunner:
             except OSError as exc:
                 raise MaudeWorkerCrashedError(context={**context, "pid": proc.pid}) from exc
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not parent.poll(remaining):
+            if remaining <= 0:
+                raise MaudeWorkerTimeoutError(context={**context, "pid": proc.pid})
+            try:
+                ready = parent.poll(remaining)
+            except OSError as exc:
+                # kill_all() can close the pipe between the send and the poll.
+                raise MaudeWorkerCrashedError(context={**context, "pid": proc.pid}) from exc
+            if not ready:
                 raise MaudeWorkerTimeoutError(context={**context, "pid": proc.pid})
             raw = self._receive(parent, context, proc.pid)
             return cast(T, self._decode_response(raw, context, proc.pid))
@@ -204,6 +216,8 @@ class PipeProcessRunner:
             _fail_protocol("invalid worker response: envelope must be a JSON object", context=error_context)
         status = envelope.get("status")
         if status == "ok":
+            if "result" not in envelope:
+                _fail_protocol("invalid worker response: missing result", context=error_context)
             return envelope.get("result")
         if status != "error":
             _fail_protocol(f"invalid worker response: unknown status {status!r}", context=error_context)

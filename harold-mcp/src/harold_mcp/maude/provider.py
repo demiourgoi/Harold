@@ -12,8 +12,8 @@ from harold_mcp.diagnostics import (
     ProviderDiagnostic,
     SourceFile,
 )
-from harold_mcp.maude.errors import MaudeWorkerError
 from harold_mcp.maude.executor import MaudeExecutor
+from harold_mcp.maude.worker_errors import MaudeWorkerError
 
 _HARD_FAILURE_MESSAGE = "Failed to load Maude program: unrecoverable parse error."
 _CODE = "compiler"

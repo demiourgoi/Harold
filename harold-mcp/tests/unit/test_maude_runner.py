@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from harold_mcp.maude.errors import (
+from harold_mcp.maude.runner import PipeProcessRunner
+from harold_mcp.maude.worker_errors import (
     MaudeInitError,
     MaudeWorkerCancelledError,
     MaudeWorkerCrashedError,
@@ -22,7 +23,6 @@ from harold_mcp.maude.errors import (
     MaudeWorkerSpawnError,
     MaudeWorkerTimeoutError,
 )
-from harold_mcp.maude.runner import PipeProcessRunner
 from harold_mcp.settings import Settings
 
 
@@ -73,10 +73,12 @@ class FakeProcess:
         pid: int | None = 4242,
         *,
         start_error: BaseException | None = None,
+        kill_error: BaseException | None = None,
         on_start: Callable[[], None] | None = None,
     ) -> None:
         self.pid = pid
         self.start_error = start_error
+        self.kill_error = kill_error
         self.on_start = on_start
         self.started = False
         self.killed = False
@@ -96,6 +98,8 @@ class FakeProcess:
         return self._alive
 
     def kill(self) -> None:
+        if self.kill_error is not None:
+            raise self.kill_error
         self.killed = True
         self._alive = False
 
@@ -230,6 +234,28 @@ def test_no_response_before_the_deadline_is_a_timeout() -> None:
     assert exc_info.value.context["pid"] == process.pid
     assert process.killed
     assert runner.active_count() == 0
+
+
+def test_poll_failure_is_a_crash() -> None:
+    """kill_all() closes the pipe, so poll() can raise `OSError("handle is closed")`."""
+
+    class PollErrorConnection(FakeConnection):
+        def poll(self, timeout: float | None = None) -> bool:
+            raise OSError("handle is closed")  # noqa: TRY003 - test double
+
+    runner, _, _, _ = _runner(parent=PollErrorConnection())
+
+    with pytest.raises(MaudeWorkerCrashedError):
+        _ = runner.run("ping", None, 5.0, {})
+
+
+def test_terminate_race_does_not_mask_the_typed_error() -> None:
+    """A child reaped by the other terminator must not replace the call's error."""
+    process = FakeProcess(kill_error=ProcessLookupError())
+    runner, _, _, _ = _runner(parent=FakeConnection(poll_result=False), process=process)
+
+    with pytest.raises(MaudeWorkerTimeoutError):
+        _ = runner.run("ping", None, 5.0, {})
 
 
 def test_oversized_response_names_the_setting() -> None:
@@ -399,6 +425,13 @@ def test_unknown_status_is_a_protocol_error() -> None:
     runner, _, _, _ = _runner(parent=FakeConnection(response=json.dumps({"status": "wat"}).encode()))
 
     with pytest.raises(MaudeWorkerProtocolError, match="unknown status"):
+        _ = runner.run("ping", None, 5.0, {})
+
+
+def test_ok_envelope_without_a_result_is_a_protocol_error() -> None:
+    runner, _, _, _ = _runner(parent=FakeConnection(response=json.dumps({"status": "ok"}).encode()))
+
+    with pytest.raises(MaudeWorkerProtocolError, match="missing result"):
         _ = runner.run("ping", None, 5.0, {})
 
 

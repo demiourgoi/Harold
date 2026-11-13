@@ -250,11 +250,13 @@ returns a result. Run the transport/runner tests.
 Implemented as planned. Deviations and additions, with their rationale:
 
 - The worker error hierarchy moved to a new stdlib-only
-  `harold_mcp/maude/errors.py`; `maude/executor.py` and `maude/__init__.py` re-export
-  it, so the public import paths are unchanged. Step 3 makes `executor` import the
-  runner, and the runner needs the errors: with the classes still in `executor`, that
-  would be an import cycle. `maude/provider.py` now imports `MaudeWorkerError` from
-  `errors` (mypy does not treat imported names as re-exported without `__all__`).
+  `harold_mcp/maude/worker_errors.py` (named so it does not collide with the Step 1
+  formatter `harold_mcp/errors.py`). `harold_mcp.maude` re-exports the full
+  hierarchy, so the public import path is `from harold_mcp.maude import ...`;
+  `maude/executor.py` imports only the classes it raises, and no code imports the
+  hierarchy from `executor` (mypy does not treat imported names as re-exported
+  without `__all__`). Step 3 makes `executor` import the runner, and the runner needs
+  the errors: with the classes still in `executor`, that would be an import cycle.
 - `PipeProcessRunner` has an extra keyword-only `context=` seam for a fake
   `multiprocessing` context. The design named only `target`; integration tests use
   `target`, while the hermetic unit tests use both to inject connections, processes
@@ -277,16 +279,32 @@ Implemented as planned. Deviations and additions, with their rationale:
   user-facing `maude_run` description and `docs/modules.md`.
 
 Tests: new `tests/unit/test_maude_transport.py` (22 tests),
-`tests/unit/test_maude_runner.py` (25), the two session phase-annotation tests in
+`tests/unit/test_maude_runner.py` (28), the two session phase-annotation tests in
 `test_maude_session.py`, the settings additions, and
 `tests/integration/test_maude_transport_integration.py` (real spawn: ping +
 `load_diagnostics`, crash isolation, timeout + follow-up, 100 kB request, 10 kB
 response, lowered response cap). No sleeps are used as synchronization: the crash
 peer test uses a barrier and the shutdown race uses a start hook/event.
 
-Validation: `make check` clean, `make test-unit` 368 passed, focused integration
+Validation: `make check` clean, `make test-unit` 371 passed, focused integration
 (`test_maude_transport_integration.py`, `test_diagnostics_integration.py`,
 `test_maude_run_integration.py`) 47 passed.
+
+Review feedback (`step-2-review.md`) was attended:
+
+- **Must fix:** `parent.poll()` is now wrapped like its sibling pipe operations; an
+  `OSError` (for example `handle is closed` when `kill_all()` closes the pipe between
+  the send and the poll) is a `MaudeWorkerCrashedError`, so the Step 3 executor can
+  re-map it to `cancelled` while closed instead of letting a raw `OSError` reach the
+  tool. New test: `test_poll_failure_is_a_crash`.
+- **Should fix:** `_terminate` also suppresses `ProcessLookupError`, so losing the
+  double-terminate race does not replace the call's typed error. New test:
+  `test_terminate_race_does_not_mask_the_typed_error`.
+- **Nice to have:** an `ok` envelope without a `result` key is now a protocol error
+  (`test_ok_envelope_without_a_result_is_a_protocol_error`); the re-export note above
+  was corrected (only `harold_mcp.maude` preserves the public path); and the module
+  was renamed from `maude/errors.py` to `maude/worker_errors.py` to avoid confusion
+  with `harold_mcp.errors` (all six import sites updated).
 
 ---
 

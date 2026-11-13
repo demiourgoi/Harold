@@ -15,7 +15,7 @@ from fastmcp.dependencies import Depends
 
 from harold_mcp.logging import Logging
 from harold_mcp.maude import session, worker
-from harold_mcp.maude.errors import (
+from harold_mcp.maude.worker_errors import (
     MaudeInitError,
     MaudeWorkerCrashedError,
     MaudeWorkerTimeoutError,

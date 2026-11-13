@@ -2,8 +2,8 @@
 
 Stdlib-only and free of `maude` imports. The hierarchy lives in its own module so
 both the client-side executor and the process runner can build these errors
-without an import cycle; `harold_mcp.maude.executor` re-exports every class, so
-the public import paths stay unchanged.
+without an import cycle; `harold_mcp.maude` re-exports every class, so the public
+import path is `from harold_mcp.maude import ...`.
 """
 
 from collections.abc import Mapping
