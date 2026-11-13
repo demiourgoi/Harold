@@ -127,8 +127,9 @@ not required to preserve it for error results, so **the text must stand alone**.
   (or "load"/"startup"), timeout, and pid where applicable.
 - **ER-4 — Bounded.** The total error text is capped by
   `HAROLD_ERROR_DETAIL_MAX_CHARS` (default 4000, proposed; see P1). The first line
-  (category, type, message) is never truncated; the traceback is the first thing
-  shortened; a truncation marker states that details were logged server-side.
+  is always present; if it alone exceeds the cap, its message part is truncated
+  while the category and type are kept. The traceback is shortened first; a
+  truncation marker states that details were logged server-side.
 - **ER-5 — No secrets.** Do not include environment variables, unrelated process
   state, or file contents. Paths and module names are allowed.
 - **ER-6 — Stable shape.** Use a consistent format, e.g.
@@ -211,8 +212,10 @@ defaults; correct any you disagree with without reopening the functional
 requirements.
 
 - **P1 — Error detail cap.** New setting `error_detail_max_chars`
-  (`HAROLD_ERROR_DETAIL_MAX_CHARS`, default 4000, `gt=0`). The first line is never
-  truncated; the traceback is shortened first; a marker points to the server log.
+  (`HAROLD_ERROR_DETAIL_MAX_CHARS`, default 4000, `gt=0`). The first line is always
+  present; if it alone exceeds the cap, its message is truncated while the category
+  and type are kept. The traceback is shortened first; a marker points to the
+  server log.
 - **P2 — Remote exceptions.** A remote Python exception is a distinct category
   (`MaudeWorkerRemoteError(MaudeWorkerError)`) whose reason names the remote type
   and message; the full remote traceback is appended per P1. This is distinct from
@@ -221,10 +224,10 @@ requirements.
   `MaudeWorkerCancelledError(MaudeWorkerError)` with a "cancelled during shutdown"
   reason. A bare `concurrent.futures.CancelledError` must never reach the tool.
 - **P4 — Wire format.** JSON over `Connection.send_bytes` with
-  `ensure_ascii=False`; the request/response envelope is explicit. The parent may
-  pass `recv_bytes(maxlength=...)` as hardening, but the cap must be above the
-  legitimate maximum result size; an oversized/malformed envelope is a distinct
-  protocol error, not a crash.
+  `ensure_ascii=False`; the request/response envelope is explicit. The parent
+  always passes `recv_bytes(maxlength=...)`; the cap must be above the legitimate
+  maximum result size (design default 2 GiB). An oversized/malformed envelope is a
+  distinct protocol error naming the setting, not a crash.
 - **P5 — Admission.** `threading.BoundedSemaphore(maude_workers)`;
   `acquire(timeout=remaining_budget)`. Failure raises the timeout error with a
   "no interpreter slot available" context.

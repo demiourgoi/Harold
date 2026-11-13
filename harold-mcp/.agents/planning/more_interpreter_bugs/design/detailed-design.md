@@ -1,6 +1,7 @@
 # Detailed Design — Isolated interpreter workers with rich failures
 
-Status: design for review.
+Status: design for review; revised after the first design review (all findings
+addressed).
 
 ## 1. Overview
 
@@ -122,9 +123,12 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
 - **FR-10 — Clean shutdown.** Shutdown kills and reaps in-flight children, is
   idempotent, leaves no orphans or zombies, and never hangs server exit. In-flight
   calls receive a shutdown-cancellation error when a client is still waiting.
-- **FR-11 — Wire robustness.** A malformed, oversized or wrong-version response is
-  a protocol error distinct from a crash; the parent never blocks forever on a
-  child that stops responding.
+- **FR-11 — Wire robustness.** The parent always passes
+  `recv_bytes(maxlength=HAROLD_IPC_MAX_RESPONSE_BYTES)`; a malformed or oversized
+  response is a protocol error distinct from a crash. The response wait is
+  deadline-bounded. The request send has no separate deadline but is bounded by
+  child bootstrap (the child reads before importing Maude), and a dead child yields
+  `BrokenPipeError`; Appendix D records this bound.
 - **FR-12 — No behavioral regression.** Success results, per-step semantics,
   diagnostics ordering/severity/fix behavior and tool schemas are unchanged; only
   failures and worker internals change.
@@ -138,8 +142,11 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
   truncation, admission and shutdown with fakes; integration tests cover real
   abrupt exit, real timeout, concurrent isolation, large responses, parse errors
   and diagnostics. The historical cascade becomes a regression test.
-- **FR-16 — Documentation.** Tool descriptions, the README, the CHANGELOG and the
-  committed agent knowledge base are updated.
+- **FR-16 — Documentation.** Update the `maude_run` tool description sentence that
+  says a non-terminating reduction "replaces the worker pool" (it no longer does),
+  the README `HAROLD_*` table for `HAROLD_ERROR_DETAIL_MAX_CHARS` and
+  `HAROLD_IPC_MAX_RESPONSE_BYTES`, `docs/modules.md` for the new error formatter and
+  transport modules, the CHANGELOG, and the committed agent knowledge base.
 
 ### 2.2 Error reporting requirements
 
@@ -150,8 +157,9 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
 - **ER-3 — Context.** The resolved absolute path, module, phase, step index and
   command (when known), timeout and pid are included.
 - **ER-4 — Bounded.** A `HAROLD_ERROR_DETAIL_MAX_CHARS` setting (default 4000)
-  caps the text. The first line is never truncated; the traceback is shortened
-  first; a marker points to the server log.
+  caps the text. The first line is always present; if it alone exceeds the cap, its
+  message part is truncated while the category and type are kept. The traceback is
+  shortened first; a marker points to the server log.
 - **ER-5 — No secrets.** No environment variables, unrelated process state or file
   contents. Paths and module names are allowed.
 - **ER-6 — Stable shape.** A consistent first line and a
@@ -181,9 +189,9 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
 - **NFR-2 — Dependencies.** Stdlib only; no new runtime dependency.
 - **NFR-3 — Safety.** Maude directory/file/process IO stays disabled; IPC payloads
   are validated; a malformed message cannot crash the server.
-- **NFR-4 — Bounded memory.** Existing output/result caps remain. The parent may
-  pass `recv_bytes(maxlength=...)` as hardening; an oversized message is a protocol
-  error, never unbounded buffering.
+- **NFR-4 — Bounded memory.** Existing output/result caps remain. The parent always
+  passes `recv_bytes(maxlength=HAROLD_IPC_MAX_RESPONSE_BYTES)`; an oversized message
+  is a protocol error naming the setting, never unbounded buffering.
 - **NFR-5 — Logging hygiene.** No logging while fds 1/2 are captured; child
   stdout/stderr never contaminate the MCP stdio transport.
 - **NFR-6 — Maintainability.** The transport sits behind a small runner seam so
@@ -301,7 +309,9 @@ sequenceDiagram
   `MaudeInitError`.
 - `shutdown()` sets a closed flag, kills and joins every active child, and is
   idempotent. In-flight calls observe EOF and are mapped to
-  `MaudeWorkerCancelledError` because the executor is closed.
+  `MaudeWorkerCancelledError` because the executor is closed. The runner also
+  checks its own closed flag after registering a child, so a spawn that races with
+  shutdown is killed before it can run (§4.2 step 4).
 
 ### 3.3 Stdio isolation
 
@@ -319,7 +329,7 @@ or prints while the capture fds are installed.
 
 ### 4.1 `MaudeExecutor`
 
-The public surface stays the same:
+The tool-facing surface stays the same:
 
 ```python
 class MaudeExecutor:
@@ -328,6 +338,11 @@ class MaudeExecutor:
     def diagnostics(self, path: str) -> worker.LoadDiagnosticsResult: ...
     def run_session(self, request: session.SessionRequest, timeout: float) -> session.SessionResult: ...
 ```
+
+`submit()` is removed: there is no pool and no arbitrary task submission. The
+pool-only helpers `worker.sleep` and `worker.rendezvous_pid` are removed from the
+worker module; their behavior is replaced by injectable test targets on the runner
+(§4.2, §7.2).
 
 Internals:
 
@@ -342,6 +357,8 @@ Internals:
   3. return immediately with `MaudeWorkerCancelledError` if `_closed` is set;
   4. call `self._runner.run(operation, payload, remaining, context)`;
   5. release the semaphore in `finally`.
+  The runner has its own closed flag, so a call that passes this check just before
+  shutdown is still stopped after it registers its child (§4.2 step 4).
 - `diagnostics(path)` calls `_run_operation("diagnostics", {"path": path},
   settings.diagnostics_timeout_secs, context)`.
 - `run_session(request, timeout)` calls `_run_operation("session", request,
@@ -351,8 +368,10 @@ Internals:
   the runner itself is thread-safe), waits for all with the shared deadline, and
   raises `MaudeInitError` with the first failure as its cause. On failure it kills
   the runner's active processes.
-- `shutdown()` sets `_closed`, calls `runner.kill_all()`, and clears the active
-  set. It is safe to call more than once.
+- `shutdown()` sets `_closed`, calls `runner.kill_all()` (which sets the runner's
+  own closed flag before snapshotting), and clears the active set. It is safe to
+  call more than once and is terminal for the instance; the lifespan starts one
+  executor. A test that needs a fresh start constructs a new `MaudeExecutor`.
 
 ### 4.2 `PipeProcessRunner`
 
@@ -367,31 +386,48 @@ class ProcessRunner(Protocol):
     def active_count(self) -> int: ...
 ```
 
-`PipeProcessRunner`:
+`PipeProcessRunner(settings, *, target=transport.serve_one)` owns a `_closed`
+event. The `target` parameter is the test seam: production passes
+`transport.serve_one`; integration tests inject a top-level target that crashes,
+sleeps or rendezvouses to exercise isolation without a special production
+operation.
 
 1. `ctx = multiprocessing.get_context("spawn")`; `parent, child = ctx.Pipe()`.
-2. `proc = ctx.Process(target=transport.serve_one, args=(child,), daemon=True)`.
+2. `proc = ctx.Process(target=self._target, args=(child,), daemon=True)`.
 3. `proc.start()`; close `child` in the parent; register `(proc, parent)` in the
    active map under a lock. If `Process.start()` raises `OSError` or `RuntimeError`,
    close the connection and raise `MaudeWorkerSpawnError` with the cause and
    context; nothing is registered and no child exists to kill.
-4. `parent.send_bytes(json.dumps(request, ensure_ascii=False).encode())`; a
-   `BrokenPipeError`/`OSError` here is a crash.
-5. `parent.poll(remaining)`; false → kill, join, `MaudeWorkerTimeoutError`.
-6. `parent.recv_bytes(maxlength=settings.ipc_max_response_bytes)`:
+4. **Close the shutdown window:** the registration and the closed check happen
+   under the same lock. If `_closed` is set, unregister, `kill()`/`join()` the
+   child, close the pipe and raise `MaudeWorkerCancelledError`. `kill_all()`
+   acquires the same lock, sets `_closed`, snapshots the active map, releases it,
+   then kills/joins; a run that registers before the snapshot is in the snapshot,
+   and a run that registers after it sees `_closed`.
+5. `parent.send_bytes(json.dumps(request, ensure_ascii=False).encode())`; a
+   `BrokenPipeError`/`OSError` here is a crash. The send has no separate deadline:
+   the child's first acts are the devnull redirect and `recv_bytes`, before any
+   Maude import, so the send is bounded by child bootstrap and a dead child raises
+   `BrokenPipeError`. This bound is recorded in Appendix D.
+6. `parent.poll(remaining)`; false → kill, join, `MaudeWorkerTimeoutError`.
+7. `parent.recv_bytes(maxlength=settings.ipc_max_response_bytes)`:
    - `EOFError` (peer closed before any response) → crash;
    - `OSError("got end of file during message")` → crash;
-   - `OSError("bad message length")` → protocol error;
+   - `OSError("bad message length")` → `MaudeWorkerProtocolError` whose message
+     names `HAROLD_IPC_MAX_RESPONSE_BYTES` and suggests reducing the result or
+     raising the cap;
    - other `OSError` → crash/protocol error with the message.
-7. Decode and validate the envelope (`v`, `status`, `result`/`error`).
-8. `status == "ok"` → return `result`.
-9. `status == "error"` → map the error envelope to a typed exception (see 6.1).
-10. `finally`: close `parent`, unregister, `kill()` if still alive, `join()` with a
+8. Decode and validate the envelope (`status`, `result`/`error`,
+   `error.category`).
+9. `status == "ok"` → return `result`.
+10. `status == "error"` → map by `error.category` (`protocol`, `init`, `remote`)
+    to a typed exception (see 6.1).
+11. `finally`: close `parent`, unregister, `kill()` if still alive, `join()` with a
     short bound, `close()` the process.
 
-The runner is thread-safe: the active map is lock-protected; each call has its own
-pipe and process. `kill_all()` snapshots the map and kills/joins every process,
-which wakes any blocked `poll`/`recv_bytes` with EOF.
+The runner is thread-safe: the active map and the closed flag are guarded by one
+lock; each call has its own pipe and process. `kill_all()` sets `_closed` and
+snapshots the map under the lock, then kills/joins outside it.
 
 ### 4.3 `transport.serve_one` (child entry point)
 
@@ -408,28 +444,49 @@ def serve_one(conn: Connection) -> None:
         return
     try:
         request = json.loads(raw)
-    except Exception:
-        _send_error(conn, "ProtocolError", "invalid JSON request", ...)
+        if not isinstance(request, dict):
+            raise ValueError("request must be a JSON object")
+        operation = request.get("operation")
+        payload = request.get("payload")
+        if not isinstance(operation, str):
+            raise ValueError("request.operation must be a string")
+        if operation in ("diagnostics", "session") and not isinstance(payload, dict):
+            raise ValueError("request.payload must be a JSON object")
+    except Exception as exc:
+        _send_error(conn, category="protocol", type="ProtocolError",
+                    message=str(exc), traceback=_format_exc(exc))
+        conn.close()
         return
-    operation = request.get("operation")
-    payload = request.get("payload")
     try:
         result = _dispatch(operation, payload)
     except BaseException as exc:
-        _send_error(conn, type(exc).__name__, str(exc),
-                    traceback.format_exc(), context=_worker_context(exc))
+        category = (
+            "protocol" if isinstance(exc, ChildProtocolError)
+            else "init" if isinstance(exc, WorkerInitError)
+            else "remote"
+        )
+        _send_error(conn, category=category, type=type(exc).__name__,
+                    message=str(exc), traceback=_format_exc(exc),
+                    context=_worker_context(exc))
     else:
         _send_ok(conn, result)
     finally:
         conn.close()
 ```
 
+`_format_exc(exc)` is
+`"".join(traceback.format_exception(type(exc), exc, exc.__traceback__))`; it
+renders any exception object, including one outside its handler (the same helper
+is used by the parent formatter). `ChildProtocolError` is a private transport
+exception used to give an unknown operation the `protocol` category.
+
 `_dispatch`:
 - always calls `worker.init_maude()` first (idempotent per process);
 - `"ping"` → `None`;
 - `"diagnostics"` → `worker.load_diagnostics(payload["path"])`;
 - `"session"` → `session.run_session(payload)`;
-- unknown → raise a protocol error.
+- unknown → raise `ChildProtocolError`; `serve_one` maps it to the `protocol`
+  category, never a remote exception.
 
 The child sends the full error message and traceback; the parent bounds what it
 shows to the client. The child never logs to the server's streams.
@@ -441,10 +498,13 @@ current behavior: lazy `maude` imports, capture via `capture_streams`, warnings
 parsed from the full stderr before truncation, per-step failures as data, and
 `setAllowDir/File/Processes(False)` after initialization.
 
-Small addition: `session.run_session` annotates an unexpected exception raised
-while executing a step with the step index and command, so the child can include
-that in the error envelope. Use an exception attribute (for example
-`exc.worker_context = {"step": index, "command": command}`) or
+Small addition: `session.run_session` annotates unexpected exceptions with the
+phase:
+
+- around the load, `worker_context = {"phase": "load"}`;
+- around each step, `{"phase": "step", "step": index, "command": command}`.
+
+Use an exception attribute (for example `exc.worker_context = ...`) or
 `exc.add_note(...)`, and read it in `transport.serve_one`. Per-step `parse-error`
 and `too-large` outcomes are unchanged.
 
@@ -464,12 +524,21 @@ It renders, in order:
 3. the cause chain: `cause: Type: message <- Type: message <- ...` with a cycle
    guard;
 4. the originating traceback: the remote traceback for a remote failure, or
-   `traceback.format_exc()` for a local one;
+   `"".join(traceback.format_exception(type(exc), exc, exc.__traceback__))` for a
+   local one. Unlike `format_exc()`, this renders a stored exception outside its
+   handler, which the diagnostics aggregation needs;
 5. a truncation marker when the cap shortened the report.
 
-The first line is always kept. If the report exceeds `max_chars`, the traceback is
-truncated first; if necessary, long cause messages are shortened from the end. The
-full untruncated report is logged by the caller.
+The context is the exception's own `context` merged with the caller's context,
+with the caller's keys winning on collision
+(`{**getattr(exc, "context", {}), **context}`); this keeps worker-specific keys
+(step, phase, pid) and lets the tool add the path, module and timeout.
+
+The first line is always present. If the report exceeds `max_chars`, the traceback
+is truncated first; if necessary, long cause messages are shortened from the end.
+As a last resort, if the first line alone exceeds the cap, its message part is
+truncated while the category and exception type are kept, and the marker is
+appended. The full untruncated report is logged by the caller.
 
 The `MaudeWorkerError` hierarchy carries `context: Mapping[str, object]` and
 `remote_traceback: str | None` so the formatter can use them. A generic
@@ -509,7 +578,14 @@ Add to the existing settings model:
 | Field | Env var | Default | Purpose |
 | --- | --- | --- | --- |
 | `error_detail_max_chars` | `HAROLD_ERROR_DETAIL_MAX_CHARS` | `4000` (`gt=0`) | Cap for the client-visible error text |
-| `ipc_max_response_bytes` | `HAROLD_IPC_MAX_RESPONSE_BYTES` | `268435456` (256 MiB) | `recv_bytes` hardening cap; oversized → protocol error |
+| `ipc_max_response_bytes` | `HAROLD_IPC_MAX_RESPONSE_BYTES` | `2147483648` (2 GiB) | `recv_bytes` hardening cap; oversized → protocol error naming this setting |
+
+The cap is hardening against a buggy child, not a quality-of-service limit. The
+existing caps allow 200 search solutions with label paths to approach ~1 GiB; the
+default is set safely above that. A `path="full"` result can be larger in theory;
+it is bounded in practice by the child's memory (the child builds the JSON string
+in-process first) and by this cap, whose error message names the setting and
+suggests reducing `interpreter_max_solutions` or using `path="labels"`.
 
 Existing settings (`maude_workers`, `diagnostics_timeout_secs`,
 `interpreter_timeout_secs`, the `interpreter_max_*` caps and
@@ -555,29 +631,31 @@ classDiagram
 
 ```json
 {
-  "v": 1,
   "operation": "session",
   "payload": { "path": "/abs/program.maude", "module": "M", "steps": [] }
 }
 ```
 
 Operations: `ping` (payload `null`), `diagnostics` (`{"path": "..."}`), `session`
-(the existing `SessionRequest` mapping).
+(the existing `SessionRequest` mapping). There is no protocol version field: the
+child is spawned from the same package and is one-shot, so a version mismatch
+cannot occur.
 
 ### 5.2 Response envelope
 
 ```json
-{"v": 1, "status": "ok", "result": null}
-{"v": 1, "status": "error", "error": {
+{"status": "ok", "result": null}
+{"status": "error", "error": {
+  "category": "remote",
   "type": "ValueError",
   "message": "boom",
   "traceback": "Traceback (most recent call last): ...",
-  "context": {"step": 2, "command": "rewrite"}
+  "context": {"phase": "step", "step": 2, "command": "rewrite"}
 }}
 ```
 
-`v` must match the runner's version; a mismatch is a protocol error. `result` is
-the existing `LoadDiagnosticsResult` or `SessionResult` mapping, unchanged.
+`category` is `protocol`, `init` or `remote`. `result` is the existing
+`LoadDiagnosticsResult` or `SessionResult` mapping, unchanged.
 
 ### 5.3 Existing models
 
@@ -610,11 +688,12 @@ formatter (`timeout`, `crash`, `spawn-failure`, `init-failure`,
 
 ### 5.5 Error envelope to exception mapping
 
-| Envelope `error.type` | Parent exception |
+| Envelope `error.category` | Parent exception |
 | --- | --- |
-| `WorkerInitError` / `MaudeInitError` | `MaudeInitError` (with the remote traceback) |
-| any other class name | `MaudeWorkerRemoteError(remote_type, message, traceback, context)` |
-| invalid JSON / wrong `v` / missing fields | `MaudeWorkerProtocolError` |
+| `init` | `MaudeInitError` (with the remote traceback) |
+| `remote` | `MaudeWorkerRemoteError(remote_type, message, traceback, context)` |
+| `protocol`, missing, or unknown | `MaudeWorkerProtocolError` |
+| invalid JSON / missing fields | `MaudeWorkerProtocolError` |
 | EOF before response / mid-message | `MaudeWorkerCrashedError` |
 | no response before deadline | `MaudeWorkerTimeoutError` |
 | response exceeds `ipc_max_response_bytes` | `MaudeWorkerProtocolError` |
@@ -635,9 +714,13 @@ Local process-creation failures (`OSError` or `RuntimeError` from
 | init-failure | `init_maude` fails in a ping or a call | `MaudeInitError` | `... init-failure: Failed to initialize ...` |
 | remote-exception | Child sends a Python error envelope | `MaudeWorkerRemoteError` | `... remote-exception: ValueError: boom` |
 | cancelled | Executor shutdown kills an in-flight call | `MaudeWorkerCancelledError` | `... cancelled: cancelled during shutdown` |
-| protocol-error | Malformed/oversized/wrong-version response | `MaudeWorkerProtocolError` | `... protocol-error: invalid worker response: ...` |
+| protocol-error | Malformed or oversized response | `MaudeWorkerProtocolError` | `... protocol-error: invalid worker response: ...` |
 | input-error | Missing/unreadable file, missing module, theory module | existing `MaudeRunError` / `SourceFileNotFoundError` | existing specific message + context |
 | unexpected | Any other server exception | existing generic branch | `Unexpected failure running ...: <Type>: <message>` + context + traceback |
+
+An oversized response is a `protocol-error` whose message names
+`HAROLD_IPC_MAX_RESPONSE_BYTES` and suggests reducing `interpreter_max_solutions`
+or using `path="labels"`; it is not reported as a crash or a remote exception.
 
 Per-step failures remain data (`status` `parse-error`/`too-large`); they are never
 converted into these errors.
@@ -656,22 +739,32 @@ Traceback (most recent call last):
 ... [error detail truncated; see the server log]
 ```
 
-The first line is stable and always present. The context line is present for every
-whole-call failure. The cause chain precedes the traceback. The truncation marker
-is only present when the cap shortens the text.
+The first line is stable and always present. If the first line alone exceeds the
+cap, its message part is truncated while the category and type are kept (see
+§6.3). The context line is present for every whole-call failure. The cause chain
+precedes the traceback. The truncation marker is only present when the cap
+shortens the text.
 
 ### 6.3 Formatting algorithm
 
 1. Build the first line from the category, exception type and message.
-2. Append the ordered context as `key=value` pairs (skip `None` values).
+2. Merge the exception's own `context` with the caller's context, caller keys
+   winning (`{**getattr(exc, "context", {}), **context}`), and append the ordered
+   `key=value` pairs (skip `None` values).
 3. Walk `__cause__` then `__context__` with an identity set to avoid cycles;
    render each as `Type: message`.
 4. Choose the originating traceback:
    - `remote_traceback` if the exception carries one;
-   - otherwise `traceback.format_exc()` for a local exception.
+   - otherwise `"".join(traceback.format_exception(type(exc), exc,
+     exc.__traceback__))`. `format_exception` renders any exception object,
+     including a stored one outside its handler; `format_exc()` would render
+     `NoneType: None` there.
 5. Join the sections, preserving the first line.
 6. If the result exceeds `max_chars`, truncate the traceback (then long cause
-   messages from the end) and append the marker. Never truncate the first line.
+   messages from the end) and append the marker. As a last resort, if the first
+   line alone exceeds the cap, truncate its message part while keeping the
+   category and exception type, and append the marker. The full report is always
+   logged by the caller.
 
 The formatter never reads environment variables or file contents.
 
@@ -699,61 +792,90 @@ Diagnostic collection failed: 2 provider(s) failed
 - heuristic-linter: ...
 ```
 
-The per-provider sections use the same formatter and cap. The tool logs the full
-report and re-raises. The provider protocol and the seam's error vocabulary
+The per-provider sections use the same formatter and cap. Because provider
+exceptions are stored objects rendered outside their `except` block, the formatter
+must use `traceback.format_exception(type(exc), exc, exc.__traceback__)` — using
+`format_exc()` there would print `NoneType: None`. The tool logs the full report
+and re-raises. The provider protocol and the seam's error vocabulary
 (`DiagnosticsError`, `SourceFileNotFoundError`, `DiagnosticProviderError`) are
 unchanged.
 
 ### 6.6 Shutdown and cancellation
 
-`shutdown()` sets `_closed` and calls `runner.kill_all()`. A call blocked in
-`poll`/`recv_bytes` wakes with EOF; the executor checks `_closed` and raises
-`MaudeWorkerCancelledError` instead of crash. A call that has not yet acquired a
-slot checks `_closed` after acquiring and raises the same error before spawning.
-`shutdown()` is idempotent and kills/joins with a bounded wait, logging any process
-that refuses to die. A `concurrent.futures.CancelledError` from any library path is
-mapped to `MaudeWorkerCancelledError`; it never reaches the tool bare.
+`shutdown()` sets `_closed` and calls `runner.kill_all()`. `kill_all()` sets the
+runner's own `_closed` flag **before** snapshotting the active map, so a child
+whose registration lands after the snapshot is caught by the runner's
+post-registration check (§4.2 step 4): it is killed, joined and reported as
+`MaudeWorkerCancelledError`. A call blocked in `poll`/`recv_bytes` wakes with EOF;
+the executor checks `_closed` and raises `MaudeWorkerCancelledError` instead of
+crash. A call that has not yet acquired a slot checks `_closed` after acquiring
+and raises the same error before spawning. `shutdown()` is idempotent and
+kills/joins with a bounded wait, logging any process that refuses to die. A
+`concurrent.futures.CancelledError` from any library path is mapped to
+`MaudeWorkerCancelledError`; it never reaches the tool bare.
 
 ## 7. Testing Strategy
 
 ### 7.1 Unit tests
 
 - **Formatter** (`errors`): type/message/cause/context/traceback rendering; cycle
-  guard; remote traceback; truncation keeps the first line; marker; no secrets.
-- **Transport protocol**: request/response encoding and decoding; wrong version;
-  malformed JSON; missing fields; oversized `maxlength`; child error envelope
-  mapping; `serve_one` dispatch with a fake operation (no Maude import).
+  guard; remote traceback; a stored exception rendered outside its handler (not
+  "NoneType: None"); context-merge precedence (caller wins on collision);
+  truncation keeps the first line/category/type, including a message larger than
+  the cap; marker; no secrets.
+- **Transport protocol**: request/response encoding; non-object JSON and invalid
+  payloads produce a protocol-category error; unknown operation; missing fields;
+  oversized `maxlength`; child error envelope mapping by `category`; `serve_one`
+  dispatch with a fake operation (no Maude import).
 - **Runner with fakes**: fake process/connection injects EOF, mid-message
-  `OSError`, timeout, oversized response, error envelopes; asserts kill/join and
-  active-set cleanup.
+  `OSError`, timeout, oversized response (message names
+  `HAROLD_IPC_MAX_RESPONSE_BYTES`), `BrokenPipeError` on send, spawn failure, and
+  the shutdown registration race (a child registered after `kill_all()` is killed
+  and raises `MaudeWorkerCancelledError`); asserts kill/join and active-set cleanup.
 - **Executor with a fake runner**: success; timeout; crash; spawn failure; init
   failure; remote error; protocol error; a stray `CancelledError` mapping; shutdown
   cancellation; semaphore admission (a second call waits); `start()` pings
   `maude_workers` times and fails fast; shutdown idempotence; `_closed` behavior.
+- **Session phase annotation**: a fake load/step raising an unexpected exception
+  carries `phase="load"` or `phase="step"` plus index/command into the envelope.
 - **Tool adapters**: rich text in `MaudeRunError`; per-step data unchanged;
-  diagnostics provider details; context fields present; truncation.
+  diagnostics provider details (stored exception traceback, not "NoneType: None");
+  context fields present; truncation; the `maude_run` description no longer says a
+  non-terminating reduction replaces the worker pool.
 - **Settings**: the two new fields and their defaults.
 
 Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude import.
 
-### 7.2 Integration tests (real interpreter)
+### 7.2 Integration tests (real processes and interpreter)
 
+- **Test seam:** `PipeProcessRunner` accepts an injectable top-level target.
+  Production passes `transport.serve_one`; integration tests pass a crash target
+  (`os._exit`) or a sleeping/rendezvous target. Tests construct
+  `PipeProcessRunner(settings, target=...)` through the executor's `runner_factory`
+  and inject it into `MaudeExecutor`. `submit()`, `worker.sleep` and
+  `worker.rendezvous_pid` are removed; the tests that used them are rewritten
+  around the target seam.
 - Normal session and diagnostics results are semantically equal to the old behavior
   for representative fixtures.
-- Abrupt child exit: a test-only transport target that calls `os._exit(1)` (or
-  `worker._crash`) is used to verify crash mapping and that a concurrent call
-  succeeds.
-- Real timeout: a non-terminating `rewrite` rule with a short timeout; the process
-  is killed, the call reports timeout, a subsequent call succeeds.
-- Concurrent isolation: the historical recipe (three slow reducers, a queued
+- **Abrupt child exit:** the crash target exits without a response; only that call
+  reports a crash, a concurrent call succeeds, and the server remains usable.
+- **Real timeout:** a non-terminating `rewrite` rule with a short timeout; the
+  process is killed, the call reports timeout, a peer call succeeds, and a
+  subsequent call succeeds.
+- **Concurrent isolation:** the historical recipe (three slow occupiers, a queued
   non-terminating call with a 2 s timeout, four healthy searches) produces no
-  `CancelledError`, only the trigger reports timeout, and the others complete.
-- Large response: a Maude program whose result approaches the configured caps
-  round-trips through the pipe intact.
+  `CancelledError`; only the trigger reports timeout, and the others complete.
+- **Large request:** a `SessionRequest` larger than the 64 KiB pipe buffer (long
+  terms/steps) round-trips; the send path completes and the result is intact.
+- **Large response / cap:** with a lowered `ipc_max_response_bytes`, an oversized
+  result raises a protocol error whose text names the setting; with the default,
+  a large legitimate result round-trips.
+- **Step/load capture:** step stdout is empty by design, step stderr carries parse
+  warnings, and a bounded search at EOF is present in `load_output` (B4/B7).
 - Parse error, `too-large`, diagnostics warnings, missing module and theory module
   keep their existing behavior.
-- Shutdown with an in-flight call: the call gets the cancellation error; no orphan
-  processes remain (check pids with `os.kill(pid, 0)` / `Process.is_alive`).
+- **Shutdown:** with an in-flight call, the call gets the cancellation error and no
+  orphan processes remain (check pids with `os.kill(pid, 0)` / `Process.is_alive`).
 - Fixtures: a non-terminating rewrite module (rule self-loop) for timeout tests; a
   module whose last command is a bounded search for B7; a large-result module; the
   historical cascade modules (slow spinner + non-terminating loop + a search
@@ -761,9 +883,10 @@ Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude impo
 
 ### 7.3 Regression tests
 
-The cascade, crash, timeout and rich-error tests are added to the suite; they must
-fail on the old shared-pool architecture and pass on the new one. A regression test
-for the bounded-search-at-EOF load capture and for step stderr capture remains.
+The cascade, crash, timeout, shutdown-race and rich-error tests are added to the
+suite; they must fail on the old shared-pool architecture and pass on the new one.
+A regression test for the bounded-search-at-EOF load capture and for step stderr
+capture remains.
 
 ### 7.4 Determinism
 
@@ -794,6 +917,24 @@ and can be adjusted during implementation.
 The B1/B2/B3 tests must fail on the old shared-pool implementation; B4/B7 are
 characterization tests that pin correct behavior, and B5/B6 pin the error mapping.
 
+#### Review finding coverage
+
+The design review's findings are all covered by tests:
+
+| Review finding | Test | Type |
+| --- | --- | --- |
+| 1. Shutdown registration race | `test_shutdown_after_registration_kills_child`; `test_shutdown_inflight_call_is_cancelled` | Unit (synchronized fake) + integration |
+| 2. Stored-exception traceback in diagnostics | `test_diagnostics_provider_traceback_outside_handler` | Unit |
+| 3. Crash/concurrency test seam | `test_crash_target_via_injected_target`; `test_slot_holder_via_injected_target` | Integration |
+| 4. Response cap below legitimate maximum | `test_oversized_response_names_ipc_setting`; `test_large_response_under_configured_cap` | Unit + integration |
+| 5. Huge first line defeats the cap | `test_huge_exception_message_is_truncated_with_marker` | Unit |
+| 6. Request send bound | `test_large_request_round_trip`; `test_dead_child_before_read_maps_to_crash` | Integration + unit |
+| 7. Child protocol-error mislabel | `test_invalid_json_is_protocol_error`; `test_non_object_request_is_protocol_error` | Unit |
+| 8. Non-object request validation | same as finding 7 | Unit |
+| 9. Load-phase context | `test_load_failure_has_phase_load` | Unit |
+| 10. Stale documentation sentence | `test_maude_run_description_does_not_mention_worker_pool`; `make docs-test` + documentation checklist | Unit + build/review |
+| 11. Context merge | `test_context_merge_caller_wins` | Unit |
+
 ### 7.6 Test type rationale
 
 - **Unit tests with a fake runner** are the right choice for executor logic:
@@ -805,9 +946,9 @@ characterization tests that pin correct behavior, and B5/B6 pin the error mappin
   that depends on the OS or Maude: abrupt exit (EOF), real timeout and kill,
   concurrent isolation, capture, large responses and orphan checks. Fakes cannot
   prove that one process's death leaves another process running.
-- **Deterministic crash target.** A top-level test target that calls `os._exit` or
-  `worker._crash`; do not rely on generating a real SIGSEGV. This keeps the crash
-  test stable across platforms.
+- **Deterministic crash target.** A top-level test target that calls `os._exit`;
+  do not rely on generating a real SIGSEGV. This keeps the crash test stable
+  across platforms.
 - **Deterministic timeout.** A non-terminating rewrite rule with a short but
   generous timeout (spawn + prelude initialization included). Assert that the call
   fails with a timeout, the peer call succeeds and a follow-up call succeeds; do
@@ -817,6 +958,18 @@ characterization tests that pin correct behavior, and B5/B6 pin the error mappin
   rule; assert per-call outcomes rather than scheduling order.
 - **No sleeps as synchronization.** Use process markers, explicit deadlines or
   the runner's `active_count`; the suite's rendezvous-style helpers are the model.
+- **Shutdown registration race.** The unit test synchronizes the fake process
+  registration with `kill_all()` so the window is deterministic; the integration
+  test uses a real in-flight call and checks the pid is gone. This is the only way
+  to prove FR-10's no-orphan guarantee.
+- **Stored exception formatting** is purely a formatter concern and is unit-tested;
+  the diagnostics aggregation test exercises the real stored-exception path.
+- **Large request/response** needs a real pipe. The response-cap test lowers
+  `HAROLD_IPC_MAX_RESPONSE_BYTES` in the test configuration so it can assert the
+  protocol-error message without allocating gigabytes.
+- **Documentation** is checked by the strict docs build (`make docs-test`), a
+  docstring assertion for the stale "replaces the worker pool" sentence, and a
+  review checklist for the named README/settings entries.
 
 ## 8. Appendices
 
@@ -827,6 +980,7 @@ characterization tests that pin correct behavior, and B5/B6 pin the error mappin
 | Isolation unit | One dedicated process per call | Matches fresh-interpreter requirement; removes shared fate |
 | IPC | `multiprocessing.connection` over a `Pipe` | Stdlib; 4-byte length framing and partial-write loops handle large messages |
 | Serialization | JSON via `send_bytes`/`recv_bytes`, `ensure_ascii=False` | Explicit, testable, safe; results are JSON-safe |
+| Protocol version | No version field | One-shot child spawned from the same package; a mismatch cannot occur |
 | Start method | `spawn` | Works with SWIG/threads; portable; same as current max-tasks behavior |
 | Admission | `threading.BoundedSemaphore(maude_workers)` | Bounds interpreters; waiting counts against the call timeout |
 | Kill | `Process.kill()` then bounded `join()` | Portable; SIGTERM may not stop a stuck interpreter |
@@ -882,14 +1036,25 @@ queued job is not timed out. Neither is adopted.
   a child that sends a header and stalls mid-payload can block the parent. The
   child builds the complete payload before sending, and the 1 MB caps make this
   negligible; a watchdog/reader thread is the fallback if a strict bound is needed.
-- **Response size**: `ipc_max_response_bytes` is a hardening cap. Legitimate results
-  near the existing per-string caps can be large; the default (256 MiB) is
-  generous, and exceeding it is a protocol error with context.
+- **Request send**: `send_bytes` has no separate deadline. The child reads the
+  request before importing Maude, so the send is bounded by child bootstrap; a dead
+  child raises `BrokenPipeError` and is mapped to crash. A bootstrap-level hang is
+  the residual case; a watchdog thread is the fallback if a strict bound is ever
+  required. A large-request integration test covers the normal path.
+- **Response size**: `ipc_max_response_bytes` is a hardening cap, not a
+  quality-of-service limit. The default is 2 GiB, safely above the ~1 GiB a
+  legitimate result with 200 solutions and label paths can reach; `path="full"`
+  can exceed it in theory and is bounded in practice by the child's memory (the
+  child builds the JSON string in-process first). Exceeding the cap is a protocol
+  error whose text names `HAROLD_IPC_MAX_RESPONSE_BYTES` and suggests reducing the
+  result.
 - **Cross-platform**: macOS/Windows are not tested in this environment. The
   transport uses portable APIs; the Maude wheel and fd-capture code remain the
   limiting factors.
-- **Shutdown races**: an in-flight call killed by shutdown is reported as
+- **Shutdown races**: the runner's post-registration closed-flag check closes the
+  spawn-after-kill window. An in-flight call killed by shutdown is reported as
   cancellation; a call that would have failed for its own reason during the same
-  window may be labelled cancelled. This is acceptable and is covered by tests.
+  window may be labelled cancelled. This is acceptable and is covered by unit and
+  integration tests.
 - **`MaudeInitError` base change** is a visible internal API change (still a
   `MaudeError`/`RuntimeError`); document it in the CHANGELOG.
