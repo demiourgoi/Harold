@@ -6,7 +6,7 @@ interpreter itself only lives in the worker process; this module never imports t
 `maude` SWIG bindings.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Literal, cast
 
@@ -14,6 +14,7 @@ from fastmcp.dependencies import Depends
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
+from harold_mcp.errors import format_context, format_error_report
 from harold_mcp.logging import get_logger
 from harold_mcp.maude import (
     BindingDict,
@@ -316,34 +317,55 @@ class MaudeRunResult(_ResultModel):
 
 
 def _resolve_path(path: str) -> Path:
-    """Resolve the input path and require an existing regular file.
+    """Resolve the input path (the worker's working directory is not the client's).
 
-    Implemented locally rather than through `diagnostics.SourceFile`: the new tool
-    must not depend on the diagnostics seam (the interpreter tool loads the file, it
-    does not read it). Resolution matters because the worker's working directory is
-    not the client's.
+    Implemented locally rather than through `diagnostics.SourceFile`: the interpreter
+    tool loads the file, it does not read it, and it must not depend on the
+    diagnostics seam.
     """
-    resolved = Path(path).expanduser().resolve()
+    return Path(path).expanduser().resolve()
+
+
+def _require_file(resolved: Path, context: Mapping[str, object]) -> None:
+    """Reject a missing or non-regular input file before any worker is spawned."""
     if not resolved.is_file():
-        raise MaudeRunError(f"Maude program file not found or unreadable: {str(resolved)!r}")  # noqa: TRY003
-    return resolved
+        raise MaudeRunError(_with_context(f"Maude program file not found or unreadable: {str(resolved)!r}", context))
 
 
-def _validate_step_lengths(index: int, step: MaudeStep, max_length: int) -> None:
+def _call_context(resolved: Path, module: str, steps: Sequence[MaudeStep], timeout: int) -> dict[str, object]:
+    """The context line shared by every whole-call failure of this invocation."""
+    return {"path": str(resolved), "module": module, "steps": len(steps), "timeout": f"{timeout}s"}
+
+
+def _with_context(message: str, context: Mapping[str, object]) -> str:
+    """Append the call-context line to a whole-call input error message."""
+    rendered = format_context(context)
+    return f"{message}\ncontext: {rendered}" if rendered is not None else message
+
+
+def _validate_step_lengths(index: int, step: MaudeStep, max_length: int, context: Mapping[str, object]) -> None:
     """Reject a step input longer than the configured term-length cap."""
     if isinstance(step, _PatternStep):
         for field_name, value in (("pattern", step.pattern), ("subject", step.subject)):
             if value is not None and len(value) > max_length:
-                raise MaudeRunError(  # noqa: TRY003
-                    f"Step {index}: {field_name} is {len(value)} characters long (maximum {max_length})"
+                raise MaudeRunError(
+                    _with_context(
+                        f"Step {index}: {field_name} is {len(value)} characters long (maximum {max_length})",
+                        context,
+                    )
                 )
     elif step.term is not None and len(step.term) > max_length:
-        raise MaudeRunError(  # noqa: TRY003
-            f"Step {index}: term is {len(step.term)} characters long (maximum {max_length})"
+        raise MaudeRunError(
+            _with_context(f"Step {index}: term is {len(step.term)} characters long (maximum {max_length})", context)
         )
 
 
-def _validate_step_threading(index: int, step: MaudeStep, has_current: bool) -> bool:
+def _validate_step_threading(
+    index: int,
+    step: MaudeStep,
+    has_current: bool,
+    context: Mapping[str, object],
+) -> bool:
     """Reject a step without a subject, and report whether a current term now exists.
 
     Rewriting commands need a term and produce one; `match`/`search` need a subject and
@@ -351,38 +373,48 @@ def _validate_step_threading(index: int, step: MaudeStep, has_current: bool) -> 
     """
     if isinstance(step, _PatternStep):
         if step.subject is None and not has_current:
-            raise MaudeRunError(  # noqa: TRY003
-                f"Step {index} has no subject and there is no current term: provide an explicit subject for this step"
+            raise MaudeRunError(
+                _with_context(
+                    f"Step {index} has no subject and there is no current term: "
+                    "provide an explicit subject for this step",
+                    context,
+                )
             )
         return has_current
     if step.term is None and not has_current:
-        raise MaudeRunError(  # noqa: TRY003
-            f"Step {index} has no term and there is no current term: provide an explicit term for this step"
+        raise MaudeRunError(
+            _with_context(
+                f"Step {index} has no term and there is no current term: provide an explicit term for this step",
+                context,
+            )
         )
     return True
 
 
-def _validate_steps(steps: Sequence[MaudeStep], settings: Settings) -> None:
+def _validate_steps(steps: Sequence[MaudeStep], settings: Settings, context: Mapping[str, object]) -> None:
     """Enforce the input caps and the current-term threading rules."""
     if not steps:
-        raise MaudeRunError("steps must contain at least one command")  # noqa: TRY003
+        raise MaudeRunError(_with_context("steps must contain at least one command", context))
     if len(steps) > settings.interpreter_max_steps:
-        raise MaudeRunError(  # noqa: TRY003
-            f"Too many steps: {len(steps)} (maximum {settings.interpreter_max_steps})"
+        raise MaudeRunError(
+            _with_context(f"Too many steps: {len(steps)} (maximum {settings.interpreter_max_steps})", context)
         )
     max_length = settings.interpreter_max_term_length
     has_current = False
     for index, step in enumerate(steps):
-        _validate_step_lengths(index, step, max_length)
+        _validate_step_lengths(index, step, max_length, context)
         if (
             isinstance(step, _BoundedStep)
             and step.bound is not None
             and step.bound > settings.interpreter_max_rewrite_bound
         ):
-            raise MaudeRunError(  # noqa: TRY003
-                f"Step {index}: bound is {step.bound} (maximum {settings.interpreter_max_rewrite_bound})"
+            raise MaudeRunError(
+                _with_context(
+                    f"Step {index}: bound is {step.bound} (maximum {settings.interpreter_max_rewrite_bound})",
+                    context,
+                )
             )
-        has_current = _validate_step_threading(index, step, has_current)
+        has_current = _validate_step_threading(index, step, has_current, context)
 
 
 def _to_step_request(step: MaudeStep) -> StepRequest:
@@ -486,18 +518,12 @@ def _defined_modules_detail(defined_modules: Sequence[str]) -> str:
     return ", ".join(defined_modules) if defined_modules else "none"
 
 
-def _exception_detail(exc: Exception) -> str:
-    """Render an unexpected exception for the tool error message.
-
-    MCP clients see only the `MaudeRunError` text. Without the type and message an
-    unexpected worker failure is indistinguishable from any other, which hides the
-    cause of non-deterministic failures.
-    """
-    message = str(exc).strip()
-    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
-
-
-def _to_wire_result(result: SessionResult, path: Path, module: str) -> MaudeRunResult:
+def _to_wire_result(
+    result: SessionResult,
+    path: Path,
+    module: str,
+    context: Mapping[str, object],
+) -> MaudeRunResult:
     """Reject whole-call failures and adapt a successful session result.
 
     Per-step failures are data and do not raise; the load/module/type checks are the
@@ -506,18 +532,24 @@ def _to_wire_result(result: SessionResult, path: Path, module: str) -> MaudeRunR
     if not result["load_ok"]:
         detail = result["load_output"]["stderr"].strip()
         suffix = f": {detail}" if detail else ""
-        raise MaudeRunError(f"Failed to load the Maude program {str(path)!r}{suffix}")  # noqa: TRY003
+        raise MaudeRunError(_with_context(f"Failed to load the Maude program {str(path)!r}{suffix}", context))
     if not result["module_found"]:
         defined = _defined_modules_detail(result["defined_modules"])
-        raise MaudeRunError(  # noqa: TRY003
-            f'Module "{module}" is not defined by "{path}" '
-            f"(modules defined by the load: {defined}). "
-            "Run maude_program_diagnostics on the file if the load did not behave as expected."
+        raise MaudeRunError(
+            _with_context(
+                f'Module "{module}" is not defined by "{path}" '
+                f"(modules defined by the load: {defined}). "
+                "Run maude_program_diagnostics on the file if the load did not behave as expected.",
+                context,
+            )
         )
     if result["module_type"] in _THEORY_MODULE_TYPES:
-        raise MaudeRunError(  # noqa: TRY003
-            f'Module "{module}" is a theory: terms cannot be parsed in a theory; '
-            "select a functional or system module instead."
+        raise MaudeRunError(
+            _with_context(
+                f'Module "{module}" is a theory: terms cannot be parsed in a theory; '
+                "select a functional or system module instead.",
+                context,
+            )
         )
     return MaudeRunResult(
         path=str(path),
@@ -639,23 +671,34 @@ def maude_run(
             setting.
     """
     resolved = _resolve_path(path)
-    _validate_steps(steps, settings)
-    request = _to_request(resolved, module, steps, settings)
     timeout = timeout_secs if timeout_secs is not None else settings.interpreter_timeout_secs
+    context = _call_context(resolved, module, steps, timeout)
+    _require_file(resolved, context)
+    _validate_steps(steps, settings, context)
+    request = _to_request(resolved, module, steps, settings)
     try:
         result = executor.run_session(request, timeout=timeout)
     except MaudeWorkerError as exc:
-        raise MaudeRunError(f"Maude interpreter session failed: {exc.reason}") from exc  # noqa: TRY003
-    except Exception as exc:
-        _log.exception(
-            "Unexpected failure running the Maude interpreter session for %s (module %s)",
+        # The client text is capped; the log keeps the full chain and traceback so the
+        # truncation marker points at an actionable record.
+        detail = format_error_report(exc, context=context, max_chars=settings.error_detail_max_chars)
+        _log.error(
+            "maude_run failed for %s (module %s):\n%s",
             resolved,
             module,
+            format_error_report(exc, context=context, max_chars=0),
         )
-        raise MaudeRunError(  # noqa: TRY003
-            f"Unexpected failure running the Maude interpreter session: {_exception_detail(exc)}"
-        ) from exc
-    return _to_wire_result(result, resolved, module)
+        raise MaudeRunError(f"Maude interpreter session failed: {detail}") from exc  # noqa: TRY003
+    except Exception as exc:
+        detail = format_error_report(exc, context=context, max_chars=settings.error_detail_max_chars)
+        _log.exception(
+            "Unexpected failure running the Maude interpreter session for %s (module %s):\n%s",
+            resolved,
+            module,
+            format_error_report(exc, context=context, max_chars=0),
+        )
+        raise MaudeRunError(f"Unexpected failure running the Maude interpreter session: {detail}") from exc  # noqa: TRY003
+    return _to_wire_result(result, resolved, module, context)
 
 
 __all__ = [

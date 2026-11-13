@@ -40,9 +40,16 @@ def executor() -> Iterator[MaudeExecutor]:
         executor.shutdown()
 
 
+def _settings() -> Settings:
+    """Settings for direct tool calls (FastMCP injects the real dependency in the server)."""
+    return Settings(maude_workers=1)
+
+
 def _diagnose(executor: MaudeExecutor, fixture_name: str) -> MaudeProgramDiagnosticsResult:
     return maude_program_diagnostics(
-        str(FIXTURES_DIR / fixture_name), providers=get_diagnostic_providers(maude_executor=executor)
+        str(FIXTURES_DIR / fixture_name),
+        providers=get_diagnostic_providers(maude_executor=executor),
+        settings=_settings(),
     )
 
 
@@ -62,7 +69,11 @@ def test_relative_path_input_is_resolved_before_the_worker(
     """A relative `path` is absolutized by the seam: the worker's cwd is not the client's."""
     monkeypatch.chdir(FIXTURES_DIR)
 
-    result = maude_program_diagnostics("hello.maude", providers=get_diagnostic_providers(maude_executor=executor))
+    result = maude_program_diagnostics(
+        "hello.maude",
+        providers=get_diagnostic_providers(maude_executor=executor),
+        settings=_settings(),
+    )
 
     assert result.path == str(FIXTURES_DIR / "hello.maude")
     assert result.success is True
@@ -240,7 +251,9 @@ def test_parallel_diagnostics_do_not_share_interpreter_state() -> None:
             results = list(
                 pool.map(
                     lambda fixture: maude_program_diagnostics(
-                        str(fixture), providers=get_diagnostic_providers(maude_executor=parallel)
+                        str(fixture),
+                        providers=get_diagnostic_providers(maude_executor=parallel),
+                        settings=_settings(),
                     ),
                     fixtures,
                 )
@@ -425,7 +438,11 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
     binary = tmp_path / "garbage.maude"
     _ = binary.write_bytes(b"\x00\x01\x02\xff\xfe binary garbage \x00\x00")
 
-    result = maude_program_diagnostics(str(binary), providers=get_diagnostic_providers(maude_executor=executor))
+    result = maude_program_diagnostics(
+        str(binary),
+        providers=get_diagnostic_providers(maude_executor=executor),
+        settings=_settings(),
+    )
 
     assert result.success is False
     assert result.diagnostics  # Maude skips the garbage and reports warnings
@@ -448,7 +465,9 @@ def test_tool_reports_crash_and_recovers() -> None:
         # vocabulary reaches the caller as the chained cause (Q11.5).
         with pytest.raises(DiagnosticCollectionError) as exc_info:
             _ = _diagnose(executor, "hello.maude")
-        assert str(exc_info.value) == "Diagnostics failed: interpreter (Maude worker crashed)"
+        report = str(exc_info.value)
+        assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
+        assert report.splitlines()[1].startswith("- interpreter: Maude worker crashed")
         provider_error = exc_info.value.__cause__
         assert isinstance(provider_error, DiagnosticProviderError)
         assert isinstance(provider_error.__cause__, MaudeWorkerCrashedError)

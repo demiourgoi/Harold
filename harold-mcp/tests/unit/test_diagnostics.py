@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import harold_mcp.server.tools.diagnostics as diagnostics_module
 from harold_mcp.diagnostics import (
     DiagnosticCollectionError,
     DiagnosticProvider,
@@ -14,7 +15,8 @@ from harold_mcp.diagnostics import (
     ProviderDiagnostic,
     SourceFileNotFoundError,
 )
-from harold_mcp.maude import MaudeWorkerCrashedError
+from harold_mcp.errors import TRUNCATION_MARKER
+from harold_mcp.maude import MaudeWorkerCrashedError, MaudeWorkerTimeoutError
 from harold_mcp.maude.worker import LoadDiagnosticsResult
 from harold_mcp.server.tools.diagnostics import (
     MaudeFix,
@@ -26,6 +28,7 @@ from harold_mcp.server.tools.diagnostics import (
     get_diagnostic_providers,
     maude_program_diagnostics,
 )
+from harold_mcp.settings import Settings
 
 APOSTROPHE = "\u2019"
 
@@ -46,6 +49,16 @@ class FakeMaudeExecutor:
         return self._result
 
 
+class _RecordingLogger:
+    """Capture `error` calls instead of emitting them to the test log."""
+
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, tuple[object, ...]]] = []
+
+    def error(self, message: str, *args: object) -> None:
+        self.errors.append((message, args))
+
+
 def _write(path: Path, text: str = "fmod X is endfm\n") -> str:
     _ = path.write_text(text)
     return str(path)
@@ -56,15 +69,20 @@ def _providers(executor: FakeMaudeExecutor) -> tuple[DiagnosticProvider, ...]:
     return get_diagnostic_providers(maude_executor=executor)
 
 
+def _settings() -> Settings:
+    """Settings for direct tool calls (FastMCP injects the real dependency)."""
+    return Settings(maude_workers=1)
+
+
 def _run(path: str, result: LoadDiagnosticsResult) -> MaudeProgramDiagnosticsResult:
-    return maude_program_diagnostics(path, providers=_providers(FakeMaudeExecutor(result)))
+    return maude_program_diagnostics(path, providers=_providers(FakeMaudeExecutor(result)), settings=_settings())
 
 
 def test_clean_program_returns_success(tmp_path: Path) -> None:
     path = tmp_path / "hello.maude"
     content = _write(path)
     fake = FakeMaudeExecutor({"ok": True, "warnings": []})
-    result = maude_program_diagnostics(content, providers=_providers(fake))
+    result = maude_program_diagnostics(content, providers=_providers(fake), settings=_settings())
 
     assert result.path == content
     assert result.success is True
@@ -251,12 +269,37 @@ def test_provider_failure_propagates_as_a_collection_error(tmp_path: Path) -> No
     fake = FakeMaudeExecutor(error=MaudeWorkerCrashedError())
 
     with pytest.raises(DiagnosticCollectionError) as exc_info:
-        _ = maude_program_diagnostics(content, providers=_providers(fake))
+        _ = maude_program_diagnostics(content, providers=_providers(fake), settings=_settings())
 
-    assert str(exc_info.value) == "Diagnostics failed: interpreter (Maude worker crashed)"
+    report = str(exc_info.value)
+    assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
+    assert "- interpreter: Maude worker crashed" in report
+    assert "MaudeWorkerCrashedError: Maude worker crashed" in report
     provider_error = exc_info.value.__cause__
     assert isinstance(provider_error, DiagnosticProviderError)
     assert isinstance(provider_error.__cause__, MaudeWorkerCrashedError)
+
+
+def test_collection_failure_logs_the_full_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logger = _RecordingLogger()
+    monkeypatch.setattr(diagnostics_module, "_log", logger)
+    path = tmp_path / "hello.maude"
+    content = _write(path)
+    timeout = MaudeWorkerTimeoutError(remote_traceback="X" * 5000)
+
+    with pytest.raises(DiagnosticCollectionError):
+        _ = maude_program_diagnostics(
+            content,
+            providers=_providers(FakeMaudeExecutor(error=timeout)),
+            settings=_settings(),
+        )
+
+    assert len(logger.errors) == 1
+    message, args = logger.errors[0]
+    assert message == "Diagnostic collection failed for %s:\n%s"
+    assert str(path) in str(args[0])
+    assert "X" * 5000 in str(args[1])
+    assert TRUNCATION_MARKER not in str(args[1])
 
 
 def test_heuristic_finding_carries_columns_and_an_applyable_fix(tmp_path: Path) -> None:
@@ -265,7 +308,9 @@ def test_heuristic_finding_carries_columns_and_an_applyable_fix(tmp_path: Path) 
     content = _write(path, f"fmod T is\n    op L{APOSTROPHE} : -> Nat .\nendfm\n")
     before = path.read_bytes()
 
-    result = maude_program_diagnostics(content, providers=_providers(FakeMaudeExecutor({"ok": True, "warnings": []})))
+    result = maude_program_diagnostics(
+        content, providers=_providers(FakeMaudeExecutor({"ok": True, "warnings": []})), settings=_settings()
+    )
 
     assert result.success is True  # info only: the load itself is fine
     assert result.summary.info == 1
@@ -290,7 +335,7 @@ def test_same_line_orders_interpreter_before_heuristic(tmp_path: Path) -> None:
     content = _write(path, f"fmod T is\n    op L{APOSTROPHE} : -> Nat .\nendfm\n")
     fake = FakeMaudeExecutor({"ok": True, "warnings": [{"file": "mixed.maude", "line": 2, "message": "some warning."}]})
 
-    result = maude_program_diagnostics(content, providers=_providers(fake))
+    result = maude_program_diagnostics(content, providers=_providers(fake), settings=_settings())
 
     assert result.success is False
     assert [(d.source, d.range.start.column if d.range else None) for d in result.diagnostics] == [

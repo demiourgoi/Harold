@@ -5,6 +5,8 @@ import os
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from harold_mcp.errors import DEFAULT_ERROR_DETAIL_MAX_CHARS
+
 
 def _default_maude_workers() -> int:
     """Half the logical CPUs, capped at 3 (enough for single-agent IDE use).
@@ -44,6 +46,10 @@ class Settings(BaseSettings):
     - `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH`: maximum characters of each captured
       stream (stdout and stderr separately) returned per phase (default
       `1000000`); longer captures are truncated and marked.
+    - `HAROLD_ERROR_DETAIL_MAX_CHARS`: maximum characters of the error detail a
+      failed tool call returns to the client (default `4000`). The full report is
+      always logged; a truncated client report ends with a marker pointing at the
+      log.
     """
 
     model_config = SettingsConfigDict(env_prefix="HAROLD_")
@@ -58,6 +64,7 @@ class Settings(BaseSettings):
     interpreter_max_result_length: int = Field(default=1_000_000, gt=0)
     interpreter_max_path_steps: int = Field(default=100, gt=0)
     interpreter_max_output_length: int = Field(default=1_000_000, gt=0)
+    error_detail_max_chars: int = Field(default=DEFAULT_ERROR_DETAIL_MAX_CHARS, gt=0)
 
 
 settings = Settings()

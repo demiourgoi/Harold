@@ -15,7 +15,8 @@ from harold_mcp.diagnostics import (
 )
 from harold_mcp.diagnostics.aggregate import ProviderFailure
 from harold_mcp.diagnostics.provider import DiagnosticSource
-from harold_mcp.maude import MaudeError, MaudeWorkerCrashedError
+from harold_mcp.errors import TRUNCATION_MARKER
+from harold_mcp.maude import MaudeError, MaudeWorkerCrashedError, MaudeWorkerTimeoutError
 
 
 class FakeProvider:
@@ -139,7 +140,16 @@ def test_one_failing_provider_fails_the_call_without_partial_results(tmp_path: P
         _ = collect_diagnostics([interpreter, heuristic], _source(tmp_path))
 
     error = exc_info.value
-    assert str(error) == "Diagnostics failed: interpreter (Maude worker crashed)"
+    report = str(error)
+    assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
+    assert "- interpreter: Maude worker crashed" in report
+    assert (
+        "cause: DiagnosticProviderError: interpreter: Maude worker crashed"
+        " <- MaudeWorkerCrashedError: Maude worker crashed"
+    ) in report
+    assert "Traceback (most recent call last):" in report
+    assert "NoneType: None" not in report
+    assert f"context: path={tmp_path / 'program.maude'}" in report
     assert error.failures == (ProviderFailure(provider="interpreter", error=provider_error),)
     assert error.__cause__ is provider_error
     assert isinstance(error.__cause__.__cause__, MaudeWorkerCrashedError)
@@ -155,10 +165,11 @@ def test_remaining_providers_are_still_attempted_after_a_failure(tmp_path: Path)
     with pytest.raises(DiagnosticCollectionError) as exc_info:
         _ = collect_diagnostics([interpreter, heuristic], _source(tmp_path))
 
+    report = str(exc_info.value)
     assert heuristic.calls  # it ran despite the earlier failure
-    assert str(exc_info.value) == (
-        "Diagnostics failed: interpreter (Maude worker crashed); heuristic-linter (ValueError: boom)"
-    )
+    assert report.splitlines()[0] == "Diagnostic collection failed: 2 provider(s) failed"
+    assert "- interpreter: Maude worker crashed" in report
+    assert "- heuristic-linter: boom" in report
 
 
 def test_unexpected_provider_bug_is_reported_with_its_type(tmp_path: Path) -> None:
@@ -167,5 +178,33 @@ def test_unexpected_provider_bug_is_reported_with_its_type(tmp_path: Path) -> No
     with pytest.raises(DiagnosticCollectionError) as exc_info:
         _ = collect_diagnostics([FakeProvider("interpreter"), buggy], _source(tmp_path))
 
-    assert str(exc_info.value) == "Diagnostics failed: heuristic-linter (ValueError: rule exploded)"
+    report = str(exc_info.value)
+    assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
+    assert "- heuristic-linter: rule exploded" in report
+    assert "cause: ValueError: rule exploded" in report
     assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_collection_report_is_capped_and_can_be_rendered_uncapped(tmp_path: Path) -> None:
+    timeout = MaudeWorkerTimeoutError(remote_traceback="X" * 5000)
+
+    def raise_wrapped() -> None:
+        raise DiagnosticProviderError("interpreter", timeout.reason) from timeout
+
+    with pytest.raises(DiagnosticProviderError) as exc_info:
+        raise_wrapped()
+    provider_error = exc_info.value
+
+    with pytest.raises(DiagnosticCollectionError) as collection_info:
+        _ = collect_diagnostics(
+            [FakeProvider("interpreter", error=provider_error)],
+            _source(tmp_path),
+            max_chars=200,
+        )
+
+    capped = str(collection_info.value)
+    assert capped.splitlines()[1].startswith("- interpreter: Maude worker timed out")
+    assert TRUNCATION_MARKER in capped
+    uncapped = collection_info.value.format_report(max_chars=0)
+    assert "X" * 5000 in uncapped
+    assert TRUNCATION_MARKER not in uncapped

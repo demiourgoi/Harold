@@ -6,6 +6,7 @@ on the seam without depending on another capability. Concrete providers stamp th
 own `DiagnosticSource` name on every diagnostic they report.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -123,11 +124,27 @@ class SourceFileNotFoundError(DiagnosticsError):
 
 
 class DiagnosticProviderError(DiagnosticsError):
-    """A provider could not produce diagnostics; wraps the underlying failure."""
+    """A provider could not produce diagnostics; wraps the underlying failure.
 
-    def __init__(self, source: DiagnosticSource, reason: str) -> None:
+    `context` carries caller-relevant facts (the diagnosed path, the failing phase)
+    so the error report stays self-contained; the underlying failure is chained as
+    `__cause__`.
+    """
+
+    source: DiagnosticSource
+    reason: str
+    context: dict[str, object]
+
+    def __init__(
+        self,
+        source: DiagnosticSource,
+        reason: str,
+        *,
+        context: Mapping[str, object] | None = None,
+    ) -> None:
         self.source = source
         self.reason = reason
+        self.context = dict(context) if context is not None else {}
         super().__init__(f"{source}: {reason}")
 
 

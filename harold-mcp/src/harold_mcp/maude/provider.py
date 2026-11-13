@@ -66,7 +66,12 @@ class InterpreterDiagnosticProvider:
         except MaudeWorkerError as exc:
             # The Maude vocabulary stops here: the diagnostics layer reports a provider
             # failure, and `__cause__` keeps the worker error for logs and debugging.
-            raise DiagnosticProviderError(self.name, exc.reason) from exc
+            # The path and phase survive the wrap so the error report is self-contained.
+            raise DiagnosticProviderError(
+                self.name,
+                exc.reason,
+                context={"path": str(source.path), "phase": "load", **exc.context},
+            ) from exc
         diagnostics = [
             self._to_diagnostic(source, file=warning["file"], line=warning["line"], message=warning["message"])
             for warning in result["warnings"]

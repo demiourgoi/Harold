@@ -12,7 +12,17 @@ import pytest
 from pydantic import ValidationError
 
 import harold_mcp.server.tools.interpreter as interpreter_module
-from harold_mcp.maude import MaudeWorkerTimeoutError
+from harold_mcp.errors import TRUNCATION_MARKER
+from harold_mcp.maude import (
+    MaudeInitError,
+    MaudeWorkerCancelledError,
+    MaudeWorkerCrashedError,
+    MaudeWorkerError,
+    MaudeWorkerProtocolError,
+    MaudeWorkerRemoteError,
+    MaudeWorkerSpawnError,
+    MaudeWorkerTimeoutError,
+)
 from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict
 from harold_mcp.server.tools.interpreter import (
     ErewriteStep,
@@ -43,10 +53,14 @@ class FakeExecutor:
 
 
 class _RecordingLogger:
-    """Capture `exception` calls instead of emitting them to the test log."""
+    """Capture `error`/`exception` calls instead of emitting them to the test log."""
 
     def __init__(self) -> None:
+        self.errors: list[tuple[str, tuple[object, ...]]] = []
         self.exceptions: list[tuple[str, tuple[object, ...]]] = []
+
+    def error(self, message: str, *args: object) -> None:
+        self.errors.append((message, args))
 
     def exception(self, message: str, *args: object) -> None:
         self.exceptions.append((message, args))
@@ -101,10 +115,14 @@ def _settings(**overrides: Any) -> Settings:
 
 def test_missing_path_raises_before_the_worker(tmp_path: Path) -> None:
     executor = FakeExecutor()
+    missing = tmp_path / "missing.maude"
 
-    with pytest.raises(MaudeRunError, match="not found or unreadable"):
-        _ = maude_run(str(tmp_path / "missing.maude"), "M", [_reduce("f")], executor=executor, settings=_settings())
+    with pytest.raises(MaudeRunError, match="not found or unreadable") as exc_info:
+        _ = maude_run(str(missing), "M", [_reduce("f")], executor=executor, settings=_settings())
 
+    message = str(exc_info.value)
+    assert f"context: path={missing.resolve()}" in message
+    assert "module=M" in message
     assert executor.calls == []
 
 
@@ -608,8 +626,10 @@ def test_too_large_outcome_is_adapted(maude_file: Path) -> None:
 def test_load_failure_is_a_whole_call_error(maude_file: Path) -> None:
     session = _session_result(load_ok=False, load_output={"stdout": "", "stderr": "boom"}, outcomes=[])
 
-    with pytest.raises(MaudeRunError, match="boom"):
+    with pytest.raises(MaudeRunError, match="boom") as exc_info:
         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=FakeExecutor(session), settings=_settings())
+
+    assert "context: path=" in str(exc_info.value)
 
 
 def test_missing_module_error_lists_the_defined_modules(maude_file: Path) -> None:
@@ -622,6 +642,8 @@ def test_missing_module_error_lists_the_defined_modules(maude_file: Path) -> Non
     assert 'Module "NOPE"' in message
     assert "A, B" in message
     assert "maude_program_diagnostics" in message
+    assert message.splitlines()[1].startswith("context: path=")
+    assert "module=NOPE" in message
 
 
 def test_missing_module_error_reports_when_nothing_was_defined(maude_file: Path) -> None:
@@ -634,8 +656,12 @@ def test_missing_module_error_reports_when_nothing_was_defined(maude_file: Path)
 def test_theory_module_is_rejected(maude_file: Path) -> None:
     session = _session_result(module_type=2, outcomes=[])
 
-    with pytest.raises(MaudeRunError, match="theory"):
+    with pytest.raises(MaudeRunError, match="theory") as exc_info:
         _ = maude_run(str(maude_file), "TRIV", [_reduce("f")], executor=FakeExecutor(session), settings=_settings())
+
+    message = str(exc_info.value)
+    assert 'Module "TRIV" is a theory' in message
+    assert message.splitlines()[1].startswith("context: path=")
 
 
 def test_worker_error_is_chained(maude_file: Path) -> None:
@@ -645,7 +671,80 @@ def test_worker_error_is_chained(maude_file: Path) -> None:
     with pytest.raises(MaudeRunError, match="timed out") as exc_info:
         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
 
+    message = str(exc_info.value)
+    assert message.splitlines()[0] == "Maude interpreter session failed: timeout: Maude worker timed out"
+    assert "context: path=" in message
+    assert "module=M" in message
+    assert "steps=1" in message
+    assert "timeout=60s" in message
+    assert "cause: MaudeWorkerTimeoutError: Maude worker timed out" in message
     assert exc_info.value.__cause__ is cause
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (MaudeInitError(), "init-failure"),
+        (MaudeWorkerCrashedError(), "crash"),
+        (MaudeWorkerTimeoutError(), "timeout"),
+        (MaudeWorkerSpawnError(), "spawn-failure"),
+        (MaudeWorkerRemoteError("ValueError", "boom"), "remote-exception"),
+        (MaudeWorkerCancelledError(), "cancelled"),
+        (MaudeWorkerProtocolError(), "protocol-error"),
+    ],
+)
+def test_worker_error_categories_reach_the_client(maude_file: Path, error: MaudeWorkerError, category: str) -> None:
+    with pytest.raises(MaudeRunError) as exc_info:
+        _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=FakeExecutor(exc=error), settings=_settings())
+
+    first_line = str(exc_info.value).splitlines()[0]
+    assert first_line.startswith(f"Maude interpreter session failed: {category}: ")
+    assert exc_info.value.__cause__ is error
+
+
+def test_remote_error_report_includes_type_context_cause_and_traceback(maude_file: Path) -> None:
+    remote = MaudeWorkerRemoteError(
+        "ValueError",
+        "boom",
+        remote_traceback='Traceback (most recent call last):\n  File "worker.py", line 1\nValueError: boom\n',
+        context={"phase": "step", "step": 0, "command": "reduce", "pid": 4242},
+    )
+
+    with pytest.raises(MaudeRunError) as exc_info:
+        _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=FakeExecutor(exc=remote), settings=_settings())
+
+    message = str(exc_info.value)
+    assert message.splitlines()[0] == "Maude interpreter session failed: remote-exception: ValueError: boom"
+    assert "phase=step" in message
+    assert "step=0" in message
+    assert "command=reduce" in message
+    assert "pid=4242" in message
+    assert "cause: MaudeWorkerRemoteError: ValueError: boom <- ValueError: boom" in message
+    assert "traceback:\nTraceback (most recent call last):" in message
+
+
+def test_worker_error_is_capped_and_logged_in_full(maude_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logger = _RecordingLogger()
+    monkeypatch.setattr(interpreter_module, "_log", logger)
+    remote = MaudeWorkerRemoteError("ValueError", "boom", remote_traceback="X" * 5000)
+    prefix = "Maude interpreter session failed: "
+
+    with pytest.raises(MaudeRunError) as exc_info:
+        _ = maude_run(
+            str(maude_file),
+            "M",
+            [_reduce("f")],
+            executor=FakeExecutor(exc=remote),
+            settings=_settings(error_detail_max_chars=300),
+        )
+
+    message = str(exc_info.value)
+    assert len(message) <= len(prefix) + 300
+    assert message.rstrip().endswith(TRUNCATION_MARKER)
+    assert len(logger.errors) == 1
+    full_report = cast(str, logger.errors[0][1][2])
+    assert "X" * 5000 in full_report
+    assert TRUNCATION_MARKER not in full_report
 
 
 def test_unexpected_exception_is_chained(maude_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -657,22 +756,26 @@ def test_unexpected_exception_is_chained(maude_file: Path, monkeypatch: pytest.M
     with pytest.raises(MaudeRunError, match="Unexpected failure") as exc_info:
         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
 
-    assert "ValueError: boom" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert message.splitlines()[0] == "Unexpected failure running the Maude interpreter session: ValueError: boom"
+    assert "context: path=" in message
     assert exc_info.value.__cause__ is cause
-    assert logger.exceptions == [
-        (
-            "Unexpected failure running the Maude interpreter session for %s (module %s)",
-            (maude_file.resolve(), "M"),
-        )
-    ]
+    assert len(logger.exceptions) == 1
+    log_message, log_args = logger.exceptions[0]
+    assert log_message == "Unexpected failure running the Maude interpreter session for %s (module %s):\n%s"
+    assert log_args[0] == maude_file.resolve()
+    assert log_args[1] == "M"
+    assert "ValueError: boom" in cast(str, log_args[2])
 
 
 def test_unexpected_exception_without_a_message_names_its_type(maude_file: Path) -> None:
     cause = RuntimeError()
     executor = FakeExecutor(exc=cause)
 
-    with pytest.raises(MaudeRunError, match="RuntimeError") as exc_info:
+    with pytest.raises(MaudeRunError) as exc_info:
         _ = maude_run(str(maude_file), "M", [_reduce("f")], executor=executor, settings=_settings())
 
-    assert str(exc_info.value).endswith("RuntimeError")
+    assert (
+        str(exc_info.value).splitlines()[0] == "Unexpected failure running the Maude interpreter session: RuntimeError"
+    )
     assert exc_info.value.__cause__ is cause

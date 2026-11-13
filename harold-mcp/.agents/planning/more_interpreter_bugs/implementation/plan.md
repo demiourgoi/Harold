@@ -2,7 +2,7 @@
 
 ## Checklist
 
-- [ ] Step 1 — Error model, formatter, and rich tool errors
+- [x] Step 1 — Error model, formatter, and rich tool errors
 - [ ] Step 2 — One-shot IPC transport and process runner
 - [ ] Step 3 — Replace the pool executor with per-call processes
 - [ ] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
@@ -118,6 +118,51 @@ their schemas and success behavior.
 exception as `Maude interpreter session failed: timeout: ...` with context, cause
 chain and traceback; a diagnostics provider failure shows its own section. Run
 `make test-unit`.
+
+### Implementation notes (Step 1)
+
+Implemented as planned. Deviations and additions, with their rationale:
+
+- `format_error_report` gained an additive `message=` keyword (defaults to
+  `str(exc)`). The diagnostics aggregation needs its section first line to read
+  `- interpreter: Maude worker timed out`; without the override the wrapping
+  `DiagnosticProviderError`'s `str()` already starts with `interpreter:`, which
+  would render `interpreter: interpreter: ...`. The design signature is otherwise
+  unchanged.
+- `harold_mcp.errors` also exposes `format_context` (used by the interpreter tool
+  to append the context line to input errors) and `format_exception_text` (the
+  `traceback.format_exception(type(exc), exc, exc.__traceback__)` helper, which
+  Step 2's transport will reuse for `_format_exc`).
+- `DiagnosticCollectionError` renders at construction from a new `max_chars`
+  argument passed through `collect_diagnostics(..., max_chars=...)`, and exposes
+  `format_report(max_chars)` for the uncapped log rendering. Its default cap is
+  the new `DEFAULT_ERROR_DETAIL_MAX_CHARS` constant, which is also the default of
+  `Settings.error_detail_max_chars`, so the seam keeps a single source of truth
+  without importing settings. It also carries a `context` (the diagnosed path) so
+  every provider section is self-contained.
+- `DiagnosticProviderError` gained an optional `context`; the interpreter provider
+  passes the resolved path, `phase="load"` and the worker error's own context, so
+  the wrap no longer drops the chain's context.
+- `_traceback_text` walks the cause chain for the first non-empty
+  `remote_traceback`. A wrapper (`DiagnosticProviderError`) does not own the remote
+  traceback, and without this walk a diagnostics failure would show only its local
+  raise site.
+- `maude_program_diagnostics` gained a `settings` FastMCP dependency (for the cap),
+  matching `maude_run`. Direct callers (unit and integration tests) now pass
+  `settings=Settings(maude_workers=1)`. The success/summary/diagnostics behavior is
+  unchanged.
+- The `maude_run` description still has the stale “replaces the worker pool”
+  sentence: Step 6 owns that edit per the plan.
+- The pool-era integration assertion in `test_tool_reports_crash_and_recovers` was
+  updated to the new multi-line collection shape; that test is rewritten around the
+  target seam in Step 4.
+- The tool context keys are `path`, `module`, `steps` and `timeout`; worker-provided
+  context (`phase`, `step`, `command`, `pid`) merges in with caller keys winning,
+  which is what Steps 2/3 need.
+
+Validation: `make check`, `make test-unit` (317 passed) and the focused integration
+runs (`test_diagnostics_integration.py`, `test_maude_run_integration.py`; 41 passed)
+are green.
 
 ---
 

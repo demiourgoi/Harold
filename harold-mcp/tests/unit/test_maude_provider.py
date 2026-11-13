@@ -158,6 +158,7 @@ def test_worker_crash_becomes_a_provider_error_with_the_cause_chained(tmp_path: 
     assert error.source == "interpreter"
     assert error.reason == "Maude worker crashed"
     assert str(error) == "interpreter: Maude worker crashed"
+    assert error.context == {"path": str(source.path), "phase": "load"}
     assert error.__cause__ is crash  # the Maude vocabulary stays visible for logs
 
 
@@ -170,4 +171,17 @@ def test_worker_timeout_becomes_a_provider_error_with_the_cause_chained(tmp_path
         _ = provider.diagnose(source)
 
     assert exc_info.value.reason == "Maude worker timed out"
+    assert exc_info.value.context["path"] == str(source.path)
+    assert exc_info.value.context["phase"] == "load"
     assert exc_info.value.__cause__ is timeout
+
+
+def test_worker_context_is_preserved_when_wrapping(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    crash = MaudeWorkerCrashedError(context={"pid": 99}, remote_traceback="trace")
+    provider = InterpreterDiagnosticProvider(FakeMaudeExecutor(error=crash))
+
+    with pytest.raises(DiagnosticProviderError) as exc_info:
+        _ = provider.diagnose(source)
+
+    assert exc_info.value.context == {"path": str(source.path), "phase": "load", "pid": 99}

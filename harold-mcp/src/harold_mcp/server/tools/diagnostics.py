@@ -15,6 +15,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict
 
 from harold_mcp.diagnostics import (
+    DiagnosticCollectionError,
     DiagnosticProvider,
     DiagnosticSource,
     FixEdit,
@@ -25,9 +26,13 @@ from harold_mcp.diagnostics import (
     collect_diagnostics,
 )
 from harold_mcp.heuristic import HeuristicLinterProvider
+from harold_mcp.logging import get_logger
 from harold_mcp.maude import InterpreterDiagnosticProvider, MaudeExecutor, get_maude_executor
 from harold_mcp.server.server import mcp
 from harold_mcp.server.tags import DIAGNOSTICS, harold_tags
+from harold_mcp.settings import Settings, get_settings
+
+_log = get_logger(__name__)
 
 
 class _ResultModel(BaseModel):
@@ -214,6 +219,7 @@ def get_diagnostic_providers(
 def maude_program_diagnostics(
     path: str,
     providers: tuple[DiagnosticProvider, ...] = Depends(get_diagnostic_providers),
+    settings: Settings = Depends(get_settings),  # noqa: B008 - FastMCP dependency-injection convention
 ) -> MaudeProgramDiagnosticsResult:
     # FastMCP uses only the free-form text above `Args:` as the MCP tool description;
     # sections like `Returns`, `Raises`, and `Example` are excluded from the description
@@ -264,5 +270,15 @@ def maude_program_diagnostics(
             server's working directory, which is not the client's.
     """
     source = SourceFile.from_path(path)  # raises SourceFileNotFoundError
-    diagnostics = collect_diagnostics(providers, source)  # raises DiagnosticCollectionError
+    try:
+        diagnostics = collect_diagnostics(providers, source, max_chars=settings.error_detail_max_chars)
+    except DiagnosticCollectionError as exc:
+        # The client text is capped; the log keeps every provider's full chain and
+        # traceback, so the truncation marker points at an actionable record.
+        _log.error(
+            "Diagnostic collection failed for %s:\n%s",
+            source.path,
+            exc.format_report(max_chars=0),
+        )
+        raise
     return _build_result(str(source.path), diagnostics)
