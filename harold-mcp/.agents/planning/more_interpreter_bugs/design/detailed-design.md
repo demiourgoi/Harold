@@ -57,6 +57,32 @@ diagnosed from the tool response alone.
 - The RAG/documentation tool.
 - Changing the default `maude_workers` value.
 
+### 1.4 How the design fixes the reported bugs
+
+The failures share one root cause: the shared pool. Its `kill_workers()` recovery
+kills every worker and cancels pending futures, its call queue marks futures
+running before a worker starts them, and its `CancelledError`/`BrokenProcessPool`
+vocabulary leaks into unrelated calls. The design removes the shared object: every
+call owns one process, and the only cross-call coordination is a semaphore that
+admits or rejects a call before any process exists. The table maps each reported
+bug to its remedy and to the regression test in §7.5.
+
+| Bug | Symptom | Root cause | Design remedy |
+| --- | --- | --- | --- |
+| B0 — undiagnosable failure | Client sees `Unexpected failure ...` with no type/cause | The tool's wrapper omitted the cause chain and traceback | Rich formatter: category, type/message, cause chain, context and a bounded originating traceback; full report logged |
+| B1 — `CancelledError` | `Unexpected failure ...: CancelledError` in a healthy-looking call | `kill_workers()` cancels pending pool futures; `CancelledError` escapes `_run_task` | No pool and no futures, so cross-call cancellation cannot occur. Shutdown cancellation is `MaudeWorkerCancelledError`; any stray `CancelledError` is mapped defensively |
+| B2 — collateral crashes | Healthy concurrent calls fail with `Maude worker crashed` | One call's timeout replaces the shared pool and kills all workers | One process per call; killing a child affects only its own call; the semaphore only gates admission |
+| B3 — queued timeout | A timeout that never started a worker kills the pool; queued vs running is undecidable | The call queue marks futures running before execution; `cancel()` is false for the first `max_workers + 1` queued calls | No call queue. A call waits on a semaphore; if admission times out it fails before spawning; a running timeout kills only that child |
+| B4 — step output | A search step's structured result is present but `stdout` is empty; a block once appeared in another step | The bindings return values and do not print; the old cross-step leak was libmaude buffering | No transport change; `capture_streams` still flushes per phase; tests pin the expected empty stdout and captured stderr |
+| B5 — init mislabel | An init failure would be reported as `Unexpected failure` | `MaudeInitError` was not a `MaudeWorkerError` | `MaudeInitError` becomes a `MaudeWorkerError`; the tool's specific branch reports `init-failure` with details |
+| B6 — startup/shutdown escape | A spawn `OSError` or a shutdown `RuntimeError` bypassed the mapping | The pool's `submit()` catches only `BrokenProcessPool` | No `submit()`. `Process.start()` failures become `MaudeWorkerSpawnError`; shutdown races become `MaudeWorkerCancelledError`; both carry the cause |
+| B7 — lost load tail | A bounded search at EOF was missing from `load_output` | libmaude's C buffer was not flushed before restoring fds | Already fixed by `capture_streams`; the design keeps it and adds a regression test |
+
+B4 and B7 are not fixes in this project: the research established that B4's empty
+step stdout is correct behavior (and the old cross-step leak is already fixed), and
+B7's flush fix is already in place. They are listed because the regression suite
+must keep them fixed. §7.5 ties each row to a concrete test and a test type.
+
 ## 2. Detailed Requirements
 
 ### 2.1 Functional requirements
@@ -77,10 +103,10 @@ diagnosed from the tool response alone.
   OOM kill), the parent detects it through the connection (EOF or an error while
   reading), maps it to a crash error, and keeps serving other calls.
 - **FR-6 — Distinct error categories.** Clients can distinguish: whole-call
-  timeout, worker crash, Maude initialization failure, remote interpreter
-  exception, shutdown cancellation, invalid input (missing/unreadable file, missing
-  module, theory module), and protocol failure. Per-step failures (`parse-error`,
-  `too-large`) remain data in a successful result.
+  timeout, worker crash, worker spawn failure, Maude initialization failure, remote
+  interpreter exception, shutdown cancellation, invalid input (missing/unreadable
+  file, missing module, theory module), and protocol failure. Per-step failures
+  (`parse-error`, `too-large`) remain data in a successful result.
 - **FR-7 — Rich, client-visible details.** Whole-call failures carry a
   self-contained error text with the category, exception type/message, full cause
   chain (including remote causes), call context (resolved path, module, phase,
@@ -346,7 +372,9 @@ class ProcessRunner(Protocol):
 1. `ctx = multiprocessing.get_context("spawn")`; `parent, child = ctx.Pipe()`.
 2. `proc = ctx.Process(target=transport.serve_one, args=(child,), daemon=True)`.
 3. `proc.start()`; close `child` in the parent; register `(proc, parent)` in the
-   active map under a lock.
+   active map under a lock. If `Process.start()` raises `OSError` or `RuntimeError`,
+   close the connection and raise `MaudeWorkerSpawnError` with the cause and
+   context; nothing is registered and no child exists to kill.
 4. `parent.send_bytes(json.dumps(request, ensure_ascii=False).encode())`; a
    `BrokenPipeError`/`OSError` here is a crash.
 5. `parent.poll(remaining)`; false → kill, join, `MaudeWorkerTimeoutError`.
@@ -499,6 +527,7 @@ classDiagram
   class MaudeInitError
   class MaudeWorkerCrashedError
   class MaudeWorkerTimeoutError
+  class MaudeWorkerSpawnError
   class MaudeWorkerRemoteError
   class MaudeWorkerCancelledError
   class MaudeWorkerProtocolError
@@ -507,6 +536,7 @@ classDiagram
   MaudeWorkerError <|-- MaudeInitError
   MaudeWorkerError <|-- MaudeWorkerCrashedError
   MaudeWorkerError <|-- MaudeWorkerTimeoutError
+  MaudeWorkerError <|-- MaudeWorkerSpawnError
   MaudeWorkerError <|-- MaudeWorkerRemoteError
   MaudeWorkerError <|-- MaudeWorkerCancelledError
   MaudeWorkerError <|-- MaudeWorkerProtocolError
@@ -564,6 +594,7 @@ MaudeError(RuntimeError)
     ├── MaudeInitError          "Failed to initialize the Maude interpreter..."
     ├── MaudeWorkerCrashedError "Maude worker crashed"
     ├── MaudeWorkerTimeoutError "Maude worker timed out"
+    ├── MaudeWorkerSpawnError   "failed to start the Maude worker: <cause>"
     ├── MaudeWorkerRemoteError  "<Type>: <message>"
     ├── MaudeWorkerCancelledError "cancelled during shutdown"
     └── MaudeWorkerProtocolError  "invalid worker response: ..."
@@ -574,8 +605,8 @@ specific branch handles it (this removes the old hierarchy trap where an init
 failure would be labelled "Unexpected failure"). `reason` remains available.
 `MaudeWorkerRemoteError` also exposes `remote_type`, `remote_message` and
 `remote_traceback`. `MaudeWorkerError.category` is a class attribute used by the
-formatter (`timeout`, `crash`, `init-failure`, `remote-exception`, `cancelled`,
-`protocol-error`).
+formatter (`timeout`, `crash`, `spawn-failure`, `init-failure`,
+`remote-exception`, `cancelled`, `protocol-error`).
 
 ### 5.5 Error envelope to exception mapping
 
@@ -589,6 +620,9 @@ formatter (`timeout`, `crash`, `init-failure`, `remote-exception`, `cancelled`,
 | response exceeds `ipc_max_response_bytes` | `MaudeWorkerProtocolError` |
 | closed executor | `MaudeWorkerCancelledError` |
 
+Local process-creation failures (`OSError` or `RuntimeError` from
+`Process.start()`) raise `MaudeWorkerSpawnError`; they never come from an envelope.
+
 ## 6. Error Handling
 
 ### 6.1 Failure categories and mapping
@@ -597,6 +631,7 @@ formatter (`timeout`, `crash`, `init-failure`, `remote-exception`, `cancelled`,
 | --- | --- | --- | --- |
 | timeout | Admission or process deadline expires | `MaudeWorkerTimeoutError` | `Maude interpreter session failed: timeout: Maude worker timed out` |
 | crash | Child exits/loses the pipe before a complete response | `MaudeWorkerCrashedError` | `... crash: Maude worker crashed` |
+| spawn-failure | `Process.start()` raises `OSError`/`RuntimeError` | `MaudeWorkerSpawnError` | `... spawn-failure: failed to start the Maude worker: ...` |
 | init-failure | `init_maude` fails in a ping or a call | `MaudeInitError` | `... init-failure: Failed to initialize ...` |
 | remote-exception | Child sends a Python error envelope | `MaudeWorkerRemoteError` | `... remote-exception: ValueError: boom` |
 | cancelled | Executor shutdown kills an in-flight call | `MaudeWorkerCancelledError` | `... cancelled: cancelled during shutdown` |
@@ -676,7 +711,8 @@ unchanged.
 `MaudeWorkerCancelledError` instead of crash. A call that has not yet acquired a
 slot checks `_closed` after acquiring and raises the same error before spawning.
 `shutdown()` is idempotent and kills/joins with a bounded wait, logging any process
-that refuses to die.
+that refuses to die. A `concurrent.futures.CancelledError` from any library path is
+mapped to `MaudeWorkerCancelledError`; it never reaches the tool bare.
 
 ## 7. Testing Strategy
 
@@ -690,10 +726,10 @@ that refuses to die.
 - **Runner with fakes**: fake process/connection injects EOF, mid-message
   `OSError`, timeout, oversized response, error envelopes; asserts kill/join and
   active-set cleanup.
-- **Executor with a fake runner**: success; timeout; crash; init failure; remote
-  error; protocol error; shutdown cancellation; semaphore admission (a second call
-  waits); `start()` pings `maude_workers` times and fails fast; shutdown idempotence;
-  `_closed` behavior.
+- **Executor with a fake runner**: success; timeout; crash; spawn failure; init
+  failure; remote error; protocol error; a stray `CancelledError` mapping; shutdown
+  cancellation; semaphore admission (a second call waits); `start()` pings
+  `maude_workers` times and fails fast; shutdown idempotence; `_closed` behavior.
 - **Tool adapters**: rich text in `MaudeRunError`; per-step data unchanged;
   diagnostics provider details; context fields present; truncation.
 - **Settings**: the two new fields and their defaults.
@@ -702,8 +738,8 @@ Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude impo
 
 ### 7.2 Integration tests (real interpreter)
 
-- Normal session and diagnostics results are byte-for-byte equivalent to the old
-  behavior for representative fixtures.
+- Normal session and diagnostics results are semantically equal to the old behavior
+  for representative fixtures.
 - Abrupt child exit: a test-only transport target that calls `os._exit(1)` (or
   `worker._crash`) is used to verify crash mapping and that a concurrent call
   succeeds.
@@ -718,6 +754,10 @@ Fakes keep unit tests hermetic: no interpreter, no real processes, no Maude impo
   keep their existing behavior.
 - Shutdown with an in-flight call: the call gets the cancellation error; no orphan
   processes remain (check pids with `os.kill(pid, 0)` / `Process.is_alive`).
+- Fixtures: a non-terminating rewrite module (rule self-loop) for timeout tests; a
+  module whose last command is a bounded search for B7; a large-result module; the
+  historical cascade modules (slow spinner + non-terminating loop + a search
+  model); and a crash target that calls `os._exit`.
 
 ### 7.3 Regression tests
 
@@ -733,6 +773,50 @@ for the bounded-search-at-EOF load capture and for step stderr capture remains.
 - Concurrency tests use distinct processes and explicit deadlines; they assert
   per-call outcomes, not scheduling order.
 - No test depends on the old pool's internal queue behavior.
+
+### 7.5 Bug regression matrix
+
+Every bug in §1.4 has a named regression test. Tests live in the project's unit
+or integration suite according to what they must prove; the names are illustrative
+and can be adjusted during implementation.
+
+| Bug | Regression test | Type | Why this type |
+| --- | --- | --- | --- |
+| B0 | `test_remote_error_report_has_type_cause_context_and_traceback`; `test_report_truncates_traceback_and_keeps_first_line` | Unit (formatter + fake runner) | Pure formatting/mapping; deterministic, no interpreter |
+| B1 | `test_historical_cascade_has_no_cancelled_error`; `test_cancelled_error_is_mapped_to_cancelled` | Integration (real processes) + unit (fake runner) | The original bug is a real pool race; the integration test reproduces the scheduling, the unit test pins the defensive mapping |
+| B2 | `test_concurrent_call_survives_peer_crash`; `test_historical_cascade_has_no_collateral_failures` | Integration (real processes, crash target) | OS-level isolation cannot be proven with fakes; `os._exit` gives a deterministic crash |
+| B3 | `test_admission_timeout_does_not_kill_slot_holder`; `test_running_timeout_kills_only_own_process` | Unit (fake runner) + integration (real Maude) | Admission is pure executor logic; the kill behavior needs a real process |
+| B4 | `test_step_stdout_is_empty_and_stderr_is_captured`; `test_load_output_does_not_leak_into_step_stdout` | Integration (real Maude) | Requires the real bindings and the per-phase capture |
+| B5 | `test_maude_init_error_is_a_worker_error`; `test_init_failure_message_is_specific` | Unit | Pure hierarchy/mapping |
+| B6 | `test_spawn_failure_is_mapped_to_spawn_error`; `test_shutdown_inflight_call_is_cancelled` | Unit (fake runner) + integration (shutdown) | Mapping is pure; the shutdown race needs a real process |
+| B7 | `test_bounded_search_at_eof_is_in_load_output` | Integration (real Maude) | The bug is libmaude's C buffering; only the real interpreter reproduces it |
+
+The B1/B2/B3 tests must fail on the old shared-pool implementation; B4/B7 are
+characterization tests that pin correct behavior, and B5/B6 pin the error mapping.
+
+### 7.6 Test type rationale
+
+- **Unit tests with a fake runner** are the right choice for executor logic:
+  admission, deadline arithmetic, error-envelope mapping, shutdown/closed state,
+  start pings and the formatter. They are fast, hermetic and deterministic, and
+  they can inject `OSError`, `CancelledError`, `EOFError` and oversized messages
+  that are hard to trigger reliably with real processes.
+- **Integration tests with the real `spawn` context** are required for everything
+  that depends on the OS or Maude: abrupt exit (EOF), real timeout and kill,
+  concurrent isolation, capture, large responses and orphan checks. Fakes cannot
+  prove that one process's death leaves another process running.
+- **Deterministic crash target.** A top-level test target that calls `os._exit` or
+  `worker._crash`; do not rely on generating a real SIGSEGV. This keeps the crash
+  test stable across platforms.
+- **Deterministic timeout.** A non-terminating rewrite rule with a short but
+  generous timeout (spawn + prelude initialization included). Assert that the call
+  fails with a timeout, the peer call succeeds and a follow-up call succeeds; do
+  not assert exact elapsed times.
+- **The historical cascade** is an integration test and the authoritative
+  regression for B1/B2/B3. It can use the finite spinner or the infinite rewrite
+  rule; assert per-call outcomes rather than scheduling order.
+- **No sleeps as synchronization.** Use process markers, explicit deadlines or
+  the runner's `active_count`; the suite's rendezvous-style helpers are the model.
 
 ## 8. Appendices
 
