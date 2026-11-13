@@ -131,13 +131,13 @@ not required to preserve it for error results, so **the text must stand alone**.
 - **ER-4 — Bounded.** The total error text is capped by
   `HAROLD_ERROR_DETAIL_MAX_CHARS` (default 4000, proposed; see P1). The first line
   is always present; if it alone exceeds the cap, its message part is truncated
-  while the category and type are kept. The traceback is shortened first; a
+  while the category/type prefix is kept. The traceback is shortened first; a
   truncation marker states that details were logged server-side.
 - **ER-5 — No secrets.** Do not include environment variables, unrelated process
   state, or file contents. Paths and module names are allowed.
 - **ER-6 — Stable shape.** Use a consistent format, e.g.
   `Maude interpreter session failed: timeout: <details>` /
-  `Maude interpreter session failed: crashed: <details>`, with a
+  `Maude interpreter session failed: crash: <details>`, with a
   `Type: message <- Type: message` cause chain. Per-step data is not converted
   into an error.
 - **ER-7 — Diagnostics aggregation.** The `DiagnosticCollectionError` text lists
@@ -194,8 +194,10 @@ not required to preserve it for error results, so **the text must stand alone**.
    the server log.
 5. The diagnostics tool reports all failing providers with their causes, and its
    success/summary behavior is unchanged.
-6. `make check`, `make test`, and `make docs-test` pass; new regression tests
-   fail on the old architecture and pass on the new one.
+6. `make check`, `make test`, and `make docs-test` pass; the B1/B2/B3 regression
+   tests fail on the old shared-pool architecture and pass on the new one.
+   New-machinery tests (formatter, shutdown race, target seam) have no
+   old-architecture counterpart.
 7. No orphan processes remain after normal use, timeouts, crashes, or shutdown
    (verified in integration tests by pid checks).
 
@@ -216,9 +218,9 @@ requirements.
 
 - **P1 — Error detail cap.** New setting `error_detail_max_chars`
   (`HAROLD_ERROR_DETAIL_MAX_CHARS`, default 4000, `gt=0`). The first line is always
-  present; if it alone exceeds the cap, its message is truncated while the category
-  and type are kept. The traceback is shortened first; a marker points to the
-  server log.
+  present; if it alone exceeds the cap, its message is truncated while the
+  category/type prefix is kept. The traceback is shortened first; a marker points
+  to the server log.
 - **P2 — Remote exceptions.** A remote Python exception is a distinct category
   (`MaudeWorkerRemoteError(MaudeWorkerError)`) whose reason names the remote type
   and message; the full remote traceback is appended per P1. This is distinct from

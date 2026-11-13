@@ -1,6 +1,6 @@
 # Detailed Design — Isolated interpreter workers with rich failures
 
-Status: design for review; revised after the first design review (all findings
+Status: design for review; revised after the design reviews (all findings
 addressed).
 
 ## 1. Overview
@@ -158,11 +158,12 @@ must keep them fixed. §7.5 ties each row to a concrete test and a test type.
   command (when known), timeout and pid are included.
 - **ER-4 — Bounded.** A `HAROLD_ERROR_DETAIL_MAX_CHARS` setting (default 4000)
   caps the text. The first line is always present; if it alone exceeds the cap, its
-  message part is truncated while the category and type are kept. The traceback is
-  shortened first; a marker points to the server log.
+  message part is truncated while the category/type prefix is kept. The traceback
+  is shortened first; a marker points to the server log.
 - **ER-5 — No secrets.** No environment variables, unrelated process state or file
   contents. Paths and module names are allowed.
-- **ER-6 — Stable shape.** A consistent first line and a
+- **ER-6 — Stable shape.** A consistent first line (`<category>: <message>`, or
+  `<Type>: <message>` when no category applies) and a
   `Type: message <- Type: message` cause chain. Per-step data is never converted
   into an error.
 - **ER-7 — Diagnostics aggregation.** The collection error lists every failing
@@ -325,7 +326,9 @@ protocol. The existing `capture_streams` still temporarily redirects fds 1/2 to
 temp files around loads and steps, so captured output is unaffected.
 
 Capture remains the only code that touches fds 1/2 during Maude work; nothing logs
-or prints while the capture fds are installed.
+or prints while the capture fds are installed. A failure to complete the redirect
+exits via `os._exit(1)` without printing, so multiprocessing's bootstrap cannot
+write a traceback to the inherited fd 2; the parent sees EOF and reports a crash.
 
 ## 4. Components and Interfaces
 
@@ -442,10 +445,13 @@ transport never imports Maude).
 
 ```python
 def serve_one(conn: Connection) -> None:
-    _redirect_stdio_to_devnull()
+    try:
+        _redirect_stdio_to_devnull()
+    except BaseException:
+        os._exit(1)  # no output: the parent sees EOF and reports a crash
     try:
         raw = conn.recv_bytes()
-    except EOFError:
+    except (EOFError, OSError):
         return
     try:
         request = json.loads(raw)
@@ -483,7 +489,10 @@ def serve_one(conn: Connection) -> None:
 `"".join(traceback.format_exception(type(exc), exc, exc.__traceback__))`; it
 renders any exception object, including one outside its handler (the same helper
 is used by the parent formatter). `ChildProtocolError` is a private transport
-exception used to give an unknown operation the `protocol` category.
+exception used to give an unknown operation the `protocol` category. A redirect
+failure exits via `os._exit(1)` **without printing**, so multiprocessing's
+bootstrap cannot write a traceback to the inherited fd 2; a first-recv `OSError`
+is treated as a closed peer, like EOF.
 
 `_dispatch`:
 - always calls `worker.init_maude()` first (idempotent per process);
@@ -524,11 +533,16 @@ def format_error_report(exc: BaseException, *, context: Mapping[str, object],
 
 It renders, in order:
 
-1. a stable first line: `<category>: <exception type>: <message>`, or
-   `<exception type>: <message>` if no category applies;
+1. a stable first line: `<category>: <message>`, or `<Type>: <message>` if no
+   category applies. The category identifies the worker exception class one-to-one
+   (see §5.4); the message carries the specific reason (e.g.
+   `timeout: Maude worker timed out`, `remote-exception: ValueError: boom`);
 2. `context: key=value, ...` (ordered, only provided keys);
-3. the cause chain: `cause: Type: message <- Type: message <- ...` with a cycle
-   guard;
+3. the cause chain, starting with the exception itself:
+   `cause: Type: message <- Type: message <- ...`, with a cycle guard. For a
+   `MaudeWorkerRemoteError`, append `remote_type: remote_message` as the final
+   element when those attributes are present; the remote exception has no local
+   `__cause__`/`__context__`;
 4. the originating traceback: the remote traceback for a remote failure, or
    `"".join(traceback.format_exception(type(exc), exc, exc.__traceback__))` for a
    local one. Unlike `format_exc()`, this renders a stored exception outside its
@@ -538,7 +552,8 @@ It renders, in order:
 `category` resolution: the explicit argument, else `getattr(exc, "category", None)`.
 If neither yields a category, the first line starts with `Type: message` and the
 caller's own prefix ("Maude interpreter session failed: " or "Unexpected failure
-...: ") supplies the context.
+...: ") supplies the context. `max_chars <= 0` disables truncation and is used for
+the server-log rendering; the client text always uses the configured cap.
 
 The context is the exception's own `context` merged with the caller's context,
 with the caller's keys winning on collision
@@ -548,8 +563,8 @@ with the caller's keys winning on collision
 The first line is always present. If the report exceeds `max_chars`, the traceback
 is truncated first; if necessary, long cause messages are shortened from the end.
 As a last resort, if the first line alone exceeds the cap, its message part is
-truncated while the category and exception type are kept, and the marker is
-appended. The full untruncated report is logged by the caller.
+truncated while the category/type prefix is kept, and the marker is appended. The
+full untruncated report is logged by the caller.
 
 The `MaudeWorkerError` hierarchy carries `context: Mapping[str, object]` and
 `remote_traceback: str | None` so the formatter can use them. A generic
@@ -564,14 +579,20 @@ unexpected non-Maude exceptions.
 try:
     result = executor.run_session(request, timeout=timeout)
 except MaudeWorkerError as exc:
+    full_detail = format_error_report(exc, context={...}, max_chars=0)
     detail = format_error_report(exc, context={...}, max_chars=settings.error_detail_max_chars)
-    _log.error("maude_run failed: %s", detail, extra={...})
+    _log.error("maude_run failed:\n%s", full_detail, extra={...})
     raise MaudeRunError("Maude interpreter session failed: " + detail) from exc
 except Exception as exc:
+    full_detail = format_error_report(exc, context={...}, max_chars=0)
     detail = format_error_report(exc, context={...}, max_chars=settings.error_detail_max_chars)
-    _log.exception("maude_run unexpected failure: %s", detail)
+    _log.exception("maude_run unexpected failure:\n%s", full_detail)
     raise MaudeRunError("Unexpected failure running the Maude interpreter session: " + detail) from exc
 ```
+
+The log record uses the uncapped rendering; the client text uses the configured
+cap. The truncation marker therefore always points at a log entry that contains
+the missing detail.
 
 The context includes the resolved path, module, number of steps, timeout and any
 worker-provided phase/step/pid. Input errors (missing file, missing module, theory
@@ -751,7 +772,7 @@ Traceback (most recent call last):
 ```
 
 The first line is stable and always present. If the first line alone exceeds the
-cap, its message part is truncated while the category and type are kept (see
+cap, its message part is truncated while the category/type prefix is kept (see
 §6.3). The context line is present for every whole-call failure. The cause chain
 precedes the traceback. The truncation marker is only present when the cap
 shortens the text.
@@ -759,13 +780,15 @@ shortens the text.
 ### 6.3 Formatting algorithm
 
 1. Resolve the category (explicit argument, else `getattr(exc, "category", None)`)
-   and build the first line as `<category>: <Type>: <message>`, or
-   `<Type>: <message>` when no category applies.
+   and build the first line as `<category>: <message>`, or `<Type>: <message>`
+   when no category applies.
 2. Merge the exception's own `context` with the caller's context, caller keys
    winning (`{**getattr(exc, "context", {}), **context}`), and append the ordered
    `key=value` pairs (skip `None` values).
-3. Walk `__cause__` then `__context__` with an identity set to avoid cycles;
-   render each as `Type: message`.
+3. Start with the exception itself, then walk `__cause__` then `__context__` with
+   an identity set to avoid cycles; render each as `Type: message`. If the
+   exception has `remote_type`/`remote_message`, append
+   `remote_type: remote_message` as the final element.
 4. Choose the originating traceback:
    - `remote_traceback` if the exception carries one;
    - otherwise `"".join(traceback.format_exception(type(exc), exc,
@@ -776,8 +799,8 @@ shortens the text.
 6. If the result exceeds `max_chars`, truncate the traceback (then long cause
    messages from the end) and append the marker. As a last resort, if the first
    line alone exceeds the cap, truncate its message part while keeping the
-   category and exception type, and append the marker. The full report is always
-   logged by the caller.
+   category/type prefix, and append the marker. The full report is always logged
+   by the caller.
 
 The formatter never reads environment variables or file contents.
 
@@ -833,16 +856,20 @@ bare.
 
 ### 7.1 Unit tests
 
-- **Formatter** (`errors`): type/message/cause/context/traceback rendering; cycle
-  guard; remote traceback; a stored exception rendered outside its handler (not
-  "NoneType: None"); category resolution (explicit, `exc.category`, or none →
-  `Type: message`); context-merge precedence (caller wins on collision);
-  truncation keeps the first line/category/type, including a message larger than
-  the cap; marker; no secrets.
+- **Formatter** (`errors`): first-line shape (`<category>: <message>`, or
+  `<Type>: <message>` when category-less); type/message/cause/context/traceback
+  rendering; cycle guard; remote traceback; the remote cause appended as the final
+  chain element; a stored exception rendered outside its handler (not "NoneType:
+  None"); category resolution; context-merge precedence (caller wins on
+  collision); truncation keeps the first line/category/message, including a
+  message larger than the cap; `max_chars <= 0` is unbounded (server log); marker;
+  no secrets.
 - **Transport protocol**: request/response encoding; non-object JSON and invalid
   payloads produce a protocol-category error; unknown operation; missing fields;
   oversized `maxlength`; child error envelope mapping by `category`; `serve_one`
-  dispatch with a fake operation (no Maude import).
+  dispatch with a fake operation (no Maude import); a redirect failure exits
+  without writing to the inherited fds; a first-recv `OSError` is treated as a
+  closed peer.
 - **Runner with fakes**: fake process/connection injects EOF, mid-message
   `OSError`, timeout, oversized response (message names
   `HAROLD_IPC_MAX_RESPONSE_BYTES`), `BrokenPipeError` on send, spawn failure, and
@@ -965,6 +992,16 @@ The design review's findings are all covered by tests:
 | 5. Old-architecture claim | §7.3/AC-6 wording aligned | Doc |
 | 6. FR-11 wording | idea-honing FR-11 aligned | Doc |
 
+#### Review 3 coverage
+
+| Finding | Test / action | Type |
+| --- | --- | --- |
+| 1. First-line shape | `test_first_line_uses_category_and_message`; `test_categoryless_report_omits_prefix` | Unit |
+| 2. Remote cause chain | `test_remote_error_chain_appends_remote_cause` | Unit |
+| 3. Full log vs capped client | `test_formatter_max_chars_zero_is_unbounded`; `test_tool_logs_full_report` | Unit |
+| 4. Child stdio/recv edges | `test_stdio_redirect_failure_exits_without_output`; `test_child_recv_oserror_exits` | Unit |
+| 5. idea-honing AC-6 | wording aligned | Doc |
+
 ### 7.6 Test type rationale
 
 - **Unit tests with a fake runner** are the right choice for executor logic:
@@ -1000,6 +1037,9 @@ The design review's findings are all covered by tests:
 - **Documentation** is checked by the strict docs build (`make docs-test`), a
   docstring assertion for the stale "replaces the worker pool" sentence, and a
   review checklist for the named README/settings entries.
+- **Client/log split.** A unit test captures the log record and asserts it holds
+  the uncapped report while the raised `MaudeRunError` text is capped; this keeps
+  the truncation marker meaningful.
 
 ## 8. Appendices
 
