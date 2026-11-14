@@ -37,6 +37,25 @@ Add `src/harold_mcp/skills/` to the first block (next to `.agents/skills`), so
 the copy is never committed and the single source of truth stays
 `skills/maude-manual`.
 
+### `pyproject.toml` — re-include the ignored copy (implementation finding)
+
+Hatchling's sdist (and `uv build`, which builds the wheel **from the sdist**)
+respects `.gitignore`, so a git-ignored copy is silently excluded from the
+artifacts. The fix is hatchling's `artifacts` option, which exists exactly for
+git-ignored build inputs:
+
+```toml
+[tool.hatch.build.targets.wheel]
+packages = ["src/harold_mcp"]
+artifacts = ["src/harold_mcp/skills"]
+
+[tool.hatch.build.targets.sdist]
+artifacts = ["src/harold_mcp/skills"]
+```
+
+Verified: `make skills && uv build` yields a wheel and an sdist that both
+contain the 27 skill files, including `harold_mcp/skills/maude-manual/SKILL.md`.
+
 ### Release workflow (`.github/workflows/on-release-main.yml`)
 
 In the `publish` job, the "Build package" step becomes:
