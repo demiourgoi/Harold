@@ -47,6 +47,23 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
   the transitions per solution path. A path over that cap, or any path string over
   `HAROLD_INTERPRETER_MAX_RESULT_LENGTH`, makes the step `too-large` with the limit
   and a `message` naming the setting to raise.
+- **Isolated interpreter workers** — every diagnostics/interpreter call now runs in
+  its own dedicated `spawn` process (one JSON request/response over a pipe, no shared
+  pool). A crash, timeout or initialization failure affects only the call that owns
+  the process; concurrent calls are unaffected. `HAROLD_MAUDE_WORKERS` bounds concurrent
+  interpreters, and the whole-call timeout covers admission, spawn, Maude
+  initialization, the load and every step.
+- **Rich, bounded tool errors** — whole-call failures now return a stable category
+  (`timeout`, `crash`, `spawn-failure`, `init-failure`, `remote-exception`,
+  `cancelled`, `protocol-error`, or the existing specific input-error message), the
+  call context (resolved path, module, steps, timeout and worker pid/phase/step), the
+  full cause chain and a bounded originating traceback. A diagnostics collection
+  failure lists every failing provider with its own section. The full report is always
+  logged, and the client-visible text is capped by the new
+  `HAROLD_ERROR_DETAIL_MAX_CHARS` setting.
+- **`HAROLD_IPC_MAX_RESPONSE_BYTES`** — new hardening setting (default 2 GiB) capping
+  a worker response read; an oversized response is a protocol error naming the setting
+  instead of unbounded buffering.
 
 ### Changed
 
@@ -56,12 +73,24 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
 - **Timeout ownership** — `MaudeExecutor` no longer picks a default timeout: diagnostics
   passes its setting, `maude_run` passes its own setting or the per-call override, and the
   lifespan passes the diagnostics timeout to the startup check. Both timeouts cover the
-  whole worker call and remain best effort (a timeout kills and replaces the pool).
+  whole worker call (admission included) and remain best effort: a timeout kills only that
+  call's process, so other concurrent calls are unaffected.
 - **Absolute paths in both tools** — the `maude_program_diagnostics` and `maude_run`
   descriptions now state that `path` must be absolute, because the server's working
   directory is not the client's.
 - **Concurrent-call wording** — `HAROLD_MAUDE_WORKERS` is documented as the cap on
-  concurrent diagnostics and interpreter sessions; workers are still recycled per call.
+  concurrent diagnostics and interpreter sessions; every call gets a fresh process, so it
+  bounds concurrent interpreters, not warm workers.
+- **Per-call process architecture** — `MaudeExecutor` no longer uses a
+  `ProcessPoolExecutor`: it owns a process runner plus a semaphore, and each call gets a
+  fresh `spawn` process (still hermetic, with no state carried across calls). The old
+  pool-wide recovery and the `executor.submit` API are gone.
+- **Worker exceptions are remote exceptions** — an exception raised inside the child now
+  reaches the client as `MaudeWorkerRemoteError` with the remote type, message and
+  traceback preserved, instead of a raw exception propagated through a pool.
+- **`MaudeInitError` hierarchy** — it now subclasses `MaudeWorkerError` (and is still a
+  `MaudeError`/`RuntimeError`), so initialization failures are reported as
+  `init-failure` instead of an “Unexpected failure”.
 - **`too-large` outcomes name their limit** — every `too-large` step outcome now
   carries a `message` naming the exceeded setting (`interpreter_max_result_length`,
   `interpreter_max_path_steps`), so the two equal-valued caps can be told apart.
@@ -84,6 +113,14 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
   stays chained) and logs the traceback, with the file and module, server-side, instead
   of returning only the generic "Unexpected failure running the Maude interpreter
   session" text.
+- **No collateral failures from a timeout or crash** — a timed-out or crashed call used
+  to replace the shared worker pool, killing or cancelling unrelated in-flight calls
+  (`Maude worker crashed` / `CancelledError`). With one process per call only the failing
+  call is affected; a call that never got a slot times out on admission with a named
+  message instead of taking the pool down.
+- **No orphaned workers on shutdown** — shutdown marks the executor closed, kills and
+  reaps every active child, and any in-flight call reports a cancellation error rather
+  than an untyped failure.
 
 ### General fixes
 

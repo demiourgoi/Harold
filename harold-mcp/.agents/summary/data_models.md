@@ -174,24 +174,28 @@ Two independent hierarchies meet at the interpreter provider boundary, where a
 | --- | --- | --- | --- |
 | `DiagnosticsError` | `RuntimeError` | — | base for failures of the diagnostics subsystem |
 | `SourceFileNotFoundError` | `DiagnosticsError` | `path: Path` | `SourceFile.from_path` — the diagnostics tool's input is missing/unreadable |
-| `DiagnosticProviderError` | `DiagnosticsError` | `source`, `reason` | a provider could not produce diagnostics (wraps the cause) |
-| `DiagnosticCollectionError` | `DiagnosticsError` | `failures: tuple[ProviderFailure, ...]` | `collect_diagnostics` — at least one provider failed; the message names every failing provider |
+| `DiagnosticProviderError` | `DiagnosticsError` | `source`, `reason`, `context` | a provider could not produce diagnostics (wraps the cause, preserving its path/phase context) |
+| `DiagnosticCollectionError` | `DiagnosticsError` | `failures: tuple[ProviderFailure, ...]`, `context`, `format_report(max_chars)` | `collect_diagnostics` — at least one provider failed; renders one formatter section per failing provider, all-or-nothing |
 
-### Maude worker (`harold_mcp.maude.executor`)
+### Maude worker (`harold_mcp.maude.worker_errors`, re-exported by `harold_mcp.maude`)
 
 | Type | Base | Attributes | Raised by |
 | --- | --- | --- | --- |
 | `MaudeError` | `RuntimeError` | — | base for all worker-subsystem failures |
-| `MaudeInitError` | `MaudeError` | — | `MaudeExecutor.start` fail-fast init check (worker init) |
-| `MaudeWorkerError` | `MaudeError` | `reason: str` | base for running-call failures |
-| `MaudeWorkerCrashedError` | `MaudeWorkerError` | — | broken pool (submit time) or worker death mid-task |
-| `MaudeWorkerTimeoutError` | `MaudeWorkerError` | — | call exceeded the configured timeout |
+| `MaudeWorkerError` | `MaudeError` | `reason`, `category`, `context: dict`, `remote_traceback: str \| None` | base for whole-call failures |
+| `MaudeInitError` | `MaudeWorkerError` | `category="init-failure"` | init check in `start()`, or an `init` child envelope |
+| `MaudeWorkerCrashedError` | `MaudeWorkerError` | `category="crash"` | EOF/mid-message/send failure in the runner, or a child dying |
+| `MaudeWorkerTimeoutError` | `MaudeWorkerError` | `category="timeout"` | admission timeout or the runner deadline |
+| `MaudeWorkerSpawnError` | `MaudeWorkerError` | `category="spawn-failure"` | `Process.start()`/Pipe creation failure |
+| `MaudeWorkerRemoteError` | `MaudeWorkerError` | `category="remote-exception"`, `remote_type`, `remote_message` | a `remote` child envelope |
+| `MaudeWorkerCancelledError` | `MaudeWorkerError` | `category="cancelled"` | shutdown, a crash while closed, or a stray `CancelledError` |
+| `MaudeWorkerProtocolError` | `MaudeWorkerError` | `category="protocol-error"` | malformed/oversized response or a `protocol` child envelope |
 
 ### Interpreter tool (`harold_mcp.server.tools.interpreter`)
 
 | Type | Base | Attributes | Raised by |
 | --- | --- | --- | --- |
-| `MaudeRunError` | `RuntimeError` | — | whole-call failure of `maude_run`; the `MaudeWorkerError` cause is chained, and an unexpected non-worker exception contributes its type and message to the text |
+| `MaudeRunError` | `RuntimeError` | — | whole-call failure of `maude_run`; the `MaudeWorkerError` cause is chained, and the text carries the formatted category, context, cause chain and bounded traceback |
 
 `MaudeFileNotFoundError` no longer exists (removed in 0.0.4): the diagnostics tool's input
 error is `SourceFileNotFoundError`, because a missing file is a diagnostics-tool concern,
@@ -230,7 +234,7 @@ Defined in `harold_mcp.server.tags` (plain `str` constants, plus the `harold_tag
 - The `maude` bindings ship no type stubs; `pyproject.toml` overrides mypy with
   `ignore_missing_imports = true`, so Maude values are effectively `Any` — boundaries are
   narrowed explicitly (e.g. `ok = bool(maude.load(path))`; `cast` at the
-  future-result boundary in `_run_task`).
+  `ProcessRunner.run` / executor operation boundary).
 - The diagnostics seam and the linter are pure stdlib: frozen slotted dataclasses for
   values, `Literal` aliases for closed vocabularies (`Severity`, `DiagnosticSource`),
   `Protocol` for the provider contract, `TypedDict` across the process boundary.

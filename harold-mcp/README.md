@@ -54,7 +54,11 @@ Harold MCP tools:
   (the default) returns the ordered rule labels, `path: "full"` also the rule text and
   intermediate states, and `path: "none"` omits it. Every phase reports the interpreter's
   captured stdout/stderr, and the path must be **absolute** (the server's working
-  directory is not the client's).
+  directory is not the client's). Whole-call failures (missing path, load failure,
+  missing/theory module, worker crash or timeout) fail the call with a category
+  (`timeout`, `crash`, `spawn-failure`, `init-failure`, `remote-exception`,
+  `cancelled`, `protocol-error`), the call context, the cause chain and a bounded
+  traceback; the full detail is logged server-side.
 
 Planned tools: a vector index of the Maude documentation for retrieval-augmented
 generation (RAG).
@@ -121,7 +125,7 @@ The server is configured through environment variables set in the MCP server con
 
 | Env var | Meaning | Default |
 | --- | --- | --- |
-| `HAROLD_MAUDE_WORKERS` | Number of Maude worker processes. Workers are recycled after every call (each call gets a fresh interpreter), so this caps how many diagnostics/interpreter sessions can run concurrently, not how many interpreters stay warm. | half the logical CPUs, capped at 3 |
+| `HAROLD_MAUDE_WORKERS` | Maximum number of concurrent Maude interpreter processes. Every call runs in a fresh process, so this caps concurrent interpreters, not warm workers. | half the logical CPUs, capped at 3 |
 | `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` | Seconds to wait for each `maude_program_diagnostics` worker call before failing it as timed out. Renamed from `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`. | `60` |
 | `HAROLD_INTERPRETER_TIMEOUT_SECS` | Default timeout for each `maude_run` call; its `timeout_secs` argument overrides it. | `60` |
 | `HAROLD_INTERPRETER_MAX_STEPS` | Maximum steps per `maude_run` call. | `200` |
@@ -131,13 +135,16 @@ The server is configured through environment variables set in the MCP server con
 | `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | Maximum characters of a returned term (or path string); a longer result becomes a `too-large` step outcome. | `1000000` |
 | `HAROLD_INTERPRETER_MAX_PATH_STEPS` | Maximum transitions per `search` solution path; a longer path becomes a `too-large` step outcome. | `100` |
 | `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | Maximum characters of each captured stream (stdout and stderr separately) returned per phase; longer captures are truncated and marked. | `1000000` |
+| `HAROLD_ERROR_DETAIL_MAX_CHARS` | Maximum characters of the error detail returned to the client by a failed tool call. The full report is always logged; a truncated client report ends with a marker pointing at the log. | `4000` |
+| `HAROLD_IPC_MAX_RESPONSE_BYTES` | Maximum size in bytes of one worker response read by the server (hardening against a buggy child, not a quality-of-service limit). An oversized response is a protocol error naming this setting. | `2147483648` (2 GiB) |
 | `MAUDE_LIB` | Inherited by the Maude bindings, not read by Harold itself: colon-separated directories where Maude searches for `prelude.maude` (and for library files loaded with `in`/`load`). Only needed to override the prelude bundled with the `maude` wheel. | unset (the bundled prelude is used) |
 
 Invalid values (e.g. `HAROLD_MAUDE_WORKERS=0`) make the server fail fast at startup.
 
-Both timeouts cover the whole worker call (interpreter startup included) and are best
-effort: a call that exceeds its timeout fails, its worker is killed, and the worker pool
-is replaced, so allow more time for long evaluations.
+Both timeouts cover the whole worker call (admission, process startup, Maude
+initialization, the load and every step) and are best effort: a call that exceeds its
+timeout fails, its process is killed, and other concurrent calls are unaffected. Allow
+more time for long evaluations.
 
 If you use `MAUDE_LIB` to override the bundled prelude, that prelude must match the Maude version Harold uses (currently Maude 3.5.1, the version the `maude` dependency is built against); a mismatched prelude can make the interpreter fail to load it or behave inconsistently. See [`.agents/summary/maude-lib.md`](.agents/summary/maude-lib.md) for how Maude locates the prelude.
 

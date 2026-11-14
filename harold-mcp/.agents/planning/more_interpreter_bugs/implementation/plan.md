@@ -7,7 +7,7 @@
 - [x] Step 3 — Replace the pool executor with per-call processes
 - [x] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
 - [x] Step 5 — Diagnostics end-to-end and error parity
-- [ ] Step 6 — Documentation and final validation
+- [x] Step 6 — Documentation and final validation
 
 ## Working agreements
 
@@ -620,6 +620,49 @@ behavior; no behavior change.
 
 **Demo.** The full CI-equivalent gate is green, the strict docs build succeeds, and
 the tool description/README describe the new behavior.
+
+### Implementation notes (Step 6)
+
+Documentation and release notes only; no behavior change:
+
+- `maude_run` description (`server/tools/interpreter.py`): removed the stale
+  “replaces the worker pool” sentence; it now states the per-call isolation, the
+  whole-call timeout covering admission/spawn/init/load/steps, and the error
+  categories. The new unit test
+  `test_maude_run_description_does_not_mention_a_worker_pool` pins the wording.
+- `README.md`: the `HAROLD_*` table gained `HAROLD_ERROR_DETAIL_MAX_CHARS` and
+  `HAROLD_IPC_MAX_RESPONSE_BYTES`; the worker/admission wording matches the per-call
+  architecture and the tool list/descriptions were checked against the current
+  signatures.
+- `docs/modules.md`: added `harold_mcp.errors`, `harold_mcp.maude.runner`,
+  `harold_mcp.maude.transport` and `harold_mcp.maude.worker_errors` (the fourth
+  module hosts the error hierarchy introduced in Step 1, so it is documented too).
+- `CHANGELOG.md`: entries live in the existing `[0.0.5]` section — isolated
+  workers; rich bounded errors; the two new settings; Changed: per-call
+  architecture, remote exceptions, `MaudeInitError` hierarchy; Fixed: no collateral
+  failures, no orphaned workers.
+- Agent knowledge base refreshed in place: `AGENTS.md` (architecture, entry
+  points, gotchas 2–3 and 18–22, including the new item 22 on rich errors) and the
+  `.agents/summary/` pages (`architecture`, `components`, `interfaces`,
+  `data_models`, `workflows`, `dependencies`, `index`, `maude-lib`,
+  `codebase_info`, `review_notes`). The human-maintained Custom Instructions
+  section was preserved verbatim.
+
+Deviations:
+
+- **No new release revision.** The user explicitly asked to keep these changes in
+  the current `0.0.5.dev0` development cycle, so the plan's “current unreleased
+  section” guidance was applied to the existing `[0.0.5]` CHANGELOG entry and
+  `pyproject.toml` was not bumped; committing and choosing the next version are
+  left to the user.
+- **Knowledge-base refresh caveat:** `AGENTS.md` and `.agents/summary/` were
+  updated with targeted edits rather than a fresh full codebase-summary run.
+  Re-running the codebase-summary skill after committing is still advisable to
+  confirm nothing drifted.
+
+Validation (full gate): `make check` clean (lockfile, ruff, mypy, basedpyright,
+deptry); `make test` 493 passed in 55.57 s (388 unit + 105 integration, real
+interpreter); `make docs-test` built the strict MkDocs site without warnings.
 
 ---
 

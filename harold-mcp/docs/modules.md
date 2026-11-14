@@ -2,6 +2,7 @@
 ::: harold_mcp.server.tags
 ::: harold_mcp.server.tools.diagnostics
 ::: harold_mcp.server.tools.interpreter
+::: harold_mcp.errors
 ::: harold_mcp.diagnostics.provider
 ::: harold_mcp.diagnostics.aggregate
 ::: harold_mcp.heuristic.provider
@@ -13,6 +14,9 @@
 ::: harold_mcp.maude.capture
 ::: harold_mcp.maude.executor
 ::: harold_mcp.maude.provider
+::: harold_mcp.maude.runner
 ::: harold_mcp.maude.session
+::: harold_mcp.maude.transport
 ::: harold_mcp.maude.worker
+::: harold_mcp.maude.worker_errors
 ::: harold_mcp.settings

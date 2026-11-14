@@ -55,10 +55,11 @@ runtime dependencies: they are stdlib-only (`dataclasses`, `typing`, `functools`
   `==3.14.*` in `uv.lock`): `maude==1.6.0` ships cp314-only wheels (no abi3), so a 3.15+
   interpreter would have no `maude` wheel and would fall back to a source build. Relax the cap
   when the bindings publish newer wheels. Lint/format target is `py314`.
-- `ProcessPoolExecutor` uses an explicit `spawn` context (threaded parent; `forkserver`
-  needs an AF_UNIX socket) and `max_tasks_per_child=1` (one task per process: hermetic
-  per-call interpreters); Python 3.14 features in use: `ProcessPoolExecutor.kill_workers()`,
-  `BrokenProcessPool` from `concurrent.futures.process`, PEP 758 `except A, B:` syntax.
+- The process runner uses an explicit `spawn` context (threaded parent; `forkserver` needs
+  an AF_UNIX socket) and `multiprocessing.connection.Pipe`/`Connection.send_bytes`/
+  `recv_bytes(maxlength=...)` for the one-shot exchange (hermetic per-call interpreters);
+  Python 3.14 features in use: `Process.kill()`/`join()`/`close()`, PEP 758
+  `except A, B:` syntax, and PEP 695 generics (`process.ProcessRunner.run[T]`).
 
 ## Related documents
 

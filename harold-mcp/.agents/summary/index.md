@@ -56,15 +56,17 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "How do I refresh the prelude sort list?" → `workflows.md` → Prelude snapshot maintenance; the CLI is documented in `DEVELOPER_GUIDE.md` and `interfaces.md`.
 - "Why is `sort Elt .` not reported?" → `review_notes.md` → remaining issue 8 (theory sorts excluded by design).
 - "What happened to `MaudeFileNotFoundError`?" → `data_models.md` → error hierarchies (`SourceFileNotFoundError` replaces it); changelog `[0.0.4]`.
-- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; worker `init_maude` runs per worker and, with `max_tasks_per_child=1`, per call; fail-fast init check in the lifespan); `components.md` → `harold_mcp.maude.worker`.
+- "When does Maude get initialized?" → `interfaces.md` → Import-time side effects (never at import; the child’s `init_maude` runs once per call before dispatch; fail-fast init check in the lifespan); `components.md` → `harold_mcp.maude.worker`.
 - "Why does every diagnostics or run call get a fresh interpreter?" → `architecture.md` → key decision 2; `workflows.md` → Hermetic calls; design record in `.agents/planning/no_new_module_quirk/` (the deferred `q .` residue bug).
+- "Where is the per-call process runner and the child protocol?" → `components.md` → `harold_mcp.maude.runner` / `harold_mcp.maude.transport`; `architecture.md` → key decision 2.
+- "How is a tool error text shaped, and why is it truncated?" → `components.md` → `harold_mcp.errors`; `interfaces.md` → `maude_run` errors; design in `.agents/planning/more_interpreter_bugs/`.
 - "How are warnings from a loaded dependency reported?" → `components.md` → `harold_mcp.maude.provider` (whole-file diagnostics naming the dependency); `workflows.md` → Hermetic calls; `data_models.md` → `WarningDict.file`.
 - "Where does the bundled Maude prelude come from, and is it used by `InterpreterDiagnosticProvider`?" → `maude-lib.md`.
 - "How do I diagnose a Maude program?" → `interfaces.md` → `maude_program_diagnostics`; `workflows.md` → Tool execution flow.
 - "How does the server survive a worker crash?" → `architecture.md` → crash/timeout recovery; `workflows.md` → Worker crash recovery.
 - "Can I use Python 3.12 syntax here?" → `codebase_info.md` → language floor is 3.14.
 - "Why `os._exit(0)` in `server.run()`?" → `architecture.md` → graceful SIGTERM; `review_notes.md` → remaining issue 3.
-- "How do I add a worker op?" → `components.md` → `harold_mcp.maude.worker`/`maude/session.py` + `MaudeExecutor._run_task` + a typed `MaudeExecutor` wrapper.
+- "How do I add a worker operation?" → `components.md` → `harold_mcp.maude.transport` (`_dispatch` + request validation) / `maude/worker.py` / `maude/session.py`, plus a typed `MaudeExecutor` method that calls `_run_operation`.
 - "How do I get the rewrite path of a search solution?" → `interfaces.md` → `maude_run` (`search.path` default `labels`); `data_models.md` → `MaudeSearchPath`; `workflows.md` → search-path reconstruction.
 - "Why was the last block of a loaded file missing from the captured output?" → `components.md` → `harold_mcp.maude.capture` (`_flush_stdio`); `architecture.md` → decision 14; `.agents/planning/Unexpected_failure_during_search/research/load-output-truncation.md` (bounded search leaves libmaude's buffer unflushed).
 - "Why does a failed `maude_run` call show an exception type and message?" → `workflows.md` → Failure semantics; `components.md` → `tools/interpreter.py` (`_exception_detail`; the traceback is logged server-side).

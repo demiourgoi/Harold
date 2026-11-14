@@ -17,19 +17,36 @@
 ### `harold_mcp.settings`
 
 - **Responsibility**: application configuration, read once from `HAROLD_*` env vars.
-- `Settings(BaseSettings)` — flat model: `maude_workers: int` (default via
+- `Settings(BaseSettings)` — flat model: `maude_workers` (default via
   `_default_maude_workers()` → `max(1, min(3, (os.cpu_count() or 0) // 2))` — half the
   logical CPUs, capped at 3; validated with `gt=0`), `diagnostics_timeout_secs` (default
   60; renamed from `maude_worker_timeout_secs`), `interpreter_timeout_secs` (default 60),
-  and the interpreter caps `interpreter_max_steps` (200), `interpreter_max_rewrite_bound`
+  the interpreter caps `interpreter_max_steps` (200), `interpreter_max_rewrite_bound`
   (1000), `interpreter_max_solutions` (200), `interpreter_max_term_length` (100000),
   `interpreter_max_result_length` (1000000), `interpreter_max_path_steps` (100) and
-  `interpreter_max_output_length` (1000000).
-  All are `gt=0`. Workers are transient (`max_tasks_per_child=1`), so `maude_workers`
+  `interpreter_max_output_length` (1000000), `error_detail_max_chars` (4000; capped
+  client error text) and `ipc_max_response_bytes` (2 GiB; worker-response read cap).
+  All are `gt=0`. Workers are transient (one fresh process per call), so `maude_workers`
   caps concurrent per-call interpreters (≈100 MB each), not warm workers. Invalid values
   fail at import.
 - `settings` — module-level singleton; `get_settings() -> Settings` returns it (FastMCP
   dependency factory). Env vars are documented in `README.md`.
+
+### `harold_mcp.errors`
+
+- **Responsibility**: the stdlib-only, shared error formatter. It never reads env vars,
+  files or unrelated process state.
+- `format_error_report(exc, *, context, max_chars, category=None, message=None)` — renders
+  `<category>: <message>` (or `<Type>: <message>`), a merged `context:` line (the
+  exception's own context first, caller keys winning, `None` values skipped), a
+  cycle-guarded `cause: Type: message <- ...` chain (plus the remote cause for a remote
+  error), the originating traceback (the first remote one in the chain, else the local
+  one) and, when the cap shortens the text, `TRUNCATION_MARKER`. Truncation order:
+  traceback, then the cause line, then the first line's message (its prefix kept).
+  `max_chars <= 0` is unbounded (server-log rendering).
+- `format_context`, `format_exception_text` — helpers reused by the tools and the
+  diagnostics aggregation; `DEFAULT_ERROR_DETAIL_MAX_CHARS` (4000) is shared with
+  `Settings.error_detail_max_chars`.
 
 ### `harold_mcp.server` (package)
 
@@ -246,29 +263,45 @@ replacing it (findings are heuristics and may be false positives).
   - `parse_warnings(text)` parses `Warning:` lines (quoted or `<standard input>` file,
     line, optional `(fmod X)` context, both colon spellings) into `WarningDict`s;
     `strip_ansi` and `truncate_output` (appends `TRUNCATION_MARKER`) complete the helper.
+- **`worker_errors.py`** — the stdlib-only error vocabulary: `MaudeError(RuntimeError)`
+  base; `MaudeWorkerError(reason, *, context, remote_traceback)` with the `category`
+  class attribute and `MaudeInitError` / `MaudeWorkerCrashedError` /
+  `MaudeWorkerTimeoutError` / `MaudeWorkerSpawnError` / `MaudeWorkerRemoteError` /
+  `MaudeWorkerCancelledError` / `MaudeWorkerProtocolError` subclasses. The hierarchy is
+  re-exported by `harold_mcp.maude`; the old `MaudeFileNotFoundError` was removed.
 - **`executor.py`** — the client-side access layer:
-  - Error hierarchy: `MaudeError(RuntimeError)` base; `MaudeInitError` (worker init
-    failure, surfaced at startup); `MaudeWorkerError(reason)` with
-    `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError` subclasses. The old
-    `MaudeFileNotFoundError` was removed — the diagnostics tool's input error is
-    `harold_mcp.diagnostics.SourceFileNotFoundError`.
-  - `MaudeExecutor(Logging)` — wraps a `ProcessPoolExecutor` (spawn,
-    `initializer=worker.init_maude`, `max_tasks_per_child=1` — each task runs in a fresh
-    process, so no interpreter state survives across calls): `start()` (fail-fast init
-    check: one ping per worker, `MaudeInitError` on failure — the pings are recycled,
-    not kept warm), `shutdown()` (idempotent), `submit()` (raises
-    `MaudeWorkerCrashedError` on a broken pool, replaces it), `diagnostics(path)` (thin
-    wrapper over `_run_task`), `run_session(request, timeout)` (thin wrapper over
-    `_run_task` for `session.run_session`), and the generic `_run_task(fn, *args) -> T`
-    runner (submit + await + crash/timeout mapping). `_reset_executor(replace=True,
-    failed=None)` is a pure command (CQS) that swaps the pool under `_executor_lock` (an
-    RLock) and kills the old pool with `kill_workers()` outside the lock; the `failed`
-    identity check makes concurrent failure reports replace exactly once.
+  - `MaudeExecutor(Logging)` — owns a `ProcessRunner` factory, a
+    `BoundedSemaphore(maude_workers)` and a closed event. `_run_operation` computes a
+    deadline, acquires a slot with the remaining budget (no slot → a timeout naming the
+    interpreter slot), checks the closed flag, creates the runner lazily, calls
+    `runner.run`, and releases in `finally`; a crash observed while closed (and a stray
+    `CancelledError`) becomes `MaudeWorkerCancelledError`. `start(timeout)` builds a
+    fresh runner, clears the closed flag, runs `maude_workers` `ping`s in parallel under
+    one deadline and raises `MaudeInitError` (chaining the first failure) after killing
+    and discarding the runner; `shutdown()` sets the flag and calls `runner.kill_all()`
+    (idempotent). `diagnostics(path)` and `run_session(request, timeout)` are the typed
+    operations. There is no `submit()` and no pool.
   - `get_maude_executor(settings: Settings = Depends(get_settings)) -> MaudeExecutor` —
     process-wide singleton, created lazily under a lock (nested FastMCP dependency).
-- **`session.py`** — the worker-side bounded interpreter session engine (imported by the
-  server process only for the function reference pickled to the pool; `maude` is lazily
-  imported inside `run_session`):
+- **`runner.py`** — the parent-side process runner: the `ProcessRunner` protocol and
+  `PipeProcessRunner(settings, *, target=serve_one, context=None)`. One `spawn` process
+  per call with a one-shot `multiprocessing.Pipe`; registration and the closed check
+  share a lock, `send_bytes` failures / EOF / mid-message errors map to crash, the
+  deadline to timeout, `recv_bytes(maxlength=ipc_max_response_bytes)` oversize to a
+  protocol error naming the setting, and envelopes map by `error.category` to the typed
+  exceptions. `_reap` closes the pipe and kills/joins the child under a termination lock;
+  `kill_all()` sets the closed flag and reaps every active child; `active_count()` exists
+  for tests.
+- **`transport.py`** — the child entry point `serve_one(conn)`: redirects fds 0/1/2 to
+  `/dev/null` (exit 1 without output on failure), reads and validates one JSON request
+  (`ping`/`diagnostics`/`session`), always calls `worker.init_maude()` first, dispatches
+  with lazy imports, and sends one ok/error envelope. Error categories are `protocol`,
+  `init` and `remote`; `_worker_context` carries the session phase annotation. No
+  protocol version field (the child is one-shot and from the same package).
+- **`session.py`** — the worker-side bounded interpreter session engine (the server
+  imports its request/result types and the transport calls it in the child; `maude` is
+  lazily imported inside `run_session`). Unexpected exceptions carry a `worker_context`
+  annotation (load phase, or step index/command) for the error envelope.
   - Protocol TypedDicts: `StepRequest` (every command field present, `None` when not
     applicable, including `path_mode`), `SessionRequest` (path, module, steps, caps
     including `max_path_steps`), `BindingDict`, `PathRuleDict`, `PathTransitionDict`,
@@ -304,22 +337,17 @@ replacing it (findings are heuristics and may be false positives).
   file (a `load`/`in` dependency) become **whole-file** diagnostics (`line=None`) whose
   message names the dependency and suggests running `maude_program_diagnostics` on it
   (`_dependency_message`; a missing final punctuation is completed). A `MaudeWorkerError`
-  (crash/timeout) becomes a `DiagnosticProviderError` with the original error as
-  `__cause__`.
-- **`worker.py`** — the interpreter side, pickled/spawn-imported by the worker process;
-  imports `maude` **lazily inside functions** so the server process never touches the
-  bindings (the absolute `import maude` is the third-party package, not this one):
+  (any category: timeout, crash, spawn, init, remote, cancelled or protocol) becomes a
+  `DiagnosticProviderError` with the original error as `__cause__`, the resolved path and
+  `phase="load"` in the context, and the worker error's own context merged in.
+- **`worker.py`** — the interpreter side, imported by the spawned child (safe to import in
+  the server: `maude` is imported **lazily inside functions**; the absolute `import maude`
+  is the third-party package, not this one):
   - `init_maude()` — idempotent; `maude.init(loadPrelude=True, advise=False)` then
     disables Maude IO (`setAllowDir/File/Processes(False)`); raises `WorkerInitError`.
-  - `ping()` — no-op init check (one task per process: the pinged worker is recycled).
-    `sleep(seconds) -> int` and `rendezvous_pid(directory, timeout)` — test/timeout
-    support (the rendezvous helper makes each task complete only once a peer task is
-    running concurrently).
   - `load_diagnostics(path) -> LoadDiagnosticsResult` — `capture_streams` around
     `maude.load`; parses warnings from stderr only (stdout is discarded, keeping embedded
-    `red` output away from the MCP transport). `WarningDict` now lives in
-    `maude/capture.py`.
-  - `_crash()` — test-only `os._exit(1)` (SIGSEGV analogue).
+    `red` output away from the MCP transport). `WarningDict` lives in `maude/capture.py`.
 
 ### `harold_mcp.resources`
 
@@ -337,7 +365,13 @@ replacing it (findings are heuristics and may be false positives).
 - `tests/unit/` (hermetic, mocked):
   - `test_settings.py` — the default formula (`max(1, min(3, cpu_count // 2))`,
     monkeypatched `cpu_count` matrix incl. `None`), env overrides (including
-    `interpreter_max_path_steps`), case-insensitivity, invalid values, singleton.
+    `interpreter_max_path_steps`, `error_detail_max_chars` and `ipc_max_response_bytes`),
+    case-insensitivity, invalid values, singleton.
+  - `test_errors.py` — the shared formatter: first-line category/type shapes, context
+    merge precedence, the cycle-guarded cause chain (including the remote cause), stored
+    exceptions (no `NoneType: None`), traceback selection, truncation order/marker, the
+    huge-first-line last resort, `max_chars <= 0`, no secrets, and the worker-error
+    hierarchy/categories.
   - `test_tags.py` — the shared vocabulary: `harold_tags` always adds the domain tags,
     and the tag strings are pinned (they are part of the client-visible interface).
   - `test_maude_worker.py` — `init_maude` sequence (success/failure, IO lockdown,
@@ -348,9 +382,21 @@ replacing it (findings are heuristics and may be false positives).
     marker, the C-buffer flush (buffered output captured, not leaked to the restored
     stdout, and failing Python/libc flushes suppressed), and the warning parser
     (quoted/`<standard input>`/`(fmod X) :` formats, order, unmatched/advisory lines).
-  - `test_maude_executor.py` — fake executors/futures: `start()` ping/init check
-    (success/fail), broken submit, crash/timeout mapping + kill, exception propagation,
-    exactly-once concurrent replacement, singleton.
+  - `test_maude_executor.py` — a fake `ProcessRunner`: delegation/context, lazy runner
+    creation, admission timeout and serialization, the post-admission budget check, every
+    runner error category, stray `CancelledError`, crash-while-closed → cancelled,
+    shutdown cancellation, `start()` pings/failure/discard/restart, shutdown idempotence,
+    singleton.
+  - `test_maude_runner.py` — the process runner with a fake context: success and request
+    envelope, response cap, EOF/mid-message/other `OSError` → crash, deadline → timeout,
+    oversized response naming the setting, send/spawn/pipe failures, the shutdown
+    registration race, the terminate-lock pipe-close serialization, envelope mapping
+    (init/remote/protocol/unknown/invalid), and active-map cleanup on every error path.
+  - `test_maude_transport.py` — the child transport: ok/error envelopes (no version
+    field), protocol validation (non-object JSON, operation/payload/path), dispatch
+    (init first, unknown operation), remote/init categorization, phase-context forwarding,
+    first-recv EOF/OSError as a closed peer, redirect-failure exit without output, and
+    the stored-exception traceback helper.
   - `test_maude_provider.py` — `InterpreterDiagnosticProvider`: warning/error mapping,
     `source`/`code` stamping, own-file and `<standard input>` attribution, foreign-file
     warnings becoming whole-file dependency diagnostics, and worker errors becoming
@@ -361,27 +407,30 @@ replacing it (findings are heuristics and may be false positives).
     non-regular/unreadable rejection, lossy decoding, newline normalization).
   - `test_diagnostics_aggregate.py` — merge provenance and ordering (file order, provider
     tie-break, whole-file last), every provider receives the source, no-diagnostics
-    success, one failing provider → `DiagnosticCollectionError` without partial results,
-    remaining providers still attempted, unexpected bugs reported with their type.
-  - `test_interpreter_tool.py` — `maude_run` validation and adaptation: path pre-check,
-    empty/too-many steps, term/pattern/subject length caps, rewrite-bound cap, first-step
-    threading, omitted terms later, `bound`/`gas`/`depth`/`search_type`/`path` forwarding,
-    timeout override, request caps (including `max_path_steps`), every outcome shape
-    (rewriting, match, search with/without a path, parse-error, too-large with a named
-    limit), whole-call errors (load failure, missing module with defined-module list,
-    theory module, worker/unexpected exception chaining; the unexpected case asserts the
-    type-and-message text, the bare-type message when the exception has no text, and the
-    recording logger's path/module arguments).
+    success, one failing provider → `DiagnosticCollectionError` without partial results
+    (the successful provider's findings never leak into the error), remaining providers
+    still attempted with both cause chains present, unexpected bugs reported with their
+    type, and the capped/uncapped report rendering.
+  - `test_interpreter_tool.py` — `maude_run` validation and adaptation: description (no
+    worker-pool wording), path pre-check, empty/too-many steps, term/pattern/subject
+    length caps, rewrite-bound cap, first-step threading, omitted terms later,
+    `bound`/`gas`/`depth`/`search_type`/`path` forwarding, timeout override, request caps
+    (including `max_path_steps`), every outcome shape (rewriting, match, search
+    with/without a path, parse-error, too-large with a named limit), whole-call errors
+    (load failure, missing module with defined-module list, theory module, all seven
+    worker categories with rich capped text, input-error context lines, worker/unexpected
+    exception chaining, the unexpected case asserting the full log vs capped client
+    text).
   - `test_maude_session.py` — the session engine's path reconstruction with fake search
     iterators: path assembly in labels/full modes, state-number capture while the
     iterator is positioned, zero-transition paths, unlabeled rules, per-solution
-    laziness, path and element cap overflow, and the named `too-large` reasons; also
-    invalid `path_mode` contract handling.
+    laziness, path and element cap overflow, and the named `too-large` reasons; invalid
+    `path_mode` contract handling; and the load/step `worker_context` phase annotations.
   - `test_diagnostics.py` — the tool with the real provider registry wired to a fake
     executor (`_providers` helper): warning/error mapping and the
     synthesized whole-file error, `info`-only success, summary counts, whole-file ranges,
     adapter mapping of columns and fixes, pre-check before any provider,
-    `DiagnosticCollectionError` propagation, and
+    `DiagnosticCollectionError` propagation, the capped client text vs the full log, and
     interpreter-before-heuristic ordering on a line.
   - `test_heuristic_lexical.py` — masking per region (comments, string literals incl.
     `***`/`--` inside them, quoted identifiers, labels), length/column fidelity,
@@ -403,13 +452,20 @@ replacing it (findings are heuristics and may be false positives).
     junk-extraction refusal, missing prelude.
 - `tests/integration/` (real interpreter; distinct basenames to avoid pytest module-name
   collisions):
-  - `test_maude_worker_integration.py` — raw `load_diagnostics` shapes on the interpreter
-    fixtures (including the `file` values, `<standard input>` attribution) + advisory
-    suppression on redefinition.
-  - `test_maude_executor_integration.py` — real concurrent execution across workers, via
-    the `rendezvous_pid` marker helper (completion proves two processes ran concurrently
-    regardless of scheduling jitter). Fixture round-trips and crash recovery live at the
-    worker level and the tool level respectively (file docstring says so).
+  - `test_maude_worker_integration.py` — `load_diagnostics` shapes through
+    `MaudeExecutor.diagnostics` on the interpreter fixtures (including the `file` values,
+    `<standard input>` attribution), the fresh-interpreter guarantee, and the parent-stdout
+    leak regression with a per-call child.
+  - `test_maude_executor_integration.py` — real `diagnostics` and `run_session` through
+    the executor, plus two concurrent calls proven to use distinct processes via an
+    injected rendezvous target (no sleeps as synchronization).
+  - `test_maude_transport_integration.py` — real `spawn` processes: ping +
+    `load_diagnostics`, crash isolation, timeout + follow-up, a 100 kB request, large
+    responses and the lowered `HAROLD_IPC_MAX_RESPONSE_BYTES` protocol error.
+  - `test_process_isolation_integration.py` — the B1/B2/B3 historical cascade (occupiers
+    hold the slots, the queued trigger times out on admission, healthy searches complete,
+    no `CancelledError`), a running timeout beside a healthy peer + follow-up, and
+    shutdown with an in-flight call (cancellation + pid orphan check).
   - `test_maude_session_integration.py` — the worker session engine against the real
     interpreter: reduce and current-term threading, parse errors as outcomes, missing
     module reporting, load warnings and embedded `red` output, a bounded search ending
@@ -426,7 +482,7 @@ replacing it (findings are heuristics and may be false positives).
     rewrite threading, failing middle step stopping the run, match/search threading, and
     search paths (`labels`/`full`/`none`, normal-form paths, and cap overflow as a
     `too-large` step).
-  - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-pool drive.
+  - `test_lifespan.py` — lifespan start/teardown, fail-fast, real-executor drive.
   - `test_diagnostics_integration.py` — the acceptance suite, per source: interpreter
     fixtures; the relative-path regression test; the isolation regressions (`quit_command`,
     `q_with_trailing_text`, and a `q .` inside a loaded dependency) each followed by a
@@ -438,13 +494,13 @@ replacing it (findings are heuristics and may be false positives).
     `quoted_id_when_dash`, `declarations_when_dash`, `capitalized_identifiers_ok`);
     binary-file regression; the parallel race test
     (`test_parallel_diagnostics_do_not_share_interpreter_state`, 4 workers, every
-    interpreter-clean fixture swept); crash recovery (the tool raises
-    `DiagnosticCollectionError` naming `interpreter` and recovers on the next call); and
-    the MCP smoke test (real stdio server), which asserts the client-visible annotation
-    profile, the new schema (e.g. `redeclare_prelude` returns `success=true` with one
-    `heuristic-linter`/`prelude-sort-redeclared`/`info` diagnostic) and the hermetic +
-    dependency sentences of the served description. Tags are intentionally not asserted on
-    the wire: mcp SDK 1.29 does not serialize them.
+    interpreter-clean fixture swept); the crash and timeout cases producing a rich
+    provider section (path/phase/pid context and the chained worker cause) with a healthy
+    executor still working; and the MCP smoke test (real stdio server), which asserts the
+    client-visible annotation profile, the new schema (e.g. `redeclare_prelude` returns
+    `success=true` with one `heuristic-linter`/`prelude-sort-redeclared`/`info`
+    diagnostic) and the hermetic + dependency sentences of the served description. Tags
+    are intentionally not asserted on the wire: mcp SDK 1.29 does not serialize them.
 - `tests/integration/fixtures/`:
   - interpreter baseline: `hello.maude`, `hello2.maude`, `broken-recoverable.maude`
     (1 warning, loads), `broken-non-recoverable.maude` (12 warnings, loads — Maude
@@ -464,7 +520,8 @@ replacing it (findings are heuristics and may be false positives).
     `redeclare_prelude.maude`;
   - linter negatives: `string_with_specials.maude`, `quoted_id_when_dash.maude`,
     `declarations_when_dash.maude`, `capitalized_identifiers_ok.maude`,
-    `elt_sort_declaration.maude`.
+    `elt_sort_declaration.maude`;
+  - theory handling: `theories.maude` (a theory plus a module).
 
 ## Planning docs (`.agents/planning/`)
 
@@ -505,10 +562,13 @@ replacing it (findings are heuristics and may be false positives).
 - `no_new_module_quirk/` — complete PDD cycle for the deferred `q .` parser-residue bug
   (implemented): `rough-idea.md`, `idea-honing.md`, `research/` (quirk inventory, race
   reproduction, dependencies, misattribution, isolation cost), `design/detailed-design.md`
-  (option A: `max_tasks_per_child=1`), `implementation/plan.md` (8 steps, checklist
+  (option A: per-call isolated interpreters), `implementation/plan.md` (8 steps, checklist
   ticked, deviations recorded), `summary.md`, and the `maude-bindings-issue.md` bug
   report (filed upstream) with its standalone `repro_minimal.py` + `repro/` `.maude`
   inputs.
+- `more_interpreter_bugs/` — complete PDD cycle for per-call isolated workers: the
+  reproduction record, the design and its reviews, and the implementation plan with
+  per-step implementation notes and review records.
 - `sigsegv-under-load/` — SIGSEGV history that motivated the worker architecture:
   `issue.md` (the `maude` Python bindings) and `scala-issue.md` (root-cause analysis of
   SIGSEGV and throughput degradation in the Scala/Java Maude bindings — background

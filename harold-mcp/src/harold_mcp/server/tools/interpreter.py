@@ -638,7 +638,10 @@ def maude_run(
     limit. The result keeps the outcomes of every executed step and sets `completed` to
     false; the remaining steps are not run. A missing path, a load that fails outright,
     a module that is not defined after the load, a theory module, or a worker
-    crash/timeout fails the whole call.
+    crash/timeout fails the whole call with a category (`timeout`, `crash`,
+    `spawn-failure`, `init-failure`, `remote-exception`, `cancelled` or
+    `protocol-error`, or the specific input-error message), the call context, the cause
+    chain and a bounded traceback; the full detail is logged server-side.
 
     Output and limits
     -----------------
@@ -654,9 +657,11 @@ def maude_run(
     (default 100), and every returned string by the configured maximum result length; a
     path or result exceeding its cap makes the step `too-large` with the limit and a
     message naming the setting to raise. The whole call is bounded by timeout_secs
-    (default: the server's interpreter timeout). The timeout covers interpreter startup
-    and is best effort: a non-terminating reduction fails the call and replaces the
-    worker pool, so allow more time for long evaluations.
+    (default: the server's interpreter timeout). The timeout covers admission (waiting
+    for an interpreter slot), process startup, Maude initialization, the load and every
+    step. A non-terminating evaluation fails the call and only that call's process is
+    killed, so other concurrent calls are unaffected; allow more time for long
+    evaluations.
 
     Args:
         path: Absolute path to the Maude source file to load (typically `.maude`). Pass

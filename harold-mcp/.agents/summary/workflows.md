@@ -23,10 +23,11 @@
 - Development: `make run` (or `uv run harold-mcp`) — serves MCP over stdio.
 - Entry points: `uv run harold-mcp --help` lists the cyclopts CLI (default command and
   `serve`).
-- Startup: lifespan fail-fast init check — one `init_maude` ping per worker (the pinged
-  processes are recycled immediately; there is no warm pool).
-- Shutdown: SIGTERM/SIGINT → graceful pool teardown → exit 0 (a hard `kill -9` skips the
-  lifespan; workers then exit on their own via the queue pipe).
+- Startup: lifespan fail-fast init check — one `init_maude` ping process per configured
+  interpreter under one shared deadline (each pinged process exits immediately; no warm
+  pool).
+- Shutdown: SIGTERM/SIGINT → set the executor closed, kill/reap every active child →
+  exit 0 (a hard `kill -9` skips the lifespan).
 - Connect an MCP-compatible client (Zed and opencode are the configurations we test; other
   MCP clients work too) to the `harold-mcp` command; configuration examples and the
   `HAROLD_*` env-var table live in `README.md`.
@@ -55,7 +56,7 @@ flowchart TD
     O --> P[wire mapping: success, summary, diagnostics, fixes]
     P --> Q[structuredContent plus JSON text]
     F --> R[SIGTERM]
-    R --> S[lifespan finally kills pool]
+    R --> S[lifespan finally shuts the runner down]
     S --> T[os._exit 0]
 ```
 
@@ -90,21 +91,22 @@ interpreter).
 
 - Diagnostics: a missing or unreadable input fails **before** any provider runs
   (`SourceFileNotFoundError`, raised by the tool's pre-check/read). Any provider failure
-  fails the whole call with `DiagnosticCollectionError`: the message names every failing
-  provider and its reason, the first failure is chained (`__cause__`), and the successful
-  providers' findings are discarded (MCP cannot express "error + content", so there are
-  no partial results). A worker crash or timeout appears as the interpreter provider's
-  chained cause.
+  fails the whole call with `DiagnosticCollectionError`: one formatter section per failing
+  provider (category, context, cause chain, real traceback), the first failure chained
+  (`__cause__`), and the successful providers' findings discarded (MCP cannot express
+  "error + content", so there are no partial results). A worker failure appears as the
+  interpreter provider's chained cause. The tool logs the full report and returns the
+  text capped by `HAROLD_ERROR_DETAIL_MAX_CHARS`.
 - `maude_run`: per-step failures are **data**, not errors. A `parse-error` or `too-large`
   outcome is returned with the outcomes of the steps that ran, `completed` is false, and
   later steps are skipped. A `too-large` outcome carries the exceeded `limit` and a
   `message` naming the setting (`interpreter_max_result_length` or
   `interpreter_max_path_steps`). Whole-call conditions raise `MaudeRunError`: missing path,
   load failure, module not defined (the message lists the modules the load defined),
-  theory module, or worker crash/timeout (chained). An unexpected non-`MaudeWorkerError`
-  contributes its type and message to the `MaudeRunError` text and is logged with a
-  traceback (including the resolved path and module) on the server side, so the next
-  non-deterministic failure is diagnosable even though clients see only the error text.
+  theory module, or any worker failure (chained). The message is the formatted report —
+  stable category line, call context (path, module, steps, timeout, worker pid/phase/step),
+  cause chain and a bounded traceback — the full report is logged, and input errors keep
+  their specific message plus the same context line.
 - A provider bug that is not a `DiagnosticProviderError` is reported with its exception
   type, so the message says what actually broke.
 
@@ -121,18 +123,18 @@ interpreter).
 
 ### Hermetic calls (per-call interpreter isolation)
 
-- The pool recycles each worker after a single task (`max_tasks_per_child=1`), so every
-  `maude_program_diagnostics` **and** `maude_run` call loads its file into a **fresh
-  interpreter process**: loaded modules and parser state never carry over between calls.
-  This fixed the deferred `q .` parser-residue contamination (a file with a top-level
+- Every call gets its own **fresh `spawn` child process** (one-shot JSON request/response
+  over a Pipe), so every `maude_program_diagnostics` **and** `maude_run` call loads its
+  file into a fresh interpreter: loaded modules and parser state never carry over between
+  calls. This fixed the deferred `q .` parser-residue contamination (a file with a top-level
   `q .`/`quit .` used to leave the parser half-parsed and contaminate the *next* call; see
   `.agents/planning/no_new_module_quirk/`).
 - Consequences: there is no session state ("last load wins" and cross-call current terms
   are gone); each call pays spawn + prelude init (≈1 s); `HAROLD_MAUDE_WORKERS` bounds
-  concurrency (~100 MB per running interpreter), not standing workers.
-  `MaudeExecutor.start()` pings are a fail-fast initialization check, not a warm-up. To
-  carry state across `maude_run` calls, re-submit a saved result term or write a wrapper
-  module.
+  concurrency (~100 MB per running interpreter) and waiting for a slot counts against the
+  call's whole-call timeout. `MaudeExecutor.start()` pings are a fail-fast initialization
+  check, not a warm-up. To carry state across `maude_run` calls, re-submit a saved result
+  term or write a wrapper module.
 - Search state numbers are per search and die with the interpreter, so Harold never
   exposes them or offers a separate `show path` step; each solution carries its path,
   reconstructed during the same search call (see
@@ -166,16 +168,21 @@ interpreter).
 
 ```mermaid
 flowchart TD
-    A[worker dies mid-task or times out] --> B[BrokenProcessPool or TimeoutError]
-    B --> C[MaudeWorkerError<br>pool replaced eagerly, no retry]
-    C --> D{which tool?}
-    D -->|diagnostics| E[provider wraps in DiagnosticProviderError<br>aggregator raises DiagnosticCollectionError]
-    D -->|maude_run| F[tool raises MaudeRunError with the cause chained]
-    E --> G[client retries tool call]
-    F --> G
-    G --> H[fresh worker serves the call]
-    I[submit on known-broken pool] --> J[replace pool, raise MaudeWorkerCrashedError]
-    J --> G
+    A[child dies or times out] --> B{runner mapping}
+    B -->|EOF / mid-message / send failure| C[MaudeWorkerCrashedError<br>only this call; no pool]
+    B -->|deadline| D[MaudeWorkerTimeoutError<br>child killed]
+    B -->|malformed/oversized response| E[MaudeWorkerProtocolError]
+    C --> F{executor closed?}
+    F -->|yes| G[MaudeWorkerCancelledError]
+    F -->|no| H{which tool?}
+    D --> H
+    E --> H
+    G --> I[client retries or surfaces cancellation]
+    H -->|diagnostics| J[provider wraps in DiagnosticProviderError<br>aggregator raises DiagnosticCollectionError]
+    H -->|maude_run| K[tool raises MaudeRunError with the cause chained]
+    J --> I
+    K --> I
+    I --> L[the next call gets a fresh child]
 ```
 
 ## Prelude snapshot maintenance

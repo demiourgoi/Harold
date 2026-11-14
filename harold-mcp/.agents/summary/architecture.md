@@ -11,22 +11,24 @@ provider seam, and a heuristic linter that runs in the server process:
   (`maude_program_diagnostics`, `maude_run`), the diagnostics provider seam and
   aggregation, the heuristic linter, the wire models, and the `MaudeExecutor` client
   wrapper. It **never imports the `maude` SWIG bindings**.
-- **Maude worker process** (spawned, single-threaded, **fresh per call**): owns the
+- **Maude child process** (spawned per call, single-threaded, **one-shot**): owns the
   interpreter, captures stdout/stderr, parses warnings, and runs bounded interpreter
-  sessions. Managed through a `ProcessPoolExecutor` (`spawn` context,
-  `initializer=init_maude`, `max_tasks_per_child=1`), so every call gets a fresh
-  interpreter.
+  sessions. The parent creates one `spawn` child per call through
+  `maude/runner.py` and talks to it over a one-shot JSON request/response on a
+  `multiprocessing` Pipe (`maude/transport.py`), so every call gets a fresh interpreter
+  and nothing survives across calls.
 
 The process split exists for two reasons plus one consequence (design rationale in
 `.agents/planning/maude-diagnostics-tool-v1/design/detailed-design.md` §1):
 (1) **stderr isolation/capture** — the `maude` package writes `Warning:` lines to fd 2 from
-C++, capturable only via OS-level redirection, which the worker scopes to its own process
+C++, capturable only via OS-level redirection, which the child scopes to its own process
 (shared by `load_diagnostics` and `run_session` through `maude/capture.py`);
-(2) **crash containment** — the bindings have a SIGSEGV history, so a worker death kills
-only the worker and the pool is replaced; and (3) **hermetic calls** — the one-task-per-
-process recycling (`max_tasks_per_child=1`, `.agents/planning/no_new_module_quirk/`) means
-parser residue (a top-level `q .` leaves executable commands pending) cannot leak from one
-diagnosed file into the next.
+(2) **crash containment** — the bindings have a SIGSEGV history, so a crash kills only
+that call's child and the parent keeps serving; and (3) **hermetic calls** — one fresh
+process per call (`.agents/planning/no_new_module_quirk/`) means parser residue (a
+top-level `q .` leaves executable commands pending) cannot leak from one diagnosed file
+into the next. The child also redirects fds 0/1/2 to `/dev/null` before importing Maude,
+so stray interpreter output cannot corrupt the MCP stdio transport.
 
 The heuristic linter (`.agents/planning/port-linter.py/`) deliberately did **not** need the
 worker: it is pure text processing, so it runs in the server process next to the tool, and
@@ -56,15 +58,17 @@ graph TB
     maudeprov --> diagpkg
     maudeprov --> maudepkg[maude/__init__.py<br>errors, MaudeExecutor, providers]
     ertool --> maudepkg
-    maudepkg --> executor[maude/executor.py<br>MaudeExecutor client]
-    executor --> worker[maude/worker.py<br>worker-side ops]
-    executor --> session[maude/session.py<br>bounded session engine]
+    maudepkg --> executor[maude/executor.py<br>MaudeExecutor client + admission]
+    executor --> runner[maude/runner.py<br>one process per call]
+    runner --> transport[maude/transport.py<br>child entry: one-shot JSON]
+    executor --> settings[settings.py<br>pydantic-settings]
+    runner --> settings
+    transport --> worker[maude/worker.py<br>child-side ops]
+    transport --> session[maude/session.py<br>bounded session engine]
     worker --> capture[maude/capture.py<br>fd 1/2 capture + flush + warning parser]
     session --> capture
-    executor --> settings[settings.py<br>pydantic-settings]
-    worker -->|only inside worker process| bindings[maude bindings<br>SWIG external package]
-    session -->|only inside worker process| bindings
-    executor -->|ProcessPoolExecutor spawn<br>max_tasks_per_child=1| worker
+    worker -->|only inside child| bindings[maude bindings<br>SWIG external package]
+    session -->|only inside child| bindings
     cli[heuristic/prelude_extract.py<br>harold-update-prelude-sorts CLI] --> heurpkg
     serversrv --> resources[resources.py<br>HAROLD_ICON]
     serversrv --> logging[logging.py<br>get_logger + Logging]
@@ -72,34 +76,36 @@ graph TB
 
 ## Key architectural decisions
 
-1. **Interpreter only lives in the worker.** The server process never imports `maude`
-   (R17): `worker.py` and `session.py` import it lazily inside functions, so importing
-   those modules in the server process is side-effect-free. `worker.init_maude` runs
-   `maude.init(loadPrelude=True, advise=False)` and then **disables Maude IO**
-   (`setAllowDir/File/Processes(False)`), so programs loaded by either tool cannot
-   read/write files or spawn processes. The worker inherits the server's stdout (the MCP
-   transport) and must never write to it; `capture_streams` redirects both fds around the
-   interpreter work.
-2. **`ProcessPoolExecutor`, spawn context, one task per process.** `max_workers` from
-   `HAROLD_MAUDE_WORKERS` (default: half the logical CPUs, capped at 3) bounds how many
-   fresh interpreters may run concurrently; `max_tasks_per_child=1` recycles each worker
-   after a single task, so every call runs on a fresh interpreter and nothing (loaded
-   modules, parser state) survives across calls. `spawn` (not `fork`/`forkserver`): the
-   server process is threaded, and `forkserver` needs an AF_UNIX socket. The executor
-   spawns workers on demand — a worker is only started when none is idle. The same pool
-   serves both tools (`diagnostics` and `run_session`).
-3. **Crash/timeout recovery.** `MaudeExecutor._run_task` maps result-time
-   `BrokenProcessPool`/`TimeoutError` to `MaudeWorkerCrashedError`/`MaudeWorkerTimeoutError`
-   and swaps the pool (`_reset_executor`, CQS command, identity-checked under an RLock);
-   the old pool is killed with `kill_workers()` (Python 3.14). A timed-out worker is
-   killed because a hung `maude.load` or reduction cannot be interrupted otherwise. The
-   failed call is never auto-retried — diagnostics is idempotent and sessions are
-   client-driven, so the MCP client retries.
+1. **Interpreter only lives in the child.** The server process never imports `maude`
+   (R17): `worker.py`, `session.py` and `transport.py` import it lazily inside functions,
+   so importing those modules in the server process is side-effect-free.
+   `worker.init_maude` runs `maude.init(loadPrelude=True, advise=False)` and then
+   **disables Maude IO** (`setAllowDir/File/Processes(False)`), so programs loaded by
+   either tool cannot read/write files or spawn processes. The child redirects fds 0/1/2
+   to `/dev/null` before importing Maude; `capture_streams` temporarily redirects fds 1/2
+   around the interpreter work.
+2. **One dedicated `spawn` process per call, admitted by a semaphore.** `MaudeExecutor`
+   owns a `PipeProcessRunner` and a `BoundedSemaphore(HAROLD_MAUDE_WORKERS)` (default:
+   half the logical CPUs, capped at 3). A call acquires a slot with its remaining
+   whole-call budget, then spawns one child for its one-shot exchange; the child exits
+   afterwards. `spawn` (not `fork`/`forkserver`): the server process is threaded, and
+   `forkserver` needs an AF_UNIX socket. There is no pool, no queue and no worker reuse,
+   so a crash or timeout affects only its own call.
+3. **Crash/timeout/cancellation mapping.** `PipeProcessRunner` maps EOF, mid-message
+   errors and send failures to `MaudeWorkerCrashedError`, the deadline to
+   `MaudeWorkerTimeoutError`, malformed/oversized responses to
+   `MaudeWorkerProtocolError`, and child error envelopes to `MaudeInitError` /
+   `MaudeWorkerRemoteError`. `MaudeExecutor._run_operation` maps a crash observed while
+   the executor is closed (and any stray `CancelledError`) to
+   `MaudeWorkerCancelledError`, and never auto-retries — diagnostics is idempotent and
+   sessions are client-driven, so the MCP client retries. The runner's `_reap` serializes
+   the pipe close and process teardown so `kill_all()` and a finishing call cannot race.
 4. **Fail-fast startup (no warm-up).** The FastMCP lifespan (`@lifespan`-decorated
-   `app_lifespan`) starts the pool and pings every worker at startup; a broken
-   `init_maude` surfaces as `MaudeInitError` and aborts startup. With one task per
-   process, the pinged processes are recycled immediately: this is a fail-fast
-   initialization check, not a warm-up. Teardown always runs.
+   `app_lifespan`) starts the runner and runs `maude_workers` `ping` processes under one
+   shared deadline; a broken `init_maude` surfaces as `MaudeInitError` and aborts
+   startup. The pinged processes exit immediately: this is a fail-fast initialization
+   check, not a warm-up. Shutdown sets the closed flag, kills/reaps every active child and
+   is idempotent.
 5. **Graceful SIGTERM.** FastMCP's `mcp.run()` installs no signal handling, so `run()`
    registers a SIGTERM handler that raises `KeyboardInterrupt`; the asyncio runner cancels
    the server task (running the lifespan `finally`), and `run()` then calls `os._exit(0)`
@@ -115,7 +121,9 @@ graph TB
    (default 60), and the interpreter caps `interpreter_max_steps` (200),
    `interpreter_max_rewrite_bound` (1000), `interpreter_max_solutions` (200),
    `interpreter_max_term_length` (100000), `interpreter_max_result_length` (1000000),
-   `interpreter_max_path_steps` (100) and `interpreter_max_output_length` (1000000).
+   `interpreter_max_path_steps` (100) and `interpreter_max_output_length` (1000000),
+   plus `error_detail_max_chars` (4000; client error-text cap) and
+   `ipc_max_response_bytes` (2 GiB; worker-response read cap).
    `get_maude_executor(settings=Depends(get_settings))` is a lazy, lock-guarded
    singleton — FastMCP nested dependency injection; the diagnostics tool module's
    `get_diagnostic_providers` nests one level deeper (providers → executor → settings),
@@ -161,10 +169,13 @@ graph TB
     input error (`SourceFileNotFoundError`, raised by `SourceFile.from_path`) and provider
     failures (`DiagnosticProviderError`, `DiagnosticCollectionError`) belong to the
     diagnostics layer (`DiagnosticsError` base), independent of `MaudeError`. At the
-    interpreter provider boundary a `MaudeWorkerError` is wrapped with `raise ... from`, so
-    the Maude cause survives for logs while the MCP surface reports a diagnostics failure.
-    The old `MaudeFileNotFoundError` no longer exists. `maude_run` has its own whole-call
-    error (`MaudeRunError`) and also chains any `MaudeWorkerError` cause.
+    interpreter provider boundary a `MaudeWorkerError` is wrapped with `raise ... from`,
+    preserving its cause and path/phase context, so the Maude cause survives for logs
+    while the MCP surface reports a diagnostics failure. `maude_run` has its own
+    whole-call error (`MaudeRunError`) and also chains any `MaudeWorkerError` cause. Both
+    tools render failures with the shared `harold_mcp.errors.format_error_report`
+    (category, context, cause chain, bounded traceback); the full report is logged and
+    the client text is capped by `HAROLD_ERROR_DETAIL_MAX_CHARS`.
 13. **Bounded interpreter sessions (`maude_run`).** One tool call loads one file into a
     fresh worker, selects one explicit module, and runs an ordered list of
     `reduce`/`rewrite`/`frewrite`/`erewrite`/`match`/`search` steps. The worker engine
@@ -224,11 +235,11 @@ graph TB
     serverpkg --> tools[tools/<br>__init__.py, diagnostics.py,<br>interpreter.py]
     pkg --> diagpkg[diagnostics/<br>__init__.py, provider.py, aggregate.py]
     pkg --> heurpkg[heuristic/<br>__init__.py, provider.py, rules.py,<br>lexical.py, declarations.py,<br>prelude_sorts.py, prelude_extract.py]
-    pkg --> maudepkg[maude/<br>__init__.py, executor.py,<br>provider.py, worker.py,<br>session.py, capture.py]
+    pkg --> maudepkg[maude/<br>__init__.py, executor.py, runner.py, transport.py,<br>provider.py, worker.py, session.py, capture.py, worker_errors.py]
     pkg --> assets[assets/brand/<br>Harold_logo.png]
-    tests[tests/] --> unit[unit/<br>mocked] --> u[settings, tags, maude capture/worker/executor/provider,<br>interpreter tool, diagnostics: seam/aggregate/tool,<br>heuristic: lexical/declarations/rules/provider/prelude,<br>prelude extract CLI]
+    tests[tests/] --> unit[unit/<br>mocked] --> u[settings, tags, errors, maude capture/worker/executor/runner/transport/provider,<br>interpreter tool, diagnostics: seam/aggregate/tool,<br>heuristic: lexical/declarations/rules/provider/prelude,<br>prelude extract CLI]
     tests --> integration[integration/<br>real Maude + real server]
-    integration --> i[maude worker/executor/session,<br>maude_run, lifespan, diagnostics integration]
+    integration --> i[maude worker/executor/session/transport,<br>process isolation, maude_run, lifespan, diagnostics integration]
     integration --> fixtures[fixtures/<br>interpreter + linter + session,<br>isolation/q, dependency and run fixtures]
     docs[docs/] --> dmodules[modules.md]
     agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>Unexpected_failure_during_search (implemented fixes),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
@@ -257,5 +268,8 @@ graph TB
 - `.agents/planning/sigsegv-under-load/issue.md` — the SIGSEGV history that motivates the
   worker process
 - `.agents/planning/no_new_module_quirk/design/detailed-design.md` — the per-call
-  interpreter isolation design (`max_tasks_per_child=1`) that fixes the deferred `q .`
-  parser-residue bug, and the dependency-attribution semantics
+  interpreter isolation design that fixes the deferred `q .` parser-residue bug, and the
+  dependency-attribution semantics
+- `.agents/planning/more_interpreter_bugs/` — the per-call isolated workers, one-shot
+  transport, semaphore admission, shutdown cancellation and rich bounded error reports
+  (design, reviews, implementation plan and step notes)

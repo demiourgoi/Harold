@@ -34,10 +34,11 @@
       ordered by file position, with interpreter findings first on a line and whole-file
       problems last.
     - Errors: missing/unreadable input raises `SourceFileNotFoundError`; any provider
-      failure raises `DiagnosticCollectionError` (names every failing provider; a worker
-      crash/timeout is chained from the interpreter provider) — no partial results are
-      returned. Both surface to the client as tool errors (`isError`); the MCP client
-      retries, the pool is replaced.
+      failure raises `DiagnosticCollectionError` (names every failing provider with its
+      own formatter section, context and cause chain; a worker error is chained from the
+      interpreter provider) — no partial results are returned. Both surface to the client
+      as tool errors (`isError`); a crash or timeout affects only that call, so the MCP
+      client retries the tool call.
     - Annotated with the full read-only profile — `readOnlyHint=True`,
       `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False` (the spec
       defaults `destructiveHint` to true, so it must be negated explicitly) — and tagged
@@ -83,16 +84,20 @@
     - Load warnings do not stop evaluation (use `maude_program_diagnostics` for a full
       diagnosis). Whole-call failures raise `MaudeRunError`: missing/unreadable path, load
       failure, module not defined (the message lists the modules the load defined), a
-      theory module, or a worker crash/timeout (the `MaudeWorkerError` is chained). An
-      unexpected non-worker exception is reported with its type and message appended
-      (`ValueError: boom`, or the bare type when it has no message) and logged with a
-      traceback server-side; the original exception stays chained.
+      theory module, or any worker failure (the `MaudeWorkerError` is chained). The error
+      text has a stable `<category>: <message>` first line (`timeout`, `crash`,
+      `spawn-failure`, `init-failure`, `remote-exception`, `cancelled`, `protocol-error`,
+      or the specific input-error message), a `context:` line (resolved path, module,
+      steps, timeout, worker pid/phase/step), the cause chain and a bounded traceback;
+      the full report is logged server-side and the client text is capped by
+      `HAROLD_ERROR_DETAIL_MAX_CHARS`.
     - All caps come from settings (step count, rewrite bound, solutions, term/result/
       output length, search-path transitions); `timeout_secs` overrides
-      `HAROLD_INTERPRETER_TIMEOUT_SECS`. The timeout covers interpreter startup and is
-      best effort (a hung reduction fails the call and replaces the pool). Each phase
-      reports captured stdout/stderr with ANSI codes stripped; over-long streams are
-      truncated and marked.
+      `HAROLD_INTERPRETER_TIMEOUT_SECS`. The timeout covers admission (waiting for an
+      interpreter slot), process startup, Maude initialization, the load and every step;
+      a hung evaluation fails only that call (its process is killed) and other concurrent
+      calls are unaffected. Each phase reports captured stdout/stderr with ANSI codes
+      stripped; over-long streams are truncated and marked.
     - Annotated with the same full read-only profile and tagged
       `tags=harold_tags(INTERPRETER)` (`{maude, programming, interpreter}`). Only the
       prose above `Args:` becomes the description; field docstrings describe the output
@@ -151,9 +156,10 @@ sequenceDiagram
   module (byte-stable), refuses extractions with fewer than 50 sort names, and with
   `--check` compares the **data** against a fresh extraction (exit 1 when stale; the
   provenance header may differ). See `DEVELOPER_GUIDE.md`.
-- On startup the lifespan performs a fail-fast worker initialization check (one
-  `init_maude` ping per worker; the pinged processes are recycled — no warm pool stays
-  around); on SIGTERM the server tears the pool down and exits 0.
+- On startup the lifespan performs a fail-fast initialization check (one `init_maude`
+  ping per configured interpreter, under one shared deadline; the pinged processes exit
+  immediately — no warm pool stays around); on SIGTERM the server tears the runner down
+  and exits 0.
 - Intended for installation via `uvx harold-mcp` and configuration as an MCP server
   command for clients (the Zed and opencode configurations we test live in `README.md`;
   any other MCP-compatible client works too).
@@ -162,7 +168,7 @@ sequenceDiagram
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `HAROLD_MAUDE_WORKERS` | `max(1, min(3, cpu_count // 2))` | bound on concurrently running Maude interpreters (workers are recycled after every call) |
+| `HAROLD_MAUDE_WORKERS` | `max(1, min(3, cpu_count // 2))` | maximum number of concurrent Maude interpreter processes (every call gets a fresh process) |
 | `HAROLD_DIAGNOSTICS_TIMEOUT_SECS` | `60` | per-call timeout for `maude_program_diagnostics` (renamed from `HAROLD_MAUDE_WORKER_TIMEOUT_SECS`; the startup ping uses it too) |
 | `HAROLD_INTERPRETER_TIMEOUT_SECS` | `60` | default per-call timeout for `maude_run` (`timeout_secs` overrides it) |
 | `HAROLD_INTERPRETER_MAX_STEPS` | `200` | maximum steps per `maude_run` call |
@@ -172,6 +178,8 @@ sequenceDiagram
 | `HAROLD_INTERPRETER_MAX_RESULT_LENGTH` | `1000000` | maximum characters of a returned term or path string; longer results become `too-large` outcomes |
 | `HAROLD_INTERPRETER_MAX_PATH_STEPS` | `100` | maximum transitions per search solution path; a longer path becomes a `too-large` outcome |
 | `HAROLD_INTERPRETER_MAX_OUTPUT_LENGTH` | `1000000` | maximum characters per captured stream per phase (longer captures are truncated and marked) |
+| `HAROLD_ERROR_DETAIL_MAX_CHARS` | `4000` | cap on the client-visible error text; the full report is always logged and a truncated text carries a marker pointing at the log |
+| `HAROLD_IPC_MAX_RESPONSE_BYTES` | `2147483648` (2 GiB) | cap on one worker response read; an oversized response is a protocol error naming this setting |
 
 Invalid values fail fast at import (pydantic validation).
 
@@ -198,9 +206,11 @@ Invalid values fail fast at import (pydantic validation).
     absolute and read; raises `SourceFileNotFoundError`), `ProviderDiagnostic` (source,
     severity, code, message, 1-based `line`/`column`/`end_column`, optional fix),
     `FixEdit`, `FixSuggestion`, `Severity`, `DiagnosticSource`.
-  - `collect_diagnostics(providers, source) -> list[ProviderDiagnostic]` — runs every
-    provider in order, merges and orders the result, and raises
-    `DiagnosticCollectionError` (with `.failures`) when any provider failed.
+  - `collect_diagnostics(providers, source, max_chars=...) -> list[ProviderDiagnostic]` —
+    runs every provider in order, merges and orders the result, and raises
+    `DiagnosticCollectionError` (with `.failures` and `format_report(max_chars)`) when
+    any provider failed; the tool passes `settings.error_detail_max_chars` and logs the
+    uncapped report.
 - `harold_mcp.heuristic` — the linter:
   - `HeuristicLinterProvider(rules=RULES)` — a `DiagnosticProvider` over the rule
     registry.
@@ -214,17 +224,25 @@ Invalid values fail fast at import (pydantic validation).
   - `extract_prelude_sorts` / `render_snapshot_module` — the snapshot maintenance API
     behind the CLI.
 - `harold_mcp.settings.Settings` / `get_settings()` — configuration model and singleton
-  (workers, both timeouts, and the interpreter caps).
-- `harold_mcp.maude.MaudeExecutor` — the client wrapper (one task per process:
-  `max_tasks_per_child=1`, so every call gets a fresh interpreter):
-  - `start()` / `shutdown()` — pool lifecycle (start runs the fail-fast init pings).
-  - `submit(fn, *args) -> Future` — raw submit (test/crash support); raises
-    `MaudeWorkerCrashedError` on a broken pool.
-  - `diagnostics(path) -> LoadDiagnosticsResult` — typed worker op; crash/timeout mapped
-    to `MaudeWorkerCrashedError` / `MaudeWorkerTimeoutError`, pool replaced.
-  - `run_session(request, timeout) -> SessionResult` — typed worker op for `maude_run`;
-    same crash/timeout mapping.
-  - `_run_task(fn, *args, timeout) -> T` — generic submit-and-await runner for worker ops.
+  (workers, both timeouts, the interpreter caps, `error_detail_max_chars` and
+  `ipc_max_response_bytes`).
+- `harold_mcp.errors` — `format_error_report(exc, *, context, max_chars, category=None)`,
+  `format_context`, `format_exception_text`, `DEFAULT_ERROR_DETAIL_MAX_CHARS`,
+  `TRUNCATION_MARKER`; the shared bounded error renderer (see `components.md`).
+- `harold_mcp.maude.MaudeExecutor` — the client for per-call interpreters:
+  - `start(timeout)` / `shutdown()` — runner lifecycle; `start` runs the fail-fast init
+    pings under one deadline (and discards a failed runner), `shutdown` is idempotent.
+  - `diagnostics(path) -> LoadDiagnosticsResult` — typed operation with semaphore
+    admission; runner errors pass through (a crash while closed becomes cancelled).
+  - `run_session(request, timeout) -> SessionResult` — typed operation for `maude_run`;
+    same admission and mapping.
+- `harold_mcp.maude.runner` — `ProcessRunner` protocol and `PipeProcessRunner`
+  (`run(operation, payload, timeout, context)`, `kill_all`, `active_count`); one spawn
+  process per call, one-shot Pipe exchange, deadline, response cap and active map.
+- `harold_mcp.maude.transport` — `serve_one(conn)` (child entry point), request/response
+  envelope helpers, `_error_category`, `_format_exc`, `_worker_context`; the child
+  redirects fds 0/1/2 to devnull, validates one request, initializes Maude and dispatches
+  `ping`/`diagnostics`/`session`.
 - `harold_mcp.maude.capture` — worker-side capture helpers: `capture_streams`,
   `parse_warnings`, `strip_ansi`, `truncate_output`, `WarningDict`, `CapturedOutput`.
   `capture_streams` flushes Python and C/C++ stdio buffers before the redirect and again
@@ -248,13 +266,15 @@ Invalid values fail fast at import (pydantic validation).
 - `harold_mcp.maude.get_maude_executor(settings=Depends(get_settings))` — lazy,
   lock-guarded singleton; FastMCP resolves the nested `get_settings` dependency. Direct
   callers pass settings explicitly.
-- `harold_mcp.maude.worker` — worker-side module (imported by the worker process only in
-  practice; safe to import anywhere): `init_maude`, `ping`, `sleep`, `rendezvous_pid`,
-  `load_diagnostics`, `_crash`, and the `WarningDict` / `LoadDiagnosticsResult` TypedDicts
-  (`WarningDict` lives in `maude/capture.py` and carries the `file` Maude attributed the
-  warning to).
-- `harold_mcp.maude` error hierarchy — `MaudeError`, `MaudeInitError`,
-  `MaudeWorkerError` (`MaudeWorkerCrashedError`, `MaudeWorkerTimeoutError`).
+- `harold_mcp.maude.worker` — child-side module (safe to import anywhere): `init_maude`,
+  `load_diagnostics`, `WorkerInitError`, and the `WarningDict` / `LoadDiagnosticsResult`
+  TypedDicts (`WarningDict` lives in `maude/capture.py` and carries the `file` Maude
+  attributed the warning to).
+- `harold_mcp.maude` error hierarchy (`maude/worker_errors.py`, re-exported by the
+  package) — `MaudeError`, `MaudeWorkerError` (`category`, `context`,
+  `remote_traceback`), `MaudeInitError`, `MaudeWorkerCrashedError`,
+  `MaudeWorkerTimeoutError`, `MaudeWorkerSpawnError`, `MaudeWorkerRemoteError`,
+  `MaudeWorkerCancelledError`, `MaudeWorkerProtocolError`.
 - `harold_mcp.resources.HAROLD_ICON` — `mcp.types.Icon` used for server branding.
 - `harold_mcp.logging.get_logger` / `harold_mcp.logging.Logging` — logging helpers.
 
@@ -269,10 +289,10 @@ Importing `harold_mcp.server`:
 3. Reads the `HAROLD_*` env vars once (pydantic-settings `Settings`).
 
 The Maude interpreter is **not** touched at import time: no `maude` import in the server
-process (worker.py imports it lazily), and the worker pool is created in the lifespan
-(startup), not at import — and each task then runs in its own fresh process
-(`max_tasks_per_child=1`). The heuristic linter and the prelude snapshot are pure data and
-text processing — importing them never touches the interpreter.
+process (`worker.py`, `session.py` and `transport.py` import it lazily), and the runner is
+created in the lifespan (startup), not at import — and each call then runs in its own fresh
+child process. The heuristic linter and the prelude snapshot are pure data and text
+processing — importing them never touches the interpreter.
 
 ## Related documents
 

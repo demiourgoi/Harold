@@ -76,19 +76,18 @@ flowchart TD
 
 ## Is the prelude available with `InterpreterDiagnosticProvider` and `maude_run`?
 
-Yes, always. `harold_mcp.maude.worker.init_maude` is the worker-pool initializer
-(`initializer=worker.init_maude` in `harold_mcp.maude.executor`) and calls
-`maude.init(loadPrelude=True, advise=False)` before any task runs, then disables Maude IO
-(`setAllowDir`/`setAllowFiles`/`setAllowProcesses(False)`). Consequently:
+Yes, always. `harold_mcp.maude.worker.init_maude` runs in the per-call child before any
+operation is dispatched (`transport._dispatch` calls it first, so the executor's `ping` is
+a real initialization check) and calls `maude.init(loadPrelude=True, advise=False)`, then
+disables Maude IO (`setAllowDir`/`setAllowFiles`/`setAllowProcesses(False)`). Consequently:
 
 - Every worker process has the full prelude loaded before `InterpreterDiagnosticProvider`
   (via `MaudeExecutor.diagnostics` → `worker.load_diagnostics`) runs `maude.load(path)`,
   and before `maude_run` (via `MaudeExecutor.run_session` → `session.run_session`) loads
   its file and parses terms. Diagnosed and evaluated programs may rely on prelude modules
   and sorts exactly as they would under the `maude` CLI.
-- Freshness: the pool uses `max_tasks_per_child=1`, so each diagnostics or interpreter
-  call gets a fresh process and the initializer (hence the prelude load) runs again per
-  call; crash/timeout pool replacement re-runs it too.
+- Freshness: every diagnostics or interpreter call gets a fresh `spawn` child, so the
+  initializer (hence the prelude load) runs again per call.
 - Fail-fast: a broken install (prelude not found) makes `init_maude` raise `WorkerInitError`,
   which surfaces as `MaudeInitError` during the lifespan's initialization check — the
   server refuses to start rather than silently running without a prelude.

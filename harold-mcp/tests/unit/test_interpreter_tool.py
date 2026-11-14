@@ -5,6 +5,7 @@ validation, the request mapping, the result adapter and the whole-call error
 mapping. The real interpreter behavior is covered by the integration tests.
 """
 
+import inspect
 from pathlib import Path
 from typing import Any, cast
 
@@ -111,6 +112,16 @@ def maude_file(tmp_path: Path) -> Path:
 
 def _settings(**overrides: Any) -> Settings:
     return Settings(maude_workers=1, **overrides)
+
+
+def test_maude_run_description_does_not_mention_a_worker_pool() -> None:
+    """The description must reflect per-call processes, not the removed pool."""
+    description = inspect.getdoc(maude_run) or ""
+
+    assert "worker pool" not in description
+    assert "admission" in description
+    assert "spawn-failure" in description
+    assert "protocol-error" in description
 
 
 def test_missing_path_raises_before_the_worker(tmp_path: Path) -> None:

@@ -2,11 +2,13 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-11-12 refresh has two
-parts: capture completeness plus failure surfacing (the stdio flush in `capture_streams`
-and detailed `maude_run` unexpected-failure messages), and search paths in `maude_run`
-(`SearchStep.path`, worker `path_mode`/`max_path_steps`, `MaudeSearchPath`, the new
-setting, tests and fixture, and the README/CHANGELOG updates);
+Findings from the consistency and completeness review. The 2026-11-14 refresh covers the
+per-call isolated worker architecture (one `spawn` process per call, one-shot JSON
+transport, semaphore admission, shutdown cancellation) and the rich bounded error reports;
+the 2026-11-12 refresh has two parts: capture completeness plus failure surfacing (the
+stdio flush in `capture_streams` and detailed `maude_run` unexpected-failure messages), and
+search paths in `maude_run` (`SearchStep.path`, worker `path_mode`/`max_path_steps`,
+`MaudeSearchPath`, the new setting, tests and fixture, and the README/CHANGELOG updates);
 the 2026-10-28 refresh covers the `maude_run` interpreter-session tool (new
 `maude/session.py`, `maude/capture.py`, `server/tools/interpreter.py`, new settings, tests
 and docs); the 2026-10-14 refresh covers the provider-registry FastMCP dependency; the
@@ -14,6 +16,41 @@ and docs); the 2026-10-14 refresh covers the provider-registry FastMCP dependenc
 interpreters, the new workers default, dependency-warning attribution, path
 absolutization, and the test-suite rework); the 2026-09-29 refresh covered the
 heuristic-linter port. Older resolved issues are kept for the record.
+
+## Changes absorbed into this refresh (2026-11-14, isolated per-call workers and rich errors)
+
+- **Per-call process architecture.** `MaudeExecutor` no longer uses a shared
+  `ProcessPoolExecutor`: it owns a `PipeProcessRunner` and a
+  `BoundedSemaphore(HAROLD_MAUDE_WORKERS)`. Each call spawns one child, sends one JSON
+  request over a Pipe and receives one response; the child exits afterwards. Admission
+  waits against the whole-call budget; `start()` runs the fail-fast init pings under one
+  deadline; `shutdown()` sets a closed flag and kills/reaps every active child. A crash or
+  timeout affects only its own call, so the old pool-wide cascade (`CancelledError` /
+  collateral `Maude worker crashed`) cannot occur.
+- **Child transport.** `maude/transport.py` redirects fds 0/1/2 to `/dev/null`, validates
+  one request, always initializes Maude first and dispatches `ping`/`diagnostics`/`session`,
+  sending ok/error envelopes (`protocol`/`init`/`remote`). `maude/runner.py` maps EOF,
+  mid-message/send failures, deadlines, malformed/oversized responses and child envelopes
+  to the typed worker errors; `_reap` serializes the pipe close and process teardown.
+- **Error model and formatter.** The hierarchy moved to `maude/worker_errors.py`
+  (`MaudeWorkerError` with `category`/`context`/`remote_traceback`, plus spawn/remote/
+  cancelled/protocol errors; `MaudeInitError` is now a `MaudeWorkerError`). The stdlib-only
+  `harold_mcp.errors.format_error_report` renders the stable category line, merged context,
+  cause chain, originating traceback and truncation marker. Both tools log the uncapped
+  report and return the capped one; the diagnostics aggregation renders one section per
+  failing provider.
+- **Settings.** `HAROLD_ERROR_DETAIL_MAX_CHARS` (4000) and
+  `HAROLD_IPC_MAX_RESPONSE_BYTES` (2 GiB).
+- **Tests.** New `test_errors.py`, `test_maude_runner.py`, `test_maude_transport.py`,
+  `test_maude_transport_integration.py` and `test_process_isolation_integration.py`; the
+  executor tests were rewritten around a fake runner, the worker integration tests now go
+  through `MaudeExecutor`, and the B0-B7 matrix is pinned (cascade, crash isolation,
+  timeout, capture, init/spawn/protocol mapping, bounded-search EOF).
+- **Docs.** `docs/modules.md` lists the new modules; README has the new settings and
+  per-call timeout semantics; the `maude_run` description was updated; the CHANGELOG
+  `[0.0.5]` section records the architecture and error changes. This knowledge base was
+  refreshed in place (targeted edits); a full `codebase-summary` re-run remains the
+  recommended follow-up if a complete re-audit is wanted.
 
 ## Changes absorbed into this refresh (2026-11-12, capture flush and failure surfacing)
 
@@ -298,9 +335,9 @@ heuristic-linter port. Older resolved issues are kept for the record.
    not; its tag constant (`DOCS`) is defined in `server/tags.py` and currently unused. The
    `port-repair.py/` planning record sketches a possible repair tool but has no design or
    code.
-2. **Timeout integration coverage.** Both timeout mappings are unit-tested; a real hang
-   needs a deliberately-stuck worker (`worker.sleep` exists but no slow fixture triggers
-   the timeout path end-to-end for either tool).
+2. **Timeout integration coverage.** Both timeout mappings are unit-tested and now also
+   exercised end to end: a diagnostics timeout (sleeping runner target) and a real
+   non-terminating `maude_run` rewrite with a healthy peer and a follow-up call.
 3. **Advisory/`<standard input>` hardening is mostly resolved.** ANSI stripping, binary
    input, `skipped:`/`unable to locate file:` formats and the `(fmod X) :` spelling are
    pinned; `<standard input>` warnings are attributed to the diagnosed file; multi-line
