@@ -54,7 +54,37 @@ Alternatively, configure your MCP client with `uvx harold-mcp@latest` to update-
 
 ### MCP client configuration
 
-Register `uvx harold-mcp` as a local MCP server in your client; any MCP-compatible client works (including Cline). See the MCP configuration docs of the clients we test: [Zed](https://zed.dev/docs/ai/mcp-servers) and [opencode (v2)](https://opencode.ai/docs/mcp-servers/) (works for both the [opencode TUI](https://opencode.ai/docs/tui/) and the [ACP agent for opencode in Zed](https://opencode.ai/docs/acp/#zed)). Zed gotchas: use the "Write" profile for the Zed agent (as of Zed 1.20.2 it ignores MCP tools in other profiles, even those marked `readOnlyHint`), and reload Zed after changing the MCP config (also for ACP agents).
+Register `uvx harold-mcp` as a local MCP server in your client; any MCP-compatible client works (including Cline). See the MCP configuration docs of the clients we test: [Zed](https://zed.dev/docs/ai/mcp-servers) and [opencode (v2)](https://opencode.ai/docs/mcp-servers/). For [_Zed_](https://zed.dev/docs/getting-started), add the following to `~/.config/zed/settings.json`:
+
+```json
+  "context_servers": {
+    "harold": {
+      "enabled": true,
+      "remote": false,
+      "command": "uvx",
+      "args": [
+        "harold-mcp"
+      ],
+      "env": {}
+    }
+  },
+  ...
+```
+
+For [_opencode_](https://opencode.ai), add the following to `~/.config/opencode/opencode.jsonc` (works for both the [opencode TUI](https://opencode.ai/docs/tui/) and the [ACP agent for opencode in Zed](https://opencode.ai/docs/acp/#zed)):
+
+```jsonc
+  "mcp" : {
+    "harold": {
+      "type": "local",
+      "command": ["uvx", "harold-mcp"],
+      "enabled": true,
+      "environment": {}
+    }
+  }
+```
+
+Zed gotchas: use the "Write" profile for the Zed agent (as of Zed 1.20.2 it ignores MCP tools in other profiles, even those marked `readOnlyHint`), and reload Zed after changing the MCP config (also for ACP agents).
 
 ### Configuration
 
