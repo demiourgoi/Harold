@@ -2,9 +2,9 @@
 
 ## Checklist
 
-- [ ] Step 1: Package the skill (Makefile `skills` target, `.gitignore`, release
-      workflow build step)
-- [ ] Step 2: The `setup` command (`skill_install.py`, `main.py`, unit tests)
+- [x] Step 1: Package the skill (Makefile `skills` target, `.gitignore`, release
+      workflow build step, hatchling `artifacts`)
+- [x] Step 2: The `setup` command (`skill_install.py`, `main.py`, unit tests)
 - [ ] Step 3: README rewrite (installation, setup/update, client-doc links,
       terser whole-README)
 
@@ -40,6 +40,16 @@ produce an artifact containing `harold_mcp/skills/maude-manual`.
 
 **Tests.** None (build plumbing); verified by wheel inspection.
 
+### Implementation notes
+
+Implemented as planned, with one necessary addition: hatchling's sdist (and
+`uv build`, which builds the wheel **from the sdist**) respects `.gitignore`,
+so the git-ignored copy was silently excluded from the artifacts. Adding
+`artifacts = ["src/harold_mcp/skills"]` to both hatchling targets re-includes
+it; the design was updated with this finding. Verified: `make skills &&
+uv build` produces a wheel and an sdist that both contain the 27 skill files
+(`harold_mcp/skills/maude-manual/SKILL.md` present).
+
 ---
 
 ## Step 2: The `setup` command
@@ -60,6 +70,17 @@ produce an artifact containing `harold_mcp/skills/maude-manual`.
 
 **Tests.** `uv run python -m pytest tests/unit/test_skill_install.py`, then
 `make check` and `make test-unit`.
+
+### Implementation notes
+
+Implemented as planned (including the stray-file handling from design review
+round 1). Deviations: cyclopts 4 takes the flag names as a single list
+(`Parameter(["--global", "-g"], ...)`), and the CLI tests invoke
+`main.app([...], result_action="return_value")` instead of an `exit=` kwarg
+(removed in cyclopts 4). `_ = copytree(...)` matches the repo's basedpyright
+`reportUnusedCallResult` convention. `make check` and `make test-unit` pass
+(397 unit tests); a live `uv run harold-mcp setup --directory …` smoke test
+installs and re-installs correctly.
 
 ---
 
