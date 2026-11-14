@@ -13,8 +13,9 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
   call: one file, one explicit module, and an ordered step list of `reduce`, `rewrite`,
   `frewrite`, `erewrite`, `match` and `search`. Commands thread a current term
   REPL-style (omit a step's term/subject to use the previous result), expose Maude's
-  `bound`, `gas` and `depth`, and return every intermediate result (`term`/`rewrites`,
-  match substitutions, and search solutions with their bindings and rewrite counts).
+  `bound`, `gas` and `depth` (range-validated at the tool boundary), and return every
+  intermediate result (`term`/`rewrites`, match substitutions, and search solutions with
+  their bindings and rewrite counts).
   Per-step failures (`parse-error`, `too-large`) stop the run and are returned as
   outcomes; load warnings are reported while evaluation proceeds; every phase reports
   ANSI-stripped captured stdout/stderr. `match`/`search` results are capped with a
@@ -124,8 +125,10 @@ stream-capture layer also closes a latent stdout leak in the diagnostics worker.
 
 ### General fixes
 
-- Assorted typos, formatting, documentation polish, PDD planning and review records, and
-  agent-harness command allow-list updates.
+- Assorted typos, formatting, documentation polish, internal refactors, PDD planning and
+  review records, agent-skill additions and updates (including the Maude manual and Maude
+  primer skills), and developer command allow-list, review-workflow and skill-setup
+  changes.
 
 ## [0.0.4]
 
