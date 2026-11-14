@@ -25,7 +25,7 @@ Planned tools: a vector index of the Maude documentation for retrieval-augmented
 
 ```bash
 uvx harold-mcp --version   # check the install
-uvx harold-mcp setup       # install the bundled maude-manual skill into ./.agents/skills
+uvx harold-mcp setup       # install the Harold skills (currently just maude-manual) into ./.agents/skills of the current directory — see "The `setup` command"
 ```
 
 Harold requires **Python 3.14** (the `maude` dependency ships CPython 3.14 wheels only, so the metadata pins the 3.14 series); `uvx` downloads it automatically if missing, or run `uv python install 3.14` / pass `uvx --python 3.14`. The `maude` dependency bundles the Maude interpreter (built against Maude 3.5.1), so there is nothing else to install.
@@ -47,6 +47,8 @@ Refresh the package and run `setup` again:
 ```bash
 uvx --refresh harold-mcp setup
 ```
+
+This refreshes the package and installs the Harold skills (currently just `maude-manual`) into `./.agents/skills` of the current directory — see [The `setup` command`](#the-setup-command) for the destinations.
 
 Alternatively, configure your MCP client with `uvx harold-mcp@latest` to update-check on each boot (slightly longer boot; negligible for IDEs, which spawn MCP servers in the background — CLI clients may differ). To pin a version, check the [PyPI release history](https://pypi.org/project/harold-mcp/#history) and use `uvx harold-mcp@VERSION`, e.g. `uvx harold-mcp@0.0.2`.
 
