@@ -79,8 +79,10 @@ def install_skill(destination_base: Path, source: Path | None = None) -> Path:
   - Fails fast with a clear `FileNotFoundError`-style message if the source is
     missing (an artifact built without the `skills` target).
   - `destination = destination_base / SKILL_NAME`; if it exists, remove it
-    first (`shutil.rmtree`), then `shutil.copytree`. Removing the destination
-    (not `dirs_exist_ok=True`) is what makes re-running `setup` a true update:
+    first — `shutil.rmtree` when it is a directory, `Path.unlink` when it is a
+    plain file (a stray file named `maude-manual` must not brick `setup`) —
+    then `shutil.copytree`. Removing the destination (not
+    `dirs_exist_ok=True`) is what makes re-running `setup` a true update:
     files deleted from a newer skill never survive.
   - Creates `destination_base` (and parents) as needed.
   - Returns the installed path so the CLI can report it.
@@ -140,11 +142,15 @@ link survives, in fewer words.
   and with `-g` (monkeypatching `Path.home` and the source), asserting the copy
   lands at the expected path.
 
-A full-pipeline test that the built wheel contains the skill is not added: the
-build is exercised in the release workflow and locally via `make build`; a
-unit test would need to build a wheel in CI (slow) for little value. Instead,
-`make skills` + `uv build` is verified manually during implementation and the
-workflow change keeps CI parity.
+A full-pipeline test that builds a wheel is not added (slow in CI for little
+value); instead one cheap unit test asserts the packaging contract: when
+`src/harold_mcp/skills/maude-manual` exists in the checkout (i.e. after
+`make skills`), `skill_source()` points at a directory containing `SKILL.md`
+(`pytest.mark.skipif` when the copy is absent, so a plain dev checkout still
+passes). The wheel contents themselves are verified manually during
+implementation (`make skills` + `uv build` + `unzip -l`) and by the workflow
+change, which keeps the release build on the same path (`make skills &&
+uv build`; locally, `make build` is the equivalent pre-release artifact check).
 
 ## Failure modes
 
