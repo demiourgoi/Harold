@@ -52,7 +52,7 @@ jobs:
           path: harold-mcp
 
       - name: Build package
-        run: uv build
+        run: make skills && uv build
 
       - name: Publish package
         run: uv publish

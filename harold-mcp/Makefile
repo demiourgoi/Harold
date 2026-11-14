@@ -40,8 +40,13 @@ run: ## Run the server
 	@echo "🚀 Running server"
 	@uv run harold-mcp
 
+.PHONY: skills
+skills: ## Copy the maude-manual skill from the monorepo into the package tree
+	@echo "🚀 Copying ../skills/maude-manual into src/harold_mcp/skills"
+	@uv run python -c "import shutil; shutil.rmtree('src/harold_mcp/skills', ignore_errors=True); shutil.copytree('../skills/maude-manual', 'src/harold_mcp/skills/maude-manual')"
+
 .PHONY: build
-build: clean-build ## Build wheel file
+build: clean-build skills ## Build wheel file
 	@echo "🚀 Creating wheel file"
 	@uvx --from build pyproject-build --installer uv
 
@@ -79,7 +84,7 @@ review:  ## review with a free-text prompt: e.g. `make review PROMPT="Review the
 
 .PHONY: help
 help:
-	@uv run python -c "import re; \
+	@uv run python -c "import re; ", 
 	[[print(f'\033[36m{m[0]:<20}\033[0m {m[1]}') for m in re.findall(r'^([a-zA-Z_-]+):.*?## (.*)$$', open(makefile).read(), re.M)] for makefile in ('$(MAKEFILE_LIST)').strip().split()]"
 
 .DEFAULT_GOAL := help

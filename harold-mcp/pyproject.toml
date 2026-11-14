@@ -56,6 +56,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harold_mcp"]
+# The skill copy produced by `make skills` is git-ignored (its source of truth is
+# `skills/maude-manual` in the monorepo), so it must be re-included explicitly.
+artifacts = ["src/harold_mcp/skills"]
+
+[tool.hatch.build.targets.sdist]
+artifacts = ["src/harold_mcp/skills"]
 
 [tool.mypy]
 files = ["src"]

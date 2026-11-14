@@ -2,6 +2,7 @@
 docs/source
 .agents/**/*.html
 .agents/skills
+src/harold_mcp/skills/
 .vibe
 .review.md
 
