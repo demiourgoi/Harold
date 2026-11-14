@@ -114,7 +114,7 @@ Gotchas:
 
 - In case you are using the Zed IDE, it is also recommended to clone https://github.com/fadoss/maude-bindings, and add it to the Zed project together with the root folder of this file, so it is available to coding agents.
 - _Zed_ is useful for debugging, because it displays the _full JSON response_ from each tool call.
-- Setup agent skills and custom agents: clone `https://github.com/demiourgoi/epinoia` and `make -C ../../epinoia install`
+- Setup agent skills and custom agents: clone `https://github.com/demiourgoi/epinoia` and `make -C ../../epinoia install`. To use the agent reviewer you'd need to install [Mistral Vibe CLI](https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli), and ripgrep (`rg` command).
   - Review with the `ponytail-reviewer` agent: `make review PROMPT="<prompt>"` (it runs
     `vibe --agent ponytail-reviewer --trust --add-dir "$HOME/git" "<prompt>"`). The agent is read-only and writes its
     report to `.review.md` in the repository root, so each run overwrites the previous report.
@@ -124,7 +124,7 @@ Gotchas:
     SOP, these prompts do not produce numbered `*-review-rev{J}.md` files, diff snapshots or `.log` transcripts:
     - **tech-design**: `make review PROMPT="Review the technical design at .agents/planning/<project>/design/detailed-design.md. Read rough-idea.md, idea-honing.md, research/ and implementation/plan.md in that directory as context, and check the design against the requirements."`
     - **code-uncommitted** (step `<step>`): `make review PROMPT="Review the uncommitted changes in this repository as implementation step <step> of the PDD project .agents/planning/<project>. Read design/detailed-design.md and the 'Step <step>:' section of implementation/plan.md, then review the staged, unstaged and untracked changes against them."`
-      - `make review PROMPT="Review the currently uncommited code, that corresponds to the latest implementation step of the implementation plan at .agents/planning/<project>/implementation/plan.md. Assume all CI check pass ('make release' passes)"`
+      - `make review PROMPT="Review the currently uncommited code, that corresponds to the latest implementation step of the implementation plan at .agents/planning/<project>/implementation/plan.md. Assume all CI check pass ('make release' passes). Do NOT run any test, all tests are passing"`
     - **code-commits** (step `<step>`, range `<start>..<end>`): `make review PROMPT="Review the commits <start>..<end> in this repository as implementation step <step> of the PDD project .agents/planning/<project>. Use git diff <start>..<end> and judge it against design/detailed-design.md and the 'Step <step>:' section of implementation/plan.md."`
     - **final-pdd-review**: `make review PROMPT="Review the whole codebase of this repository against the PDD project .agents/planning/<project>: rough-idea.md, the requirements in idea-honing.md, design/detailed-design.md and implementation/plan.md."`
 

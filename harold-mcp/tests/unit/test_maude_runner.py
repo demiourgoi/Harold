@@ -356,6 +356,46 @@ def test_kill_all_kills_and_reaps_active_children() -> None:
     assert isinstance(outcomes[0], MaudeWorkerTimeoutError)
 
 
+class _GatedConnection(FakeConnection):
+    """Detect concurrent `close()` calls; the first blocks until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.overlap = False
+        self._inside_close = False
+        self._guard = threading.Lock()
+
+    def close(self) -> None:
+        with self._guard:
+            if self._inside_close:
+                self.overlap = True
+            self._inside_close = True
+        self.entered.set()
+        _ = self.release.wait(timeout=5)
+        with self._guard:
+            self._inside_close = False
+        super().close()
+
+
+def test_reap_serializes_concurrent_pipe_close() -> None:
+    """kill_all() and a call's finally must not close the same pipe concurrently."""
+    runner, _, process, _ = _runner()
+    parent = _GatedConnection()
+    first = threading.Thread(target=runner._reap, args=(process, parent))
+    first.start()
+    assert parent.entered.wait(timeout=5)
+    second = threading.Thread(target=runner._reap, args=(process, parent))
+    second.start()
+    parent.release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not parent.overlap
+    assert parent.closed
+
+
 def test_init_envelope_maps_to_init_error() -> None:
     response = _error("init", type_="WorkerInitError", message="", traceback_text="init tb", context={"phase": "load"})
     runner, _, process, _ = _runner(parent=FakeConnection(response=response))

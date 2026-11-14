@@ -245,6 +245,12 @@ def test_worker_context_reads_the_annotation() -> None:
     assert transport._worker_context(exc) == {"phase": "step", "step": 2, "command": "search"}
 
 
+def test_error_category_maps_protocol_init_and_remote() -> None:
+    assert transport._error_category(transport.ChildProtocolError("bad")) == "protocol"
+    assert transport._error_category(WorkerInitError()) == "init"
+    assert transport._error_category(ValueError("boom")) == "remote"
+
+
 def test_redirect_stdio_to_devnull_points_the_standard_fds_at_devnull(monkeypatch: pytest.MonkeyPatch) -> None:
     """The redirect preserves the fd numbers but swaps their targets."""
     devnull_fd = os.open(os.devnull, os.O_RDWR)

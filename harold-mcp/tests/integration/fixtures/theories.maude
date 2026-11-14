@@ -1,0 +1,9 @@
+fth TRIV is
+    sort Elt .
+endfth
+
+fmod USES-TRIV is
+    pr NAT .
+    op f : -> Nat .
+    eq f = 2 .
+endfm

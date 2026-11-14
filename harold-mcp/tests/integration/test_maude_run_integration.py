@@ -253,3 +253,19 @@ def test_search_path_element_cap_overflow_is_a_too_large_step(
     assert (outcome.status, outcome.limit) == ("too-large", 50)
     assert outcome.message == "path element exceeds interpreter_max_result_length"
     assert outcome.solutions is None
+
+
+def test_theory_module_is_rejected_as_a_whole_call_error(environment: tuple[MaudeExecutor, Settings]) -> None:
+    with pytest.raises(MaudeRunError) as exc_info:
+        _ = _run(environment, "theories.maude", "TRIV", [ReduceStep(command="reduce", term="f")])
+
+    message = str(exc_info.value)
+    assert 'Module "TRIV" is a theory' in message
+    assert "select a functional or system module" in message
+
+
+def test_module_next_to_a_theory_still_works(environment: tuple[MaudeExecutor, Settings]) -> None:
+    result = _run(environment, "theories.maude", "USES-TRIV", [ReduceStep(command="reduce", term="f")])
+
+    assert result.completed is True
+    assert result.steps[0].term == "2"

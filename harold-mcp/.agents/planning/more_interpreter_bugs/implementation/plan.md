@@ -5,7 +5,7 @@
 - [x] Step 1 — Error model, formatter, and rich tool errors
 - [x] Step 2 — One-shot IPC transport and process runner
 - [x] Step 3 — Replace the pool executor with per-call processes
-- [ ] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
+- [x] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
 - [ ] Step 5 — Diagnostics end-to-end and error parity
 - [ ] Step 6 — Documentation and final validation
 
@@ -457,6 +457,67 @@ contain pool abstractions or helpers.
 **Demo.** The historical cascade and crash/timeout tests pass with per-call
 isolation; no orphan processes remain after the shutdown tests; the full
 integration suite is green.
+
+### Implementation notes (Step 4)
+
+Implemented as planned. What was added and what changed:
+
+- New `tests/integration/test_process_isolation_integration.py`:
+  - **Historical cascade (B1/B2/B3).** With `maude_workers=3`, three injected-target
+    occupiers hold every slot until the test drops a release marker, a queued
+    non-terminating call times out on admission after 2 s, and four healthy real
+    searches queue behind it and then complete. The test asserts no
+    `CancelledError`/`MaudeWorkerCancelledError` anywhere, only the trigger times
+    out, every other call succeeds, and the runner has no active children.
+  - **Running timeout.** A real non-terminating rewrite times out while a peer real
+    search succeeds, and a follow-up call proves the executor is still usable.
+  - **Shutdown with an in-flight call.** The call gets
+    `MaudeWorkerCancelledError`, its child pid is checked with `os.kill(pid, 0)`
+    (no orphans), and `active_count()` is zero.
+- The shutdown test exposed a real gap: `kill_all()` and a call's own `finally`
+  could enter `Process.close()` concurrently, raising `AttributeError` and masking
+  the typed error. `PipeProcessRunner` now serializes the pipe close and the
+  kill/join/close sequence with a shared `_reap` helper and a `_terminate_lock`;
+  `Connection.close()` is not concurrency-safe either, so the pipe close moved under
+  the same lock. Unit and integration tests pin both calls.
+- Removed the last raw `ProcessPoolExecutor`: `test_maude_worker_integration.py` now
+  drives `MaudeExecutor.diagnostics`, and its parent-stdout leak test spawns a
+  per-call child inside the redirect. Its redefinition test became
+  `test_each_call_gets_a_fresh_interpreter`.
+- B4 coverage added to the session integration tests: step stdout is empty, a parse
+  warning is present in step stderr, and load-phase stdout never reappears in a
+  step. B7's bounded-search-at-EOF test was already present.
+- Theory coverage added: `fixtures/theories.maude` (a theory plus a module) and two
+  `maude_run` integration tests (the theory is rejected as a whole-call error; the
+  module next to it still works).
+- Large request/response and the lowered response cap remain covered by the Step 2
+  transport integration file (synthetic targets on real pipes), so no extra Maude
+  large-result fixture was needed.
+- Pool wording removed from `test_lifespan.py` and the server lifespan docstrings;
+  the remaining `ThreadPoolExecutor` is the design's ping thread pool, not an
+  interpreter pool.
+
+Bug-matrix mapping: B0 formatter/fake-runner unit tests (Step 1); B1/B2/B3 the
+cascade and timeout/peer tests; B4 the step/load capture tests; B5 init-error unit
+tests; B6 spawn-failure unit tests and the shutdown integration test; B7 the
+existing bounded-search-at-EOF test.
+
+Validation: `make check` clean, `make test-unit` 382 passed,
+`make test-integration` 104 passed (parallel, real interpreter).
+
+Review feedback (`step-4-review.md`, verdict fix 1 first) was attended:
+
+- **Must fix:** the pipe close now happens inside the same `_terminate_lock` as the
+  process teardown, through a shared `_reap` helper used by `run`'s `finally` and
+  `kill_all()`. `Connection.close()` is not concurrency-safe in Python 3.14, so the
+  window the process lock closed was still open for the pipe. A focused unit test
+  (`test_reap_serializes_concurrent_pipe_close`) uses a gated fake connection that
+  flags overlapping closes; the integration shutdown test remains as the real-process
+  pin.
+- **Nice to have:** the dispatch error-category mapping moved to
+  `transport._error_category`, used by `serve_one` and the cascade test target (no
+  duplicated mapping in test code); the Step 4 notes no longer claim a runner-comment
+  edit that did not happen.
 
 ---
 

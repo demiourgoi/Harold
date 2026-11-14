@@ -128,6 +128,27 @@ def test_parse_error_is_an_outcome_not_a_whole_call_failure(executor: MaudeExecu
     assert "no parse for term." in message
 
 
+def test_step_stdout_is_empty_and_step_stderr_carries_the_parse_warning(executor: MaudeExecutor) -> None:
+    """B4: a step produces no stdout; the bindings return values instead of printing."""
+    result = _run(executor, _request("hello.maude", "HELLO-WORLD", [_reduce("nope(3)")]))
+
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "parse-error"
+    assert outcome["output"]["stdout"] == ""
+    assert "Warning:" in outcome["output"]["stderr"]
+    assert "no parse for term." in outcome["output"]["stderr"]
+
+
+def test_load_output_does_not_leak_into_step_stdout(executor: MaudeExecutor) -> None:
+    """B4: the load phase's stdout is reported there and never replayed in a step."""
+    result = _run(executor, _request("warns_and_prints.maude", "WARNS-AND-PRINTS", [_reduce("f")]))
+
+    assert "reduce in WARNS-AND-PRINTS" in result["load_output"]["stdout"]
+    outcome = _single_outcome(result)
+    assert outcome["status"] == "ok"
+    assert outcome["output"] == {"stdout": "", "stderr": ""}
+
+
 def test_missing_module_reports_the_defined_modules(executor: MaudeExecutor) -> None:
     result = _run(executor, _request("hello.maude", "NOPE", []))
 

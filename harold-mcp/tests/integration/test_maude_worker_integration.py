@@ -1,51 +1,52 @@
-"""Integration tests for `harold_mcp.maude.worker` against the real interpreter.
+"""Integration tests for the worker's load capture against the real interpreter.
 
-The worker functions run in a spawned process (the real MCP server layout);
-these tests validate the spawn/pickling story and the fd-2 capture on the
-repo fixtures.
+Calls go through `MaudeExecutor.diagnostics`, which runs
+`worker.load_diagnostics` in a per-call child; these tests validate the spawn
+story, the warning shapes and the fd capture on the repo fixtures.
 """
 
-import multiprocessing
 import os
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from harold_mcp.maude.worker import LoadDiagnosticsResult, init_maude, load_diagnostics
+from harold_mcp.maude import MaudeExecutor
+from harold_mcp.maude.worker import LoadDiagnosticsResult
+from harold_mcp.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(scope="module")
-def pool() -> Iterator[ProcessPoolExecutor]:
-    with ProcessPoolExecutor(
-        max_workers=1,
-        mp_context=multiprocessing.get_context("spawn"),
-        initializer=init_maude,
-    ) as worker_pool:
-        yield worker_pool
+def executor() -> Iterator[MaudeExecutor]:
+    settings = Settings(maude_workers=1)
+    resolved = MaudeExecutor(settings=settings)
+    resolved.start(settings.diagnostics_timeout_secs)
+    try:
+        yield resolved
+    finally:
+        resolved.shutdown()
 
 
-def _diagnose(pool: ProcessPoolExecutor, fixture_name: str) -> LoadDiagnosticsResult:
-    return pool.submit(load_diagnostics, str(FIXTURES_DIR / fixture_name)).result(timeout=60)
+def _diagnose(executor: MaudeExecutor, fixture_name: str) -> LoadDiagnosticsResult:
+    return executor.diagnostics(str(FIXTURES_DIR / fixture_name))
 
 
-def test_clean_program_loads_without_warnings(pool: ProcessPoolExecutor) -> None:
-    result = _diagnose(pool, "hello.maude")
+def test_clean_program_loads_without_warnings(executor: MaudeExecutor) -> None:
+    result = _diagnose(executor, "hello.maude")
     assert result["ok"] is True
     assert result["warnings"] == []
 
 
-def test_recoverable_program_reports_warning(pool: ProcessPoolExecutor) -> None:
-    result = _diagnose(pool, "broken-recoverable.maude")
+def test_recoverable_program_reports_warning(executor: MaudeExecutor) -> None:
+    result = _diagnose(executor, "broken-recoverable.maude")
     assert result["ok"] is True
     assert result["warnings"] == [{"file": "broken-recoverable.maude", "line": 2, "message": "missing is keyword."}]
 
 
-def test_non_recoverable_program_reports_all_warnings(pool: ProcessPoolExecutor) -> None:
-    result = _diagnose(pool, "broken-non-recoverable.maude")
+def test_non_recoverable_program_reports_all_warnings(executor: MaudeExecutor) -> None:
+    result = _diagnose(executor, "broken-non-recoverable.maude")
     assert result["ok"] is True  # maude.load recovers even from badly broken files
     # Deterministic 12 warnings through the Python bindings (the two `syntax error`
     # lines from the REPL transcript are interactive-parser-only).
@@ -68,36 +69,35 @@ def test_non_recoverable_program_reports_all_warnings(pool: ProcessPoolExecutor)
     ]
 
 
-def test_program_without_modules_loads_clean(pool: ProcessPoolExecutor) -> None:
-    result = _diagnose(pool, "no_new_module.maude")
+def test_program_without_modules_loads_clean(executor: MaudeExecutor) -> None:
+    result = _diagnose(executor, "no_new_module.maude")
     assert result["ok"] is True
     assert result["warnings"] == []
 
 
-def test_module_redefinition_advisory_is_suppressed(pool: ProcessPoolExecutor) -> None:
-    """Reloading a program redefines its module; the `Advisory:` message is
-    suppressed at the source by `advise=False`, so the capture stays clean."""
-    assert _diagnose(pool, "hello.maude")["ok"] is True
-    result = _diagnose(pool, "hello.maude")
+def test_each_call_gets_a_fresh_interpreter(executor: MaudeExecutor) -> None:
+    """Reloading a program cannot redefine a module: every call is a fresh process."""
+    assert _diagnose(executor, "hello.maude")["ok"] is True
+    result = _diagnose(executor, "hello.maude")
     assert result["ok"] is True
     assert result["warnings"] == []
 
 
-def test_embedded_red_output_is_discarded_not_parsed(pool: ProcessPoolExecutor) -> None:
+def test_embedded_red_output_is_discarded_not_parsed(executor: MaudeExecutor) -> None:
     """A loaded file's top-level `red` prints to stdout; only stderr is parsed as warnings."""
-    result = _diagnose(pool, "warns_and_prints.maude")
+    result = _diagnose(executor, "warns_and_prints.maude")
 
     assert result["ok"] is True
     assert result["warnings"] == [{"file": "warns_and_prints.maude", "line": 2, "message": "missing is keyword."}]
 
 
 def _diagnose_with_parent_stdout_captured(fixture_name: str) -> tuple[LoadDiagnosticsResult, bytes]:
-    """Load a fixture in a fresh pool while the parent's fd 1 goes to a pipe.
+    """Load a fixture in a fresh child while the parent's fd 1 goes to a pipe.
 
-    The pool is created inside the redirect, so the spawned worker inherits the pipe
-    as its stdout: output the worker lets escape lands in the pipe (the MCP stdio
-    transport analogue) and can be asserted on. A module-scoped pool would not do:
-    its workers inherited the original stdout before the redirect.
+    The child is spawned inside the redirect, so it inherits the pipe as its stdout
+    (the MCP stdio transport analogue) before `serve_one` points its own fds at
+    `os.devnull`. Output that escapes the child's capture lands in the pipe and can
+    be asserted on; the child is per-call, so no long-lived worker keeps the write end.
     """
     read_fd, write_fd = os.pipe()
     saved_stdout = os.dup(1)
@@ -105,18 +105,17 @@ def _diagnose_with_parent_stdout_captured(fixture_name: str) -> tuple[LoadDiagno
     try:
         _ = os.dup2(write_fd, 1)
         os.close(write_fd)
-        with ProcessPoolExecutor(
-            max_workers=1,
-            mp_context=multiprocessing.get_context("spawn"),
-            initializer=init_maude,
-        ) as worker_pool:
-            result = _diagnose(worker_pool, fixture_name)
+        executor = MaudeExecutor(settings=Settings(maude_workers=1))
+        try:
+            result = executor.diagnostics(str(FIXTURES_DIR / fixture_name))
+        finally:
+            executor.shutdown()
     finally:
         _ = os.dup2(saved_stdout, 1)
         os.close(saved_stdout)
         # Non-blocking: a long-lived helper process (e.g. multiprocessing's resource
         # tracker) may also hold the write end, so waiting for EOF could hang. The
-        # pool is already shut down, so every leak that could happen has happened.
+        # child is already shut down, so every leak that could happen has happened.
         os.set_blocking(read_fd, False)
         chunks: list[bytes] = []
         try:

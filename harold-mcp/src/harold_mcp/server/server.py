@@ -24,11 +24,11 @@ _LOG = get_logger(__name__)
 
 @lifespan
 async def app_lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, Any] | None]:
-    """Warm up the Maude worker pool at startup and tear it down at exit.
+    """Verify Maude can initialize in fresh worker processes and tear the runner down.
 
-    Fails fast: if Maude cannot initialize in the worker, `MaudeInitError`
-    aborts server startup. Teardown always runs, even if the warm-up was
-    interrupted.
+    Fails fast: if Maude cannot initialize in a fresh child, `MaudeInitError`
+    aborts server startup. Teardown always runs, even if the initialization check
+    was interrupted.
     """
     settings = get_settings()
     executor = get_maude_executor(settings)
@@ -59,7 +59,7 @@ def _handle_shutdown_signal(_signum: int, _frame: FrameType | None) -> NoReturn:
 
     FastMCP's `mcp.run()` installs no signal handling. Raising here makes the
     asyncio runner cancel the server task, which runs the lifespan's `finally`
-    (pool teardown) before exiting.
+    (runner teardown) before exiting.
     """
     raise KeyboardInterrupt
 
@@ -72,7 +72,7 @@ def run() -> None:
         mcp.run()
     except KeyboardInterrupt:
         _LOG.info("Shutdown signal received")
-        # The lifespan's finally has already torn the pool down. Exit hard:
+        # The lifespan's finally has already torn the runner down. Exit hard:
         # FastMCP's stdio transport leaves a non-daemon worker thread blocked
         # reading stdin, and a normal interpreter shutdown would hang forever
         # joining it while the client is still connected.

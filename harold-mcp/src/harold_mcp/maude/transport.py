@@ -44,6 +44,17 @@ def _worker_context(exc: BaseException) -> dict[str, object]:
     return dict(context) if isinstance(context, dict) else {}
 
 
+def _error_category(exc: BaseException) -> str:
+    """Map a dispatch exception to its response envelope category."""
+    from harold_mcp.maude.worker import WorkerInitError
+
+    if isinstance(exc, ChildProtocolError):
+        return "protocol"
+    if isinstance(exc, WorkerInitError):
+        return "init"
+    return "remote"
+
+
 def _redirect_stdio_to_devnull() -> None:
     """Point fds 0, 1 and 2 at `os.devnull`, before any Maude import or init."""
     devnull = os.open(os.devnull, os.O_RDWR)
@@ -138,7 +149,6 @@ def serve_one(conn: Connection) -> None:
         _redirect_stdio_to_devnull()
     except BaseException:
         os._exit(1)
-    from harold_mcp.maude.worker import WorkerInitError
 
     try:
         try:
@@ -160,16 +170,9 @@ def serve_one(conn: Connection) -> None:
         try:
             result = _dispatch(operation, payload)
         except BaseException as exc:
-            category = (
-                "protocol"
-                if isinstance(exc, ChildProtocolError)
-                else "init"
-                if isinstance(exc, WorkerInitError)
-                else "remote"
-            )
             _send_error(
                 conn,
-                category=category,
+                category=_error_category(exc),
                 error_type=type(exc).__name__,
                 message=str(exc),
                 traceback_text=_format_exc(exc),

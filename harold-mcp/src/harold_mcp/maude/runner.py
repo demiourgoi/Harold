@@ -112,6 +112,7 @@ class PipeProcessRunner:
     _target: Callable[[Connection], None]
     _context: Any
     _lock: threading.Lock
+    _terminate_lock: threading.Lock
     _closed: threading.Event
     _active: dict[int | None, tuple[BaseProcess, Connection]]
 
@@ -126,6 +127,10 @@ class PipeProcessRunner:
         self._target = target
         self._context = context if context is not None else multiprocessing.get_context("spawn")
         self._lock = threading.Lock()
+        # kill_all() and a call's own finally can reap the same child; serializing the
+        # pipe close and the kill/join/close sequence keeps Connection.close() and
+        # Process.close() from racing themselves.
+        self._terminate_lock = threading.Lock()
         self._closed = threading.Event()
         self._active = {}
 
@@ -181,9 +186,19 @@ class PipeProcessRunner:
             raw = self._receive(parent, context, proc.pid)
             return cast(T, self._decode_response(raw, context, proc.pid))
         finally:
-            parent.close()
             with self._lock:
                 _ = self._active.pop(proc.pid, None)
+            self._reap(proc, parent)
+
+    def _reap(self, proc: BaseProcess, parent: Connection) -> None:
+        """Close the pipe, then kill and reap the child; serialized per runner.
+
+        `kill_all()` and a call's own `finally` can reap the same child; neither
+        `Connection.close()` nor `Process.close()` is safe to call concurrently, so
+        both the pipe close and the process teardown happen under one lock.
+        """
+        with self._terminate_lock:
+            parent.close()
             _terminate(proc)
 
     def _receive(self, parent: Connection, context: Mapping[str, object], pid: int | None) -> bytes:
@@ -265,8 +280,7 @@ class PipeProcessRunner:
             self._closed.set()
             active = list(self._active.values())
         for proc, parent in active:
-            parent.close()
-            _terminate(proc)
+            self._reap(proc, parent)
         with self._lock:
             self._active.clear()
 

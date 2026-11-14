@@ -1,4 +1,4 @@
-"""Tests for the server lifespan (pool warm-up / teardown, fail-fast)."""
+"""Tests for the server lifespan (fail-fast initialization check / teardown)."""
 
 import asyncio
 from collections.abc import Iterator
@@ -37,7 +37,7 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeExecutor]:
     yield fake
 
 
-def test_lifespan_starts_and_shuts_down_the_pool(fake_executor: FakeExecutor) -> None:
+def test_lifespan_starts_and_shuts_down_the_executor(fake_executor: FakeExecutor) -> None:
     async def _exercise() -> None:
         async with server_module.app_lifespan(None):
             assert fake_executor.start_called == 1
@@ -61,8 +61,8 @@ def test_lifespan_fails_fast_on_init_error(fake_executor: FakeExecutor) -> None:
     assert fake_executor.shutdown_called == 1  # teardown still runs on the failed pool
 
 
-def test_lifespan_drives_the_real_pool() -> None:
-    """The lifespan drives the real executor: warm-up spawns a worker, exit kills it."""
+def test_lifespan_drives_the_real_executor() -> None:
+    """The lifespan drives the real executor: initialization pings run, exit kills the runner."""
 
     async def _exercise() -> None:
         async with server_module.app_lifespan(None):
