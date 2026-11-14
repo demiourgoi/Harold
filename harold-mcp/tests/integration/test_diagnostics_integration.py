@@ -5,18 +5,20 @@ test, against the real stdio server.
 """
 
 import json
+import os
 import select
 import subprocess
 import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
+from multiprocessing.connection import Connection
 from pathlib import Path
 
 import pytest
 
 from harold_mcp.diagnostics import DiagnosticCollectionError, DiagnosticProviderError
-from harold_mcp.maude import MaudeExecutor, MaudeWorkerCrashedError, worker
+from harold_mcp.maude import MaudeExecutor, MaudeWorkerCrashedError
+from harold_mcp.maude.runner import PipeProcessRunner
 from harold_mcp.server.tools.diagnostics import (
     MaudeDiagnostic,
     MaudeProgramDiagnosticsResult,
@@ -27,6 +29,11 @@ from harold_mcp.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 REPO_ROOT = Path(__file__).parents[2]
+
+
+def _crash_target(conn: Connection) -> None:
+    """Die abruptly without replying (deterministic crash target for the runner)."""
+    os._exit(7)
 
 
 @pytest.fixture(scope="module")
@@ -452,29 +459,30 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
     assert not [d for d in result.diagnostics if d.code == "non-ascii-character"]
 
 
-def test_tool_reports_crash_and_recovers() -> None:
+def test_tool_reports_crash_and_a_healthy_executor_still_works() -> None:
     settings = Settings(maude_workers=1)
-    executor = MaudeExecutor(settings=settings)
-    executor.start(settings.diagnostics_timeout_secs)
+    crash_executor = MaudeExecutor(
+        settings=settings,
+        runner_factory=lambda: PipeProcessRunner(settings, target=_crash_target),
+    )
+    healthy_executor = MaudeExecutor(settings=settings)
+    healthy_executor.start(settings.diagnostics_timeout_secs)
     try:
-        with pytest.raises(BrokenProcessPool):
-            executor.submit(worker._crash).result(timeout=60)
-
-        # The first call after the crash reports it (and replaces the pool);
-        # the client retries, and the next call succeeds. The interpreter's
-        # vocabulary reaches the caller as the chained cause (Q11.5).
+        # The crashing call reports the crash; per-call isolation means there is no
+        # shared pool to recover, and an independent executor keeps working. The
+        # interpreter vocabulary reaches the caller as the chained cause.
         with pytest.raises(DiagnosticCollectionError) as exc_info:
-            _ = _diagnose(executor, "hello.maude")
+            _ = _diagnose(crash_executor, "hello.maude")
         report = str(exc_info.value)
         assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
         assert report.splitlines()[1].startswith("- interpreter: Maude worker crashed")
         provider_error = exc_info.value.__cause__
         assert isinstance(provider_error, DiagnosticProviderError)
         assert isinstance(provider_error.__cause__, MaudeWorkerCrashedError)
-        result = _diagnose(executor, "hello.maude")
+        result = _diagnose(healthy_executor, "hello.maude")
         assert result.success is True
     finally:
-        executor.shutdown()
+        healthy_executor.shutdown()
 
 
 def _recv(proc: subprocess.Popen, req_id: int, timeout: float = 30.0) -> dict:

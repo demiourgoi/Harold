@@ -1,7 +1,13 @@
-"""Unit tests for `MaudeExecutor` using fake executors and futures."""
+"""Unit tests for `MaudeExecutor` with a fake `ProcessRunner`.
+
+These tests pin the executor's contract: delegation and context, lazy runner
+creation, semaphore admission, initialization pings, restart, shutdown mapping
+and error propagation. Nothing spawns a process or loads Maude.
+"""
 
 import threading
-from concurrent.futures.process import BrokenProcessPool
+from collections.abc import Mapping
+from concurrent.futures import CancelledError
 from typing import Any
 
 import pytest
@@ -9,21 +15,22 @@ import pytest
 from harold_mcp.maude import (
     MaudeExecutor,
     MaudeInitError,
+    MaudeWorkerCancelledError,
     MaudeWorkerCrashedError,
-    MaudeWorkerError,
+    MaudeWorkerProtocolError,
+    MaudeWorkerRemoteError,
+    MaudeWorkerSpawnError,
     MaudeWorkerTimeoutError,
     get_maude_executor,
 )
-from harold_mcp.maude import session as session_module
-from harold_mcp.maude import worker as worker_module
 from harold_mcp.maude.session import SessionRequest, SessionResult
-from harold_mcp.maude.worker import LoadDiagnosticsResult, ping
+from harold_mcp.maude.worker import LoadDiagnosticsResult
 from harold_mcp.settings import Settings
 
 OK_RESULT: LoadDiagnosticsResult = {"ok": True, "warnings": []}
 
 SESSION_REQUEST: SessionRequest = {
-    "path": "hello.maude",
+    "path": "/abs/hello.maude",
     "module": "HELLO-WORLD",
     "steps": [],
     "max_solutions": 200,
@@ -43,255 +50,301 @@ SESSION_RESULT: SessionResult = {
 }
 
 
-class FakeFuture:
-    """Minimal future: returns a preset result or raises a preset exception."""
-
-    def __init__(self, result: Any = None, exc: BaseException | None = None) -> None:
-        self._result = result
-        self._exc = exc
-        self.timeouts: list[float | None] = []
-
-    def result(self, timeout: float | None = None) -> Any:
-        self.timeouts.append(timeout)
-        if self._exc is not None:
-            raise self._exc
-        return self._result
-
-
-class FakeExecutor:
-    """Minimal ProcessPoolExecutor stand-in with scriptable behaviors."""
+class FakeRunner:
+    """Scriptable `ProcessRunner` stand-in recording calls and concurrency."""
 
     def __init__(
         self,
+        result: Any = None,
+        exc: BaseException | None = None,
         *,
-        fail_submit: bool = False,
-        futures: list[FakeFuture] | None = None,
+        on_run: Any = None,
     ) -> None:
-        self.fail_submit = fail_submit
-        self._futures = list(futures or [])
-        self.submit_calls: list[tuple[Any, tuple[Any, ...]]] = []
-        self.killed = False
+        self.result = result
+        self.exc = exc
+        self.on_run = on_run
+        self.calls: list[tuple[str, Any, float, dict[str, object]]] = []
+        self.kill_count = 0
+        self.active = 0
+        self.max_active = 0
+        self._lock = threading.Lock()
 
-    def submit(self, fn: Any, *args: Any) -> FakeFuture:
-        self.submit_calls.append((fn, args))
-        if self.fail_submit:
-            raise BrokenProcessPool()
-        if self._futures:
-            return self._futures.pop(0)
-        return FakeFuture(result=OK_RESULT)
+    def run(self, operation: str, payload: Any, timeout: float, context: Mapping[str, object]) -> Any:
+        with self._lock:
+            self.calls.append((operation, payload, timeout, dict(context)))
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            if self.on_run is not None:
+                self.on_run()
+            if self.exc is not None:
+                raise self.exc
+            return self.result
+        finally:
+            with self._lock:
+                self.active -= 1
 
-    def kill_workers(self) -> None:
-        self.killed = True
+    def kill_all(self) -> None:
+        with self._lock:
+            self.kill_count += 1
+
+    def active_count(self) -> int:
+        with self._lock:
+            return self.active
 
 
-def make_executor(factory: Any, *, settings: Settings | None = None) -> MaudeExecutor:
-    return MaudeExecutor(
-        settings=settings or Settings(maude_workers=1, diagnostics_timeout_secs=60),
-        executor_factory=factory,
+def make_executor(
+    runner: FakeRunner | None = None,
+    *,
+    settings: Settings | None = None,
+    factory: Any = None,
+) -> tuple[MaudeExecutor, FakeRunner]:
+    runner = runner if runner is not None else FakeRunner(result=OK_RESULT)
+    executor = MaudeExecutor(
+        settings=settings if settings is not None else Settings(maude_workers=1, diagnostics_timeout_secs=60),
+        runner_factory=factory if factory is not None else (lambda: runner),
     )
+    return executor, runner
 
 
-def test_diagnostics_delegates_and_returns_worker_result() -> None:
-    fake = FakeExecutor(futures=[FakeFuture(result=OK_RESULT)])
-    executor = make_executor(lambda: fake)
-
-    result = executor.diagnostics("hello.maude")
-
-    assert result == OK_RESULT
-    fn, args = fake.submit_calls[0]
-    assert fn is worker_module.load_diagnostics
-    assert args == ("hello.maude",)
-
-
-def test_diagnostics_lazily_starts_executor() -> None:
-    fake = FakeExecutor(futures=[FakeFuture(result=OK_RESULT)])
-    executor = make_executor(lambda: fake)
+def test_diagnostics_delegates_with_payload_and_context() -> None:
+    executor, runner = make_executor()
 
     assert executor.diagnostics("hello.maude") == OK_RESULT
+
+    operation, payload, timeout, context = runner.calls[0]
+    assert operation == "diagnostics"
+    assert payload == {"path": "hello.maude"}
+    assert 0 < timeout <= 60
+    assert context == {"path": "hello.maude"}
 
 
 def test_diagnostics_uses_the_diagnostics_timeout() -> None:
-    future = FakeFuture(result=OK_RESULT)
-    executor = make_executor(
-        lambda: FakeExecutor(futures=[future]),
-        settings=Settings(maude_workers=1, diagnostics_timeout_secs=42),
-    )
+    executor, runner = make_executor(settings=Settings(maude_workers=1, diagnostics_timeout_secs=42))
 
-    assert executor.diagnostics("hello.maude") == OK_RESULT
-    assert future.timeouts == [42]
+    _ = executor.diagnostics("hello.maude")
+
+    assert 0 < runner.calls[0][2] <= 42
 
 
-def test_run_session_delegates_with_the_request_and_timeout() -> None:
-    future = FakeFuture(result=SESSION_RESULT)
-    fake = FakeExecutor(futures=[future])
-    executor = make_executor(lambda: fake)
+def test_run_session_delegates_with_request_timeout_and_context() -> None:
+    executor, runner = make_executor(FakeRunner(result=SESSION_RESULT))
 
     result = executor.run_session(SESSION_REQUEST, timeout=7.5)
 
     assert result == SESSION_RESULT
-    fn, args = fake.submit_calls[0]
-    assert fn is session_module.run_session
-    assert args == (SESSION_REQUEST,)
-    assert future.timeouts == [7.5]
+    operation, payload, timeout, context = runner.calls[0]
+    assert operation == "session"
+    assert payload is SESSION_REQUEST
+    assert 0 < timeout <= 7.5
+    assert context == {"path": SESSION_REQUEST["path"], "module": SESSION_REQUEST["module"]}
 
 
-def test_run_session_uses_the_explicit_timeout() -> None:
-    future = FakeFuture(result=SESSION_RESULT)
-    executor = make_executor(lambda: FakeExecutor(futures=[future]))
+def test_runner_is_created_lazily_and_once() -> None:
+    runner = FakeRunner(result=OK_RESULT)
+    created: list[FakeRunner] = []
 
-    _ = executor.run_session(SESSION_REQUEST, timeout=33)
+    def factory() -> FakeRunner:
+        created.append(runner)
+        return runner
 
-    assert future.timeouts == [33]
+    executor, _ = make_executor(factory=factory)
 
-
-def test_submit_on_broken_pool_replaces_and_raises() -> None:
-    calls = {"n": 0}
-
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return FakeExecutor(fail_submit=True) if calls["n"] == 1 else FakeExecutor()
-
-    executor = make_executor(factory)
-
-    with pytest.raises(MaudeWorkerCrashedError):
-        executor.submit(ping)
-    assert calls["n"] == 2  # the broken pool was replaced eagerly; no resubmit
+    assert created == []
+    _ = executor.diagnostics("hello.maude")
+    _ = executor.diagnostics("hello.maude")
+    assert created == [runner]
 
 
-def test_diagnostics_worker_crash_raises_and_replaces() -> None:
-    calls = {"n": 0}
+@pytest.mark.parametrize(
+    "error",
+    [
+        MaudeWorkerTimeoutError(),
+        MaudeWorkerCrashedError(),
+        MaudeWorkerSpawnError(),
+        MaudeInitError(),
+        MaudeWorkerRemoteError("ValueError", "boom"),
+        MaudeWorkerProtocolError(),
+    ],
+)
+def test_runner_errors_propagate_unchanged_when_open(error: BaseException) -> None:
+    executor, _ = make_executor(FakeRunner(exc=error))
 
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return FakeExecutor(futures=[FakeFuture(exc=BrokenProcessPool())])
+    with pytest.raises(type(error)) as exc_info:
+        _ = executor.diagnostics("hello.maude")
 
-    executor = make_executor(factory)
-
-    with pytest.raises(MaudeWorkerCrashedError):
-        executor.diagnostics("hello.maude")
-    assert calls["n"] == 2  # eager replacement
+    assert exc_info.value is error
 
 
-def test_diagnostics_timeout_raises_and_kills_worker() -> None:
-    calls = {"n": 0}
-    first = FakeExecutor(futures=[FakeFuture(exc=TimeoutError())])
+def test_stray_cancelled_error_is_mapped_to_cancelled() -> None:
+    executor, _ = make_executor(FakeRunner(exc=CancelledError()))
 
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return first if calls["n"] == 1 else FakeExecutor()
+    with pytest.raises(MaudeWorkerCancelledError):
+        _ = executor.diagnostics("hello.maude")
 
-    executor = make_executor(factory)
+
+def test_crash_while_closed_is_mapped_to_cancelled() -> None:
+    crash = MaudeWorkerCrashedError(context={"pid": 7})
+    runner = FakeRunner(exc=crash)
+    executor, _ = make_executor(runner)
+    runner.on_run = executor.shutdown  # close the executor while the call is in flight
+
+    with pytest.raises(MaudeWorkerCancelledError) as exc_info:
+        _ = executor.diagnostics("hello.maude")
+
+    assert exc_info.value.context["pid"] == 7
+    assert exc_info.value.__cause__ is crash
+
+
+def test_shutdown_cancels_a_call_before_it_acquires_the_runner() -> None:
+    executor, runner = make_executor()
+    executor.shutdown()
+
+    with pytest.raises(MaudeWorkerCancelledError):
+        _ = executor.diagnostics("hello.maude")
+
+    assert runner.calls == []
+
+
+def test_admission_timeout_names_the_slot() -> None:
+    executor, runner = make_executor()
+    _ = executor._semaphore.acquire()
+    try:
+        with pytest.raises(MaudeWorkerTimeoutError, match="interpreter slot"):
+            _ = executor._run_operation("diagnostics", {"path": "x"}, 0.05, {})
+    finally:
+        executor._semaphore.release()
+
+    assert runner.calls == []
+
+
+def test_exhausted_budget_after_admission_times_out_without_spawning() -> None:
+    executor, runner = make_executor()
 
     with pytest.raises(MaudeWorkerTimeoutError):
-        executor.diagnostics("stuck.maude")
-    assert calls["n"] == 2
-    assert first.killed  # the stuck worker was killed, not just shut down
+        _ = executor._run_operation("diagnostics", {"path": "x"}, 0.0, {})
+
+    assert runner.calls == []
+    assert executor._semaphore.acquire(blocking=False)  # released in finally
+    executor._semaphore.release()
 
 
-def test_worker_task_exceptions_propagate_without_replacement() -> None:
-    calls = {"n": 0}
+def test_admission_serializes_calls_when_the_only_slot_is_busy() -> None:
+    first_started = threading.Event()
+    release = threading.Event()
+    results: list[LoadDiagnosticsResult] = []
 
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return FakeExecutor(futures=[FakeFuture(exc=ValueError("boom"))])
+    runner = FakeRunner(result=OK_RESULT)
 
-    executor = make_executor(factory)
+    def on_run() -> None:
+        if not first_started.is_set():
+            first_started.set()
+            _ = release.wait(10)
 
-    with pytest.raises(ValueError, match="boom"):
-        executor.diagnostics("hello.maude")
-    assert calls["n"] == 1
+    runner.on_run = on_run
+    executor, _ = make_executor(runner)
+    barrier = threading.Barrier(2)
+
+    def call() -> None:
+        barrier.wait()
+        results.append(executor.diagnostics("hello.maude"))
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    assert first_started.wait(5)
+    release.set()
+    for thread in threads:
+        thread.join(10)
+
+    assert results == [OK_RESULT, OK_RESULT]
+    assert runner.max_active == 1  # the semaphore admitted one interpreter at a time
 
 
-def test_next_call_succeeds_after_crash() -> None:
-    calls = {"n": 0}
-
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return FakeExecutor(futures=[FakeFuture(exc=BrokenProcessPool())])
-        return FakeExecutor(futures=[FakeFuture(result=OK_RESULT)])
-
-    executor = make_executor(factory)
-
-    with pytest.raises(MaudeWorkerCrashedError):
-        executor.diagnostics("broken.maude")
-    assert executor.diagnostics("hello.maude") == OK_RESULT
-
-
-def test_start_warms_up_one_ping_per_worker() -> None:
-    fake = FakeExecutor()
-    executor = make_executor(lambda: fake, settings=Settings(maude_workers=2))
+def test_start_pings_one_process_per_worker() -> None:
+    runner = FakeRunner(result=None)
+    executor, _ = make_executor(runner, settings=Settings(maude_workers=3))
 
     executor.start(60)
 
-    assert len(fake.submit_calls) == 2
-    assert all(fn is ping for fn, _ in fake.submit_calls)
+    assert [call[0] for call in runner.calls] == ["ping", "ping", "ping"]
+    assert all(call[1] is None for call in runner.calls)
+    assert all(call[3] == {"phase": "init"} for call in runner.calls)
+    assert all(0 < call[2] <= 60 for call in runner.calls)
+    assert runner.kill_count == 0
 
 
-def test_start_init_failure_raises_maude_init_error() -> None:
-    calls = {"n": 0}
-    failed = FakeExecutor(futures=[FakeFuture(exc=BrokenProcessPool())])
+def test_start_without_a_budget_does_not_spawn_a_ping() -> None:
+    runner = FakeRunner(result=None)
+    executor, _ = make_executor(runner, settings=Settings(maude_workers=2))
 
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return failed
+    with pytest.raises(MaudeInitError):
+        executor.start(0)
 
-    executor = make_executor(factory)
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MaudeInitError(remote_traceback="remote tb"), MaudeWorkerCrashedError(), MaudeWorkerTimeoutError()],
+)
+def test_start_failure_raises_init_error_and_kills_the_runner(error: BaseException) -> None:
+    runner = FakeRunner(exc=error)
+    executor, _ = make_executor(runner, settings=Settings(maude_workers=2))
+
+    with pytest.raises(MaudeInitError) as exc_info:
+        executor.start(60)
+
+    assert exc_info.value.__cause__ is error
+    assert exc_info.value.context["phase"] == "init"
+    assert runner.kill_count == 1
+
+
+def test_start_failure_discards_the_runner_for_a_lazy_retry() -> None:
+    failed = FakeRunner(exc=MaudeInitError())
+    healthy = FakeRunner(result=OK_RESULT)
+    runners = [failed, healthy]
+
+    def factory() -> FakeRunner:
+        return runners.pop(0)
+
+    executor, _ = make_executor(factory=factory, settings=Settings(maude_workers=1))
 
     with pytest.raises(MaudeInitError):
         executor.start(60)
-    # The failed pool is discarded and killed, not eagerly replaced with a doomed worker.
-    assert calls["n"] == 1
-    assert failed.killed
+
+    assert executor.diagnostics("hello.maude") == OK_RESULT
+    assert healthy.calls[0][0] == "diagnostics"
 
 
-def test_start_timeout_raises_maude_init_error() -> None:
-    executor = make_executor(lambda: FakeExecutor(futures=[FakeFuture(exc=TimeoutError())]))
+def test_start_after_shutdown_builds_a_fresh_runner() -> None:
+    created: list[FakeRunner] = []
 
-    with pytest.raises(MaudeInitError):
-        executor.start(60)
+    def factory() -> FakeRunner:
+        runner = FakeRunner(result=None)
+        created.append(runner)
+        return runner
+
+    executor, _ = make_executor(factory=factory, settings=Settings(maude_workers=1))
+
+    executor.start(60)
+    executor.shutdown()
+    executor.start(60)
+
+    assert len(created) == 2
+    assert created[0].kill_count >= 1
+    assert [call[0] for call in created[1].calls] == ["ping"]
 
 
 def test_shutdown_is_idempotent() -> None:
-    fake = FakeExecutor()
-    executor = make_executor(lambda: fake)
+    runner = FakeRunner(result=None)
+    executor, _ = make_executor(runner)
 
     executor.start(60)
     executor.shutdown()
     executor.shutdown()
 
-    assert fake.killed
-
-
-def test_concurrent_crash_detection_replaces_exactly_once() -> None:
-    calls = {"n": 0}
-    broken = FakeExecutor(futures=[FakeFuture(exc=BrokenProcessPool()), FakeFuture(exc=BrokenProcessPool())])
-    healthy = FakeExecutor(futures=[FakeFuture(result=OK_RESULT) for _ in range(10)])
-
-    def factory() -> FakeExecutor:
-        calls["n"] += 1
-        return broken if calls["n"] == 1 else healthy
-
-    executor = make_executor(factory)
-    barrier = threading.Barrier(2)
-    outcomes: list[object] = []
-
-    def run() -> None:
-        barrier.wait()
-        try:
-            executor.diagnostics("hello.maude")
-            outcomes.append(OK_RESULT)
-        except MaudeWorkerError as exc:
-            outcomes.append(exc)
-
-    threads = [threading.Thread(target=run) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert calls["n"] == 2  # one initial executor + exactly one replacement
-    assert len(outcomes) == 2
+    assert runner.kill_count >= 1
 
 
 def test_get_maude_executor_returns_singleton() -> None:

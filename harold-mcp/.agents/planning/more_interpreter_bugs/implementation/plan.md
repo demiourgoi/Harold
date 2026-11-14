@@ -4,7 +4,7 @@
 
 - [x] Step 1 — Error model, formatter, and rich tool errors
 - [x] Step 2 — One-shot IPC transport and process runner
-- [ ] Step 3 — Replace the pool executor with per-call processes
+- [x] Step 3 — Replace the pool executor with per-call processes
 - [ ] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
 - [ ] Step 5 — Diagnostics end-to-end and error parity
 - [ ] Step 6 — Documentation and final validation
@@ -359,6 +359,59 @@ all call the new executor. The old pool tests are replaced, not kept alongside.
 **Demo.** `maude_run` and `maude_program_diagnostics` run end-to-end through the
 new executor on real fixtures; `start`/`shutdown` are clean; `make test-unit` and
 the focused integration tests pass.
+
+### Implementation notes (Step 3)
+
+Implemented as planned. Deviations and additions, with their rationale:
+
+- `worker.ping` was removed as well: `transport._dispatch` initializes Maude and
+  returns `None` for the ping operation, so the no-op worker function was dead code
+  (the plan named only `sleep`, `rendezvous_pid` and `_crash`).
+- `start()` discards a failed runner (`_runner = None`) after killing it, so a later
+  call retries lazily; the plan only required killing it, but this preserves the old
+  “discard the failed pool” behavior and makes a start failure recoverable.
+- `_run_operation` checks the remaining budget after acquiring the semaphore and
+  raises a timeout before spawning when it is exhausted, instead of handing a
+  zero/negative budget to the runner (which would spawn a doomed child).
+- `_run_operation` returns `Any` internally and the public `diagnostics`/
+  `run_session` methods `cast` to their TypedDicts. Making the helper generic would
+  need a second `type: ignore[type-var]` (the runner already carries one because `T`
+  appears only in its return type).
+- Worker exceptions now cross the IPC boundary as `MaudeWorkerRemoteError` with the
+  remote type/message/traceback preserved (design §5.5). The session integration
+  test for an invalid `path_mode` was updated from a raw `ValueError` to that typed
+  error; this is the intended contract change, not a regression.
+- The integration crash test now injects a crash-target runner into an executor and
+  pairs it with a healthy executor (per-call isolation means there is no shared pool
+  to recover), replacing the old `executor.submit(worker._crash)` recipe.
+- `test_maude_worker_integration.py` still builds a raw `ProcessPoolExecutor` for
+  worker-level (capture) coverage; Step 4 removes the remaining pool-specific test
+  code per the plan.
+- New/rewritten integration coverage: real `diagnostics` and `run_session` through
+  `MaudeExecutor`, and two concurrent calls proven to use distinct processes via an
+  injected rendezvous target (no sleeps as synchronization beyond the target's own
+  bounded polling).
+
+Tests: `tests/unit/test_maude_executor.py` rewritten around a fake `ProcessRunner`
+(delegation/context, lazy creation, admission timeout and serialization, all runner
+categories including spawn/init/remote/protocol, stray `CancelledError`, crash while
+closed, shutdown cancellation, start pings/failure/restart, shutdown idempotence).
+
+Validation: `make check` clean, `make test-unit` 380 passed,
+`make test-integration` 97 passed (all real-interpreter suites, parallel).
+
+Review feedback (`step-3-review.md`, verdict Ship) was attended:
+
+- **Should fix:** deleted the leftover `worker.ping` (the notes already claimed its
+  removal; nothing calls it because the transport handles the `ping` operation by
+  initializing Maude and returning `None`).
+- **Nice to have:** `start()`'s ping now checks the remaining shared budget and
+  raises a timeout instead of spawning a doomed child
+  (`test_start_without_a_budget_does_not_spawn_a_ping`); the post-admission budget
+  branch is pinned by
+  `test_exhausted_budget_after_admission_times_out_without_spawning`; and the
+  `Settings`/`_default_maude_workers` docstrings now describe the per-call-process
+  mechanism instead of `max_tasks_per_child=1`.
 
 ---
 

@@ -1,9 +1,9 @@
 """Integration tests for the bounded interpreter session (`maude.session.run_session`).
 
 Every call goes through `MaudeExecutor`, so these tests exercise the real spawned
-worker, interpreter initialization, file loading and the per-call hermeticity
-guarantee (`max_tasks_per_child=1`). The session engine supports the rewriting family
-and the `match`/`search` commands.
+child, interpreter initialization, file loading and the per-call hermeticity
+guarantee (one fresh process per call). The session engine supports the rewriting
+family and the `match`/`search` commands.
 """
 
 from collections.abc import Iterator
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from harold_mcp.maude import MaudeExecutor
+from harold_mcp.maude import MaudeExecutor, MaudeWorkerRemoteError
 from harold_mcp.maude.capture import TRUNCATION_MARKER
 from harold_mcp.maude.session import SessionRequest, SessionResult, StepOutcomeDict, StepRequest
 from harold_mcp.settings import Settings
@@ -684,5 +684,12 @@ def test_search_path_mode_none_returns_null_paths(executor: MaudeExecutor) -> No
 
 def test_search_path_invalid_mode_is_a_programming_error(executor: MaudeExecutor) -> None:
     step = _step("search", pattern="n(N)", subject="n(0)", depth=2, search_type="one-step", path_mode="bogus")
-    with pytest.raises(ValueError, match="path_mode"):
+
+    # The error crosses the process boundary as a remote exception: the type, message
+    # and worker traceback are preserved in the typed error (no raw ValueError here).
+    with pytest.raises(MaudeWorkerRemoteError, match="path_mode") as exc_info:
         _ = _run(executor, _request("search_path.maude", "CHAIN", [step]))
+
+    assert exc_info.value.remote_type == "ValueError"
+    assert "path_mode" in exc_info.value.remote_message
+    assert "Traceback (most recent call last):" in (exc_info.value.remote_traceback or "")

@@ -11,7 +11,7 @@ from harold_mcp.errors import DEFAULT_ERROR_DETAIL_MAX_CHARS
 def _default_maude_workers() -> int:
     """Half the logical CPUs, capped at 3 (enough for single-agent IDE use).
 
-    Workers are transient (each task runs in a fresh process), so this bounds how
+    Workers are transient (each call runs in a fresh process), so this bounds how
     many interpreters may spawn concurrently (≈100 MB each), not standing memory.
     `os.cpu_count()` may return `None`; the floor of 1 keeps the `gt=0` invariant.
     """
@@ -21,9 +21,10 @@ def _default_maude_workers() -> int:
 class Settings(BaseSettings):
     """Harold configuration (flat; field prefixes group settings by subsystem).
 
-    - `HAROLD_MAUDE_WORKERS`: number of Maude worker processes. Default: half the
-      logical CPUs, capped at 3. Workers are transient (`max_tasks_per_child=1`),
-      so this caps concurrent per-call interpreters instead of warm workers.
+    - `HAROLD_MAUDE_WORKERS`: maximum number of concurrent Maude interpreter
+      processes. Default: half the logical CPUs, capped at 3. Every call runs in a
+      fresh per-call process, so this caps concurrent interpreters rather than warm
+      workers.
     - `HAROLD_DIAGNOSTICS_TIMEOUT_SECS`: seconds to wait for each diagnostics call
       before failing it (default `60`); also the worker subsystem's default timeout
       for its own calls (the fail-fast initialization pings). Renamed from
