@@ -664,6 +664,25 @@ Validation (full gate): `make check` clean (lockfile, ruff, mypy, basedpyright,
 deptry); `make test` 493 passed in 55.57 s (388 unit + 105 integration, real
 interpreter); `make docs-test` built the strict MkDocs site without warnings.
 
+Review feedback (`step-6-review.md`) was attended: the three stale knowledge-base
+routes to `_exception_detail` (the `maude_run` failure bullet in `components.md` and
+two `index.md` routing entries) now point at `harold_mcp.errors.format_error_report`
+and describe the current capped/uncapped split, and the README's
+`maude_program_diagnostics` entry documents its per-provider failure report (the
+review's optional finding). The full gate was re-run after these documentation edits
+and stayed green.
+
+Review 2 (`step-6-review-2.md`) was attended as well: the index's ToC rows now
+describe the per-call architecture (`architecture.md`, `components.md` with `errors`
+and the runner/transport/worker-errors modules, and the 2026-11-14 `review_notes.md`
+refresh), the Relationships line lists the new `maude/` modules, and the
+touched Example-query entry follows that section's plain quoted style instead of
+bold. Documentation-only edits; `make check` and `make test-unit` were re-run green.
+
+Review 3 (`step-6-review-3.md`) corrected an over-application of that style fix:
+`index.md:13` lives in the bold “How to use this knowledge base” section and keeps
+its bold style; only the Example-query entry was de-bolded.
+
 ---
 
 ## Completion criteria

@@ -120,11 +120,14 @@
     `module_found=False` and theory module types; adapts load warnings/output and the
     executed step outcomes, including `PathDict` → `MaudeSearchPath`). `timeout_secs`
     overrides the interpreter setting.
-  - Unexpected failures: a non-`MaudeWorkerError` propagates as `MaudeRunError` whose text
-    includes `_exception_detail(exc)` (`"<Type>: <message>"`, or just `"<Type>"` when the
-    message is empty) with the original exception chained. The tool logs the traceback via
-    its module logger, together with the resolved path and module, because MCP clients see
-    only the error text; this makes non-deterministic worker failures diagnosable.
+  - Whole-call failures: a `MaudeWorkerError` or an unexpected non-worker exception
+    becomes a `MaudeRunError` whose text comes from
+    `harold_mcp.errors.format_error_report` (a stable category, the merged context, the
+    cause chain and the originating traceback), capped at `error_detail_max_chars`; the
+    tool logs the uncapped report via its module logger. Input-validation failures keep
+    their specific message plus the same context line (`format_context`). The resolved
+    path and module are in the context because MCP clients see only the error text;
+    this makes non-deterministic worker failures diagnosable.
   - Registered with the same read-only annotation profile and
     `tags=harold_tags(INTERPRETER)`. The description documents commands, threading, search
     paths, load warnings, per-step failure semantics, output limits and the timeout

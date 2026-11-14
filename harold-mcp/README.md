@@ -39,7 +39,9 @@ Harold MCP tools:
   carried over from previous calls. The interpreter checks the whole load — the file
   plus anything it pulls in with `load`/`in` — and problems found in a dependency are
   reported as whole-file diagnostics whose message names the dependency file and
-  suggests diagnosing it on its own.
+  suggests diagnosing it on its own. If a diagnostic provider fails, the call fails
+  with one section per failing provider — category, context, cause chain and a bounded
+  traceback — and the full detail is logged server-side.
 
 - **`maude_run(path, module, steps)`** — runs a bounded Maude interpreter session: loads
   one file into a fresh interpreter, selects a module, and executes an ordered list of

@@ -10,7 +10,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **How do I invoke/run it? What are the entry points?** → `interfaces.md`, `workflows.md`
 - **How do I run a Maude program and interpret step results?** → `interfaces.md` → `maude_run`; `workflows.md` → `maude_run` flow and search-path reconstruction; `components.md` → `server/tools/interpreter.py` and `maude/session.py`
 - **Why is captured Maude output complete, and how are stdout/stderr flushed?** → `components.md` → `harold_mcp.maude.capture`; `architecture.md` → decision 14; `workflows.md` → Hermetic calls (output capture); rationale in `.agents/planning/Unexpected_failure_during_search/`
-- **Why does an unexpected `maude_run` failure show its exception type and message?** → `workflows.md` → Failure semantics; `components.md` → `tools/interpreter.py` (`_exception_detail`, traceback logging); `components.md` → planning record `Unexpected_failure_during_search/`
+- **Why does a failed `maude_run` call show a categorized, bounded error report?** → `workflows.md` → Failure semantics; `components.md` → `harold_mcp.errors` (`format_error_report`) and `tools/interpreter.py` (uncapped log, capped client text); planning records `Unexpected_failure_during_search/` and `more_interpreter_bugs/`
 - **What stack/dependencies are in play, and what are their constraints?** → `dependencies.md`, `codebase_info.md`
 - **How does the Maude interpreter find its prelude, and what does `MAUDE_LIB` change?** → `maude-lib.md`
 - **What data structures/types exist?** → `data_models.md`
@@ -26,22 +26,22 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 | File | Content | Consult when… |
 | --- | --- | --- |
 | [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, package layout, dependency management, the two console scripts and the two MCP tools | you need basic facts about the project (language, versions, tooling) |
-| [`architecture.md`](architecture.md) | Two-process architecture (server + Maude worker, one task per process), provider seam and aggregation, heuristic linter placement, bounded session engine, shared capture (including the C/C++ stdio flush), worker-side search-path reconstruction, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
-| [`components.md`](components.md) | Per-module responsibilities: `main`, `settings`, the `server` package (incl. the tag vocabulary `server/tags.py`, both tools and `maude_run`'s unexpected-failure detail), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, interpreter provider, capture + stdio flush, session engine incl. search-path reconstruction, worker), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
+| [`architecture.md`](architecture.md) | Two-process architecture (MCP server + one per-call Maude child process), the process runner and one-shot IPC transport, provider seam and aggregation, heuristic linter placement, bounded session engine, shared capture (including the C/C++ stdio flush), worker-side search-path reconstruction, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
+| [`components.md`](components.md) | Per-module responsibilities: `main`, `settings`, `errors` (the bounded error-report formatter), the `server` package (incl. the tag vocabulary `server/tags.py` and both tools with their whole-call error reports), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, runner, transport, interpreter provider, capture + stdio flush, session engine incl. search-path reconstruction, worker, worker errors), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
 | [`interfaces.md`](interfaces.md) | MCP tool surface (`maude_program_diagnostics` and `maude_run`, including steps/outcomes, search-path modes and error semantics), both console scripts, env-var config, internal Python API (seam protocol, rules registry, `MaudeExecutor`, session protocol, worker ops), import-time side effects | you need the public surface or must call/register a tool |
 | [`data_models.md`](data_models.md) | Wire result models (diagnostics and interpreter, incl. search-path models), step input union, provider-seam value types, linter-internal types, worker/session protocol TypedDicts, the error hierarchies, framework types, typing conventions | you need the type landscape or must add a model |
 | [`workflows.md`](workflows.md) | Dev loop (incl. the test splits and `make review`), server lifecycle, hermetic per-call semantics, diagnostics and `maude_run` execution flows (incl. search-path reconstruction), failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
 | [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role and the Maude pin/prelude snapshot link) | you plan to add, upgrade, or reason about a dependency |
 | [`maude-lib.md`](maude-lib.md) | The third-party `maude` wheel internals: bundle layout, how `maude.init` locates `prelude.maude` (`MAUDE_LIB` → `libmaude.so` directory → cwd), prelude availability in workers for both tools, and the `MAUDE_LIB` version-matching caveat | you reason about the interpreter, prelude loading, or `MAUDE_LIB` |
-| [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations, including the two-part 2026-11-12 refresh (capture flush + failure surfacing; search paths), the open original search-failure investigation, and stale planning summaries | you hit an inconsistency or want to improve the docs |
+| [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations, including the 2026-11-14 refresh (isolated per-call workers + rich errors), the 2026-11-12 refresh (capture flush + failure surfacing; search paths), the open original search-failure investigation, and stale planning summaries | you hit an inconsistency or want to improve the docs |
 
 ## Relationships between documents
 
 - `architecture.md` (structure) ↔ `components.md` (responsibilities) ↔ `interfaces.md` (surfaces)
 - `codebase_info.md` (facts) ↔ `dependencies.md` (constraints) ↔ `workflows.md` (usage)
 - `data_models.md` documents the types defined across `server/tools/diagnostics.py` (wire),
-  `diagnostics/` (seam), `heuristic/` (linter internals) and `maude/` (executor + worker),
-  whose behavior lives in `components.md`
+  `diagnostics/` (seam), `heuristic/` (linter internals) and `maude/` (executor, runner,
+  transport, worker, session, worker errors), whose behavior lives in `components.md`
 - `review_notes.md` cross-references every file it flags as incomplete.
 
 ## Example queries
@@ -69,7 +69,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "How do I add a worker operation?" → `components.md` → `harold_mcp.maude.transport` (`_dispatch` + request validation) / `maude/worker.py` / `maude/session.py`, plus a typed `MaudeExecutor` method that calls `_run_operation`.
 - "How do I get the rewrite path of a search solution?" → `interfaces.md` → `maude_run` (`search.path` default `labels`); `data_models.md` → `MaudeSearchPath`; `workflows.md` → search-path reconstruction.
 - "Why was the last block of a loaded file missing from the captured output?" → `components.md` → `harold_mcp.maude.capture` (`_flush_stdio`); `architecture.md` → decision 14; `.agents/planning/Unexpected_failure_during_search/research/load-output-truncation.md` (bounded search leaves libmaude's buffer unflushed).
-- "Why does a failed `maude_run` call show an exception type and message?" → `workflows.md` → Failure semantics; `components.md` → `tools/interpreter.py` (`_exception_detail`; the traceback is logged server-side).
+- "Why is an unexpected non-worker failure still shown in the error text?" → `workflows.md` → Failure semantics; `components.md` → `harold_mcp.errors` (`format_error_report`); `tools/interpreter.py` logs the uncapped traceback server-side.
 - "Is the `Unexpected_failure_during_search` record still in progress?" → `review_notes.md` → remaining issue 12; `components.md` → Planning docs (the cycle is tracked and its two side issues are fixed; the original failure is still open).
 - "Why is my search path `too-large`, and how do I get more?" → `interfaces.md` → `HAROLD_INTERPRETER_MAX_PATH_STEPS` / `..._MAX_RESULT_LENGTH`; `workflows.md` → failure semantics (the outcome's `message` names the setting).
 - "Why doesn't Harold use Maude's `show path`?" → `architecture.md` → decision 15; `.agents/planning/maude_eval_search_path/research/maude-bindings-search-path.md` (state numbers only live inside one hermetic call).
