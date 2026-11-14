@@ -2,6 +2,24 @@
 
 ## [0.0.6]
 
+New `harold-mcp setup` command, and the `maude-manual` skill now ships inside the
+PyPI artifacts: the skill is copied into the package tree at build time
+(`make skills`, run by `make build` and the release workflow), and `setup`
+installs or refreshes it for coding agents.
+
+### Added
+
+- **`harold-mcp setup` command** — installs the bundled `maude-manual` skill
+  (the Maude 3.5.1 manual as an agent skill) into `./.agents/skills` by default,
+  `~/.agents/skills` with `-g`/`--global`, or any directory with `--directory`,
+  following the standard agent skills locations. Re-running it after
+  `uvx --refresh` refreshes the installed skill (a full re-copy) without touching
+  anything else in the directory.
+- **Bundled skill in the build artifacts** — `make skills` copies the monorepo's
+  `skills/maude-manual` into `src/harold_mcp/skills` (git-ignored, re-included
+  via hatchling `artifacts`), so the wheel and sdist contain the skill and the
+  released `setup` always matches the installed server version.
+
 ## [0.0.5]
 
 New `maude_run` tool: bounded Maude interpreter sessions — load one file, select a module,
