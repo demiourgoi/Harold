@@ -2,9 +2,10 @@
 
 <!-- tags: review, consistency, completeness, gaps -->
 
-Findings from the consistency and completeness review. The 2026-11-14 refresh covers the
+Findings from the consistency and completeness review. The 2026-11-14 refresh has two
+parts: the bundled-skill installer (build-time packaging plus `harold-mcp setup`) and the
 per-call isolated worker architecture (one `spawn` process per call, one-shot JSON
-transport, semaphore admission, shutdown cancellation) and the rich bounded error reports;
+transport, semaphore admission, shutdown cancellation) with the rich bounded error reports;
 the 2026-11-12 refresh has two parts: capture completeness plus failure surfacing (the
 stdio flush in `capture_streams` and detailed `maude_run` unexpected-failure messages), and
 search paths in `maude_run` (`SearchStep.path`, worker `path_mode`/`max_path_steps`,
@@ -16,6 +17,36 @@ and docs); the 2026-10-14 refresh covers the provider-registry FastMCP dependenc
 interpreters, the new workers default, dependency-warning attribution, path
 absolutization, and the test-suite rework); the 2026-09-29 refresh covered the
 heuristic-linter port. Older resolved issues are kept for the record.
+
+## Changes absorbed into this refresh (2026-11-14, bundled-skill installer)
+
+- **Packaging.** `make skills` copies the monorepo's `skills/maude-manual` into the
+  git-ignored `src/harold_mcp/skills/maude-manual`; `.gitignore` excludes the copy;
+  `pyproject.toml` adds `artifacts` to both the wheel and sdist targets (hatchling's sdist
+  respects `.gitignore`, and `uv build` builds the wheel from the sdist, so the ignored
+  copy must be re-included explicitly); `make build` depends on `clean-build skills`; and
+  the release workflow's publish job now runs `make skills && uv build` (verified in
+  `../.github/workflows/on-release-main.yml`).
+- **CLI and installer.** New `harold_mcp/skill_install.py` (`SKILL_NAME`, `skill_source`,
+  `install_skill`) and `main.py setup` (`--directory`, `-g/--global`; prints the installed
+  path and the package version). The installer removes an existing destination before
+  copying (full refresh, siblings untouched) and raises a clear `FileNotFoundError` naming
+  `make skills` when the artifact lacks the copy.
+- **Version and docs.** `pyproject.toml` is `0.1.0.dev0` — the first **MVP** release
+  line (diagnostics + interpreter sessions + bundled skill) — with an open `[0.1.0]`
+  changelog section recording the delta since 0.0.5; the README installation/update
+  sections now revolve around `setup` and the MCP client JSON blocks were replaced by
+  links; the `skill-installer/` PDD record documents requirements, the release-packaging
+  research, design, three review rounds and the plan.
+- **Tests.** `tests/unit/test_skill_install.py` covers fresh install, refresh (stale files
+  dropped), stray-file replacement, sibling safety, the missing-source message, the
+  packaged-source contract (skips without `make skills`) and both CLI destinations.
+- **Docs consistency.** This refresh updates `codebase_info.md`, `architecture.md`,
+  `components.md`, `interfaces.md`, `workflows.md`, `dependencies.md`, `index.md` and
+  `AGENTS.md`; `data_models.md` and `maude-lib.md` are unchanged (the installer adds no
+  models and does not touch the interpreter or prelude). The `components.md` list of
+  mkdocstrings modules was corrected to match `docs/modules.md` (it was missing `errors`,
+  `runner`, `transport` and `worker_errors`).
 
 ## Changes absorbed into this refresh (2026-11-14, isolated per-call workers and rich errors)
 
@@ -330,11 +361,12 @@ heuristic-linter port. Older resolved issues are kept for the record.
 
 ## Completeness gaps
 
-1. **The documentation RAG tool does not exist yet.** Both in-scope tools
-   (`maude_program_diagnostics`, `maude_run`) are implemented. The planned vector index is
-   not; its tag constant (`DOCS`) is defined in `server/tags.py` and currently unused. The
-   `port-repair.py/` planning record sketches a possible repair tool but has no design or
-   code.
+1. **The documentation RAG tool does not exist yet.** Both in-scope MCP tools
+   (`maude_program_diagnostics`, `maude_run`) are implemented, and the bundled
+   `maude-manual` skill ships with the 0.1.0 MVP; the planned Maude-documentation vector
+   index is not. Its tag constant (`DOCS`) is defined in `server/tags.py` and currently
+   unused. The `port-repair.py/` planning record sketches a possible repair tool but has
+   no design or code.
 2. **Timeout integration coverage.** Both timeout mappings are unit-tested and now also
    exercised end to end: a diagnostics timeout (sleeping runner target) and a real
    non-terminating `maude_run` rewrite with a healthy peer and a follow-up call.
@@ -344,15 +376,24 @@ heuristic-linter port. Older resolved issues are kept for the record.
    Maude warning messages are still not exercised (none observed). The capture helper now
    handles both streams and flushes C/C++ stdio before restoring the fds; the bounded-search
    regression pins the previously lost tail, and diagnostics intentionally ignores stdout.
-4. **The server CLI wiring is untested.** `main.py` (cyclopts app, `serve` subcommand,
-   default command) has no dedicated tests; the `__main__` guard is `# pragma: no cover`.
-   The snapshot CLI, by contrast, has in-process tests in
-   `tests/unit/test_prelude_extract_cli.py`.
+4. **The server CLI wiring is still untested.** `main.py`'s default command and `serve`
+   subcommand have no dedicated tests; the `__main__` guard is `# pragma: no cover`. The
+   `setup` command is covered in `tests/unit/test_skill_install.py`, and the snapshot CLI
+   in `tests/unit/test_prelude_extract_cli.py`.
 5. **No MCP output-schema assertion for `maude_run`.** The stdio smoke test asserts the
    interpreter tool's input schema, description and annotations, but not its output schema
    (the search-path field descriptions) or the search-path sentences in the description;
    those models are covered by unit and integration tests. Worth extending when the smoke
    test is next touched.
+6. **`docs/modules.md` omits the installer (and other thin modules).** It renders no
+   `::: harold_mcp.skill_install` entry (nor `main`, `resources` or `logging`), so the
+   mkdocstrings site does not document the `setup` API; `make docs-test` passes because
+   the omission is not an error. Add the entry if the installer API should be published.
+7. **No automated wheel-content test for the bundled skill.** The `skill-installer`
+   design deliberately avoids a slow build test, so `test_packaged_skill_source` skips
+   when `src/harold_mcp/skills` is absent. The release workflow (`make skills && uv build`)
+   and a manual `make skills && uv build` are the current safeguards against shipping an
+   artifact without the skill.
 
 ## Language-support limitations
 
@@ -371,7 +412,14 @@ heuristic-linter port. Older resolved issues are kept for the record.
 2. Add real tests as tools are implemented, and keep `docs/modules.md` current.
 3. Re-run the codebase-summary process after significant architecture changes so this
    knowledge base does not drift from the code.
-4. The `[0.0.5]` changelog now records `maude_run`, search paths, the shared capture layer,
-   the capture flush and diagnosable unexpected failures; review those notes before
-   tagging. The `Unexpected_failure_during_search/` investigation is tracked and its two
-   side issues are fixed; archive it or retry the original call on its host to close it.
+4. The `[0.1.0]` changelog records the `setup` command and bundled-skill packaging for the
+   first MVP release; `[0.0.5]` records `maude_run`, search paths, the shared capture
+   layer, the capture flush and diagnosable unexpected failures. Consider adding an MVP
+   scope sentence to the `[0.1.0]` changelog intro (diagnostics + interpreter + skill),
+   and review both sections before tagging. The release workflow builds with
+   `make skills && uv build`, so the artifacts include the skill; a manual pre-release
+   check is `make build` (it runs `skills` first). The
+   `Unexpected_failure_during_search/` investigation is tracked and its two side issues
+   are fixed; archive it or retry the original call on its host to close it.
+5. If the installer API should be published, add `::: harold_mcp.skill_install` to
+   `docs/modules.md`; otherwise leave the thin CLI/packaging modules off the API site.

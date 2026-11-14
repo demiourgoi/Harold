@@ -6,7 +6,7 @@
 
 | Package | Constraint | Purpose |
 | --- | --- | --- |
-| `cyclopts` | `>=4.23.0` | CLI framework for both console scripts: `harold-mcp` (`main.py`) and `harold-update-prelude-sorts` (`heuristic/prelude_extract.py`) |
+| `cyclopts` | `>=4.23.0` | CLI framework for the `harold-mcp` app (`main.py`: default/`serve`/`setup`) and the `harold-update-prelude-sorts` console script (`heuristic/prelude_extract.py`) |
 | `fastmcp` | `>=3.4.7` | Framework for building the MCP server (server instance, `@mcp.tool`, `@lifespan`, `Depends`, logging utilities) |
 | `maude` | `==1.6.0` (pinned) | Python bindings for the Maude system — imported only inside the worker process |
 | `mcp` | `>=1.29.0` | Official MCP SDK — typed primitives (`mcp.types.ToolAnnotations`, `Icon`) and transport support |
@@ -17,6 +17,8 @@ The diagnostics seam, the heuristic linter and the interpreter-session engine ad
 runtime dependencies: they are stdlib-only (`dataclasses`, `typing`, `functools`, `re`,
 `unicodedata`, `hashlib`, `importlib`, `datetime`, `collections`, `contextlib`, `ctypes`,
 `os`, `sys`, `tempfile`), which keeps the server process independent of the worker stack.
+The bundled-skill installer (`harold_mcp.skill_install`) is also stdlib-only
+(`importlib.resources`, `pathlib`, `shutil`).
 
 ## Dev group
 
@@ -34,6 +36,10 @@ runtime dependencies: they are stdlib-only (`dataclasses`, `typing`, `functools`
 ## Build
 
 - **Backend**: hatchling; wheel packages `src/harold_mcp`.
+- **Bundled skill**: the wheel and sdist targets set
+  `artifacts = ["src/harold_mcp/skills"]`, re-including the git-ignored copy that
+  `make skills` creates from the monorepo's `skills/maude-manual`. There is no Python
+  dependency on the skill; it is data shipped in the artifact.
 
 ## Lockfile
 
@@ -60,6 +66,10 @@ runtime dependencies: they are stdlib-only (`dataclasses`, `typing`, `functools`
   `recv_bytes(maxlength=...)` for the one-shot exchange (hermetic per-call interpreters);
   Python 3.14 features in use: `Process.kill()`/`join()`/`close()`, PEP 758
   `except A, B:` syntax, and PEP 695 generics (`process.ProcessRunner.run[T]`).
+- The bundled skill makes the build depend on the monorepo layout: `make skills` reads
+  `../skills/maude-manual` relative to this package directory, and the release workflow
+  checks out the full monorepo for that reason. `src/harold_mcp/skills/` is generated and
+  git-ignored; never commit it or edit it in place.
 
 ## Related documents
 

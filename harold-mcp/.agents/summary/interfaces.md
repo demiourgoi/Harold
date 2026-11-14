@@ -149,6 +149,15 @@ sequenceDiagram
 - **`harold-mcp`** → `harold_mcp.main:app` (declared in `pyproject.toml`
   `[project.scripts]`) — a **cyclopts** CLI. The default command and the `serve`
   subcommand both run the MCP server over stdio; `--help`/`--version` come from cyclopts.
+- **`harold-mcp setup [--directory PATH] [-g/--global]`** — installs the bundled
+  `maude-manual` agent skill via `harold_mcp.skill_install.install_skill`. The default
+  destination is `./.agents/skills/maude-manual`; `-g`/`--global` selects
+  `~/.agents/skills/maude-manual` (and makes `--directory` irrelevant); `--directory PATH`
+  installs under any other base. An existing installation is removed first, so re-running
+  `setup` after `uvx --refresh` is a full refresh that never leaves files from an older
+  skill and never touches siblings. It prints the installed path and the package version.
+  A `FileNotFoundError` naming `make skills` means the artifact was built without the
+  bundled copy.
 - **`harold-update-prelude-sorts`** → `harold_mcp.heuristic.prelude_extract:app` — the
   maintenance CLI for the bundled prelude sort snapshot:
   `harold-update-prelude-sorts <prelude.maude> [--output PATH] [--check]
@@ -229,6 +238,11 @@ Invalid values fail fast at import (pydantic validation).
 - `harold_mcp.errors` — `format_error_report(exc, *, context, max_chars, category=None)`,
   `format_context`, `format_exception_text`, `DEFAULT_ERROR_DETAIL_MAX_CHARS`,
   `TRUNCATION_MARKER`; the shared bounded error renderer (see `components.md`).
+- `harold_mcp.skill_install` — the stdlib-only bundled-skill installer:
+  `SKILL_NAME` (`"maude-manual"`), `skill_source() -> Path` (the packaged copy, resolved
+  through `importlib.resources.files("harold_mcp")`), and
+  `install_skill(destination_base, source=None) -> Path` (remove-then-copy refresh; the
+  `source` argument exists for tests). Used by `main.setup`.
 - `harold_mcp.maude.MaudeExecutor` — the client for per-call interpreters:
   - `start(timeout)` / `shutdown()` — runner lifecycle; `start` runs the fail-fast init
     pings under one deadline (and discards a failed runner), `shutdown` is idempotent.
@@ -293,6 +307,11 @@ process (`worker.py`, `session.py` and `transport.py` import it lazily), and the
 created in the lifespan (startup), not at import — and each call then runs in its own fresh
 child process. The heuristic linter and the prelude snapshot are pure data and text
 processing — importing them never touches the interpreter.
+
+Importing `harold_mcp.main` also imports `harold_mcp.skill_install`, which is stdlib-only;
+the packaged skill is not read or copied until `setup` runs. The `harold_mcp.skills`
+directory is data, not an importable module, and may be absent in a plain checkout (it is
+created by `make skills`).
 
 ## Related documents
 

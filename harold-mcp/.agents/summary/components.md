@@ -6,13 +6,36 @@
 
 ### `harold_mcp.main`
 
-- **Responsibility**: CLI/stdio entry point for the MCP server, built with **cyclopts**.
+- **Responsibility**: CLI/stdio entry point for the MCP server and the bundled-skill
+  installer, built with **cyclopts**.
 - `app = App(name="harold-mcp", help=...)` with a `serve` subcommand; both the app default
   and the `serve` default run `run()`, which delegates to `harold_mcp.server.run`. cyclopts
   provides `--help`/`--version`.
+- `setup` subcommand — installs the bundled `maude-manual` skill via
+  `skill_install.install_skill`: `--directory` defaults to `./.agents/skills`, `-g`/`--global`
+  selects `~/.agents/skills` (the directory option is ignored), and it prints the installed
+  path plus the `harold-mcp` package version from `importlib.metadata`. Errors propagate as
+  normal CLI exceptions (cyclopts prints and exits non-zero).
 - Exposed as the `harold-mcp` console script (`harold_mcp.main:app`). The
   `if __name__ == "__main__"` guard is required: the `spawn`-context worker re-imports the
   main module.
+
+### `harold_mcp.skill_install`
+
+- **Responsibility**: install the bundled `maude-manual` agent skill. Stdlib-only
+  (`importlib.resources`, `pathlib`, `shutil`); never imports FastMCP or `maude`.
+- `SKILL_NAME = "maude-manual"`; `skill_source() -> Path` locates
+  `harold_mcp/skills/maude-manual` through `importlib.resources.files("harold_mcp")`.
+- `install_skill(destination_base, source=None) -> Path` — copies the skill tree to
+  `destination_base / SKILL_NAME` and returns it. It fails with a `FileNotFoundError`
+  naming the expected path and `make skills` when the artifact was built without the
+  copy; otherwise it creates the base directory, removes an existing destination first
+  (`shutil.rmtree` for a directory, `Path.unlink` for a stray file), then `copytree`s.
+  Removing first makes a re-run a full refresh (files dropped from a newer skill never
+  survive) and leaves every sibling in the base directory untouched.
+- The skill content is not committed: `make skills` copies the monorepo's
+  `skills/maude-manual` into `src/harold_mcp/skills/` (git-ignored), and hatchling
+  `artifacts` re-includes it in the wheel and sdist. `source=` exists for tests.
 
 ### `harold_mcp.settings`
 
@@ -453,6 +476,12 @@ replacing it (findings are heuristics and may be false positives).
   - `test_prelude_extract_cli.py` — the cyclopts app in-process: writes a loadable
     snapshot, explicit `--maude-version`, byte-stable regeneration, `--check` pass/fail,
     junk-extraction refusal, missing prelude.
+  - `test_skill_install.py` — `install_skill` with an explicit source: fresh copy,
+    re-install drops stale files, a stray file at the destination is replaced, siblings
+    are untouched, a missing source raises with a `make skills` hint; the packaged-source
+    contract (`skill_source()` contains `SKILL.md`, skipped when `make skills` was not
+    run), and the CLI wiring for `setup --directory` and `setup -g` (monkeypatched
+    `Path.home` and installer).
 - `tests/integration/` (real interpreter; distinct basenames to avoid pytest module-name
   collisions):
   - `test_maude_worker_integration.py` — `load_diagnostics` shapes through
@@ -572,6 +601,11 @@ replacing it (findings are heuristics and may be false positives).
 - `more_interpreter_bugs/` — complete PDD cycle for per-call isolated workers: the
   reproduction record, the design and its reviews, and the implementation plan with
   per-step implementation notes and review records.
+- `skill-installer/` — complete PDD cycle for the bundled-skill `setup` command and its
+  packaging (implemented): `rough-idea.md`, `idea-honing.md`, `research/release-packaging.md`
+  (the hatchling `artifacts` finding), `design/detailed-design.md` plus design-review and
+  two code-review rounds, `implementation/plan.md`, and `summary.md` (its only follow-up,
+  this knowledge-base refresh, is done).
 - `sigsegv-under-load/` — SIGSEGV history that motivated the worker architecture:
   `issue.md` (the `maude` Python bindings) and `scala-issue.md` (root-cause analysis of
   SIGSEGV and throughput degradation in the Scala/Java Maude bindings — background
@@ -581,17 +615,20 @@ replacing it (findings are heuristics and may be false positives).
 
 - `docs/` — MkDocs sources; `docs/modules.md` renders `harold_mcp.server.server`,
   `harold_mcp.server.tags`, `harold_mcp.server.tools.diagnostics`,
-  `harold_mcp.server.tools.interpreter`, `harold_mcp.diagnostics.provider`,
-  `harold_mcp.diagnostics.aggregate`, `harold_mcp.heuristic.provider`,
-  `harold_mcp.heuristic.rules`, `harold_mcp.heuristic.lexical`,
-  `harold_mcp.heuristic.declarations`, `harold_mcp.heuristic.prelude_extract`,
-  `harold_mcp.heuristic.prelude_sorts`, `harold_mcp.maude.capture`,
-  `harold_mcp.maude.executor`, `harold_mcp.maude.provider`,
-  `harold_mcp.maude.session`, `harold_mcp.maude.worker`, `harold_mcp.settings` via
-  mkdocstrings.
-- Root-level docs: `README.md` (installation + MCP client config), `CONTRIBUTING.md`
-  (contribution workflow), `DEVELOPER_GUIDE.md` (dev environment, agent skills, prelude
-  snapshot maintenance, release process), `CHANGELOG.md` (release notes).
+  `harold_mcp.server.tools.interpreter`, `harold_mcp.errors`,
+  `harold_mcp.diagnostics.provider`, `harold_mcp.diagnostics.aggregate`,
+  `harold_mcp.heuristic.provider`, `harold_mcp.heuristic.rules`,
+  `harold_mcp.heuristic.lexical`, `harold_mcp.heuristic.declarations`,
+  `harold_mcp.heuristic.prelude_extract`, `harold_mcp.heuristic.prelude_sorts`,
+  `harold_mcp.maude.capture`, `harold_mcp.maude.executor`, `harold_mcp.maude.provider`,
+  `harold_mcp.maude.runner`, `harold_mcp.maude.session`, `harold_mcp.maude.transport`,
+  `harold_mcp.maude.worker`, `harold_mcp.maude.worker_errors`, `harold_mcp.settings` via
+  mkdocstrings. The thin CLI/packaging modules (`main`, `skill_install`, `resources`,
+  `logging`) are not on that page; see `review_notes.md` completeness gap 6.
+- Root-level docs: `README.md` (installation with `setup`, update, MCP client config and
+  the env-var table), `CONTRIBUTING.md` (contribution workflow), `DEVELOPER_GUIDE.md`
+  (dev environment, agent skills, prelude snapshot maintenance, release process),
+  `CHANGELOG.md` (release notes).
 
 ## Related documents
 

@@ -37,11 +37,19 @@ interpreter-session tool (`maude_run`, `.agents/planning/port-maude_eval.py/`) r
 same worker: its engine lives in `maude/session.py` and returns data (terms, bindings,
 solutions, per-step outcomes), not diagnostics.
 
+A third path bypasses the server and the worker entirely: the **bundled-skill installer**.
+`make skills` copies the monorepo's `skills/maude-manual` into the git-ignored
+`src/harold_mcp/skills/`, hatchling ships that copy inside the wheel and sdist, and
+`harold-mcp setup` (`harold_mcp.skill_install`) copies it into an agent skills directory.
+The installer is stdlib-only and never imports FastMCP or the `maude` bindings.
+
 ## Module dependency diagram
 
 ```mermaid
 graph TB
-    main[main.py<br>cyclopts: default + serve] --> serverpkg[server/__init__.py<br>mcp, run + tool registration]
+    main[main.py<br>cyclopts: default + serve + setup] --> serverpkg[server/__init__.py<br>mcp, run + tool registration]
+    main --> skillinstall[skill_install.py<br>bundled skill installer]
+    skillinstall --> skillsdir[skills/maude-manual<br>build-time copy, git-ignored]
     serverpkg --> serversrv[server/server.py<br>FastMCP + lifespan + signals]
     tools[server/tools/diagnostics.py<br>tool + wire models + adapter<br>+ provider registry DI]
     ertool[server/tools/interpreter.py<br>maude_run tool + wire models]
@@ -128,8 +136,10 @@ graph TB
    singleton — FastMCP nested dependency injection; the diagnostics tool module's
    `get_diagnostic_providers` nests one level deeper (providers → executor → settings),
    while `maude_run` receives the executor and settings directly.
-8. **CLI via cyclopts, two console scripts.** `harold_mcp.main` builds a cyclopts `App`
-   whose default command and `serve` subcommand both call `server.run`;
+8. **CLI via cyclopts, two console scripts plus `setup`.** `harold_mcp.main` builds a
+   cyclopts `App` whose default command and `serve` subcommand both call `server.run`, and
+   whose `setup` command calls `skill_install.install_skill` (project `./.agents/skills` by
+   default, `~/.agents/skills` with `-g`, or any `--directory`);
    `harold_mcp.heuristic.prelude_extract` builds the maintenance CLI for the prelude sort
    snapshot. `main.py` keeps the `if __name__ == "__main__"` guard because the
    `spawn`-context worker re-imports the main module.
@@ -220,6 +230,19 @@ graph TB
     default) returns labels only; `"full"` also returns rule text and intermediate states;
     `"none"` skips the work. Reflexive `=>*` and branching `=>#` solutions have a path with
     an empty `transitions` list.
+16. **The bundled skill is built, not committed.** The single source of truth is the
+    monorepo's `skills/maude-manual` (outside this package directory); `make skills`
+    deletes and re-copies it into the git-ignored `src/harold_mcp/skills/maude-manual`, so
+    the repository never commits the copy. Hatchling's `artifacts` option re-includes that
+    ignored path in both the wheel and the sdist (the sdist respects `.gitignore`, and
+    `uv build` builds the wheel from the sdist). `make build` depends on `skills`, and the
+    release workflow's build step runs `make skills && uv build`, so a published artifact
+    always contains the skill and its `setup` matches the installed server version.
+    `skill_install.skill_source()` locates the copy through
+    `importlib.resources.files("harold_mcp")`; `install_skill` removes an existing
+    destination first (`rmtree` for a directory, `unlink` for a stray file), which makes a
+    re-run a full refresh that never leaves files from an older skill and never touches
+    siblings in the base directory.
 
 ## Directory organization
 
@@ -230,19 +253,20 @@ graph TB
     root --> docs
     root --> agents[.agents/<br>planning + summary + skills]
     src[src/] --> pkg[harold_mcp/]
-    pkg --> flat[main.py<br>settings.py<br>logging.py<br>resources.py]
+    pkg --> flat[main.py<br>skill_install.py, settings.py<br>logging.py, resources.py]
+    pkg --> skillsdir[skills/<br>build-time maude-manual copy, git-ignored]
     pkg --> serverpkg[server/<br>__init__.py, server.py, tags.py]
     serverpkg --> tools[tools/<br>__init__.py, diagnostics.py,<br>interpreter.py]
     pkg --> diagpkg[diagnostics/<br>__init__.py, provider.py, aggregate.py]
     pkg --> heurpkg[heuristic/<br>__init__.py, provider.py, rules.py,<br>lexical.py, declarations.py,<br>prelude_sorts.py, prelude_extract.py]
     pkg --> maudepkg[maude/<br>__init__.py, executor.py, runner.py, transport.py,<br>provider.py, worker.py, session.py, capture.py, worker_errors.py]
     pkg --> assets[assets/brand/<br>Harold_logo.png]
-    tests[tests/] --> unit[unit/<br>mocked] --> u[settings, tags, errors, maude capture/worker/executor/runner/transport/provider,<br>interpreter tool, diagnostics: seam/aggregate/tool,<br>heuristic: lexical/declarations/rules/provider/prelude,<br>prelude extract CLI]
+    tests[tests/] --> unit[unit/<br>mocked] --> u[settings, tags, errors, maude capture/worker/executor/runner/transport/provider,<br>interpreter tool, diagnostics: seam/aggregate/tool,<br>heuristic: lexical/declarations/rules/provider/prelude,<br>prelude extract CLI, skill install]
     tests --> integration[integration/<br>real Maude + real server]
     integration --> i[maude worker/executor/session/transport,<br>process isolation, maude_run, lifespan, diagnostics integration]
     integration --> fixtures[fixtures/<br>interpreter + linter + session,<br>isolation/q, dependency and run fixtures]
     docs[docs/] --> dmodules[modules.md]
-    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>Unexpected_failure_during_search (implemented fixes),<br>no_new_module_quirk, port-repair.py,<br>sigsegv-under-load"]
+    agents --> planning["planning/<br>maude-diagnostics-tool-v1,<br>port-linter.py, port-maude_eval.py (implemented),<br>maude_eval_search_path (implemented),<br>Unexpected_failure_during_search (implemented fixes),<br>no_new_module_quirk, skill-installer (implemented),<br>port-repair.py, sigsegv-under-load"]
     agents --> summary[summary/<br>this knowledge base]
     root --> cfg[pyproject.toml, Makefile, tox.ini,<br>mkdocs.yml, uv.lock, README.md,<br>CONTRIBUTING.md, DEVELOPER_GUIDE.md,<br>CHANGELOG.md]
 ```
@@ -273,3 +297,6 @@ graph TB
 - `.agents/planning/more_interpreter_bugs/` — the per-call isolated workers, one-shot
   transport, semaphore admission, shutdown cancellation and rich bounded error reports
   (design, reviews, implementation plan and step notes)
+- `.agents/planning/skill-installer/` — the bundled-skill feature: requirements, packaging
+  research (the hatchling `artifacts` finding), detailed design, three review rounds and
+  the implementation plan/summary

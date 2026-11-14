@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.0.6]
+## [0.1.0]
 
 New `harold-mcp setup` command, and the `maude-manual` skill now ships inside the
 PyPI artifacts: the skill is copied into the package tree at build time
@@ -19,6 +19,11 @@ installs or refreshes it for coding agents.
   `skills/maude-manual` into `src/harold_mcp/skills` (git-ignored, re-included
   via hatchling `artifacts`), so the wheel and sdist contain the skill and the
   released `setup` always matches the installed server version.
+
+### General fixes
+
+- Assorted documentation and planning updates, including a README installation guide
+  rewritten around the `setup` command, and a restored `make help` recipe.
 
 ## [0.0.5]
 

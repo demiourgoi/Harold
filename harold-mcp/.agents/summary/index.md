@@ -11,6 +11,7 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - **How do I run a Maude program and interpret step results?** → `interfaces.md` → `maude_run`; `workflows.md` → `maude_run` flow and search-path reconstruction; `components.md` → `server/tools/interpreter.py` and `maude/session.py`
 - **Why is captured Maude output complete, and how are stdout/stderr flushed?** → `components.md` → `harold_mcp.maude.capture`; `architecture.md` → decision 14; `workflows.md` → Hermetic calls (output capture); rationale in `.agents/planning/Unexpected_failure_during_search/`
 - **Why does a failed `maude_run` call show a categorized, bounded error report?** → `workflows.md` → Failure semantics; `components.md` → `harold_mcp.errors` (`format_error_report`) and `tools/interpreter.py` (uncapped log, capped client text); planning records `Unexpected_failure_during_search/` and `more_interpreter_bugs/`
+- **How do I install the bundled `maude-manual` skill, and why isn't it in git?** → `workflows.md` → Skill packaging and installation; `components.md` → `harold_mcp.skill_install`; `interfaces.md` → `setup` command
 - **What stack/dependencies are in play, and what are their constraints?** → `dependencies.md`, `codebase_info.md`
 - **How does the Maude interpreter find its prelude, and what does `MAUDE_LIB` change?** → `maude-lib.md`
 - **What data structures/types exist?** → `data_models.md`
@@ -25,15 +26,15 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 
 | File | Content | Consult when… |
 | --- | --- | --- |
-| [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, package layout, dependency management, the two console scripts and the two MCP tools | you need basic facts about the project (language, versions, tooling) |
-| [`architecture.md`](architecture.md) | Two-process architecture (MCP server + one per-call Maude child process), the process runner and one-shot IPC transport, provider seam and aggregation, heuristic linter placement, bounded session engine, shared capture (including the C/C++ stdio flush), worker-side search-path reconstruction, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
-| [`components.md`](components.md) | Per-module responsibilities: `main`, `settings`, `errors` (the bounded error-report formatter), the `server` package (incl. the tag vocabulary `server/tags.py` and both tools with their whole-call error reports), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, runner, transport, interpreter provider, capture + stdio flush, session engine incl. search-path reconstruction, worker, worker errors), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
-| [`interfaces.md`](interfaces.md) | MCP tool surface (`maude_program_diagnostics` and `maude_run`, including steps/outcomes, search-path modes and error semantics), both console scripts, env-var config, internal Python API (seam protocol, rules registry, `MaudeExecutor`, session protocol, worker ops), import-time side effects | you need the public surface or must call/register a tool |
+| [`codebase_info.md`](codebase_info.md) | Project identity, Python versions, package layout (including the build-time `skills/` data directory), dependency management, the console scripts, the `setup` command and the two MCP tools | you need basic facts about the project (language, versions, tooling) |
+| [`architecture.md`](architecture.md) | Two-process architecture (MCP server + one per-call Maude child process), the process runner and one-shot IPC transport, provider seam and aggregation, heuristic linter placement, bounded session engine, shared capture (including the C/C++ stdio flush), worker-side search-path reconstruction, the build-time bundled-skill pipeline and installer, module layering, key decisions (with Mermaid diagrams) | you need the big picture of how modules relate |
+| [`components.md`](components.md) | Per-module responsibilities: `main` (server and `setup` CLI), `skill_install` (bundled-skill installer), `settings`, `errors` (the bounded error-report formatter), the `server` package (incl. the tag vocabulary `server/tags.py` and both tools with their whole-call error reports), the `diagnostics` seam package, the `heuristic` linter package, the `maude` package (executor, runner, transport, interpreter provider, capture + stdio flush, session engine incl. search-path reconstruction, worker, worker errors), `resources`, `logging`, tests, docs, planning | you need to know what a specific module does or where to add code |
+| [`interfaces.md`](interfaces.md) | MCP tool surface (`maude_program_diagnostics` and `maude_run`, including steps/outcomes, search-path modes and error semantics), the console scripts and the `setup` command, env-var config, internal Python API (seam protocol, rules registry, `MaudeExecutor`, session protocol, worker ops, skill installer), import-time side effects | you need the public surface or must call/register a tool |
 | [`data_models.md`](data_models.md) | Wire result models (diagnostics and interpreter, incl. search-path models), step input union, provider-seam value types, linter-internal types, worker/session protocol TypedDicts, the error hierarchies, framework types, typing conventions | you need the type landscape or must add a model |
-| [`workflows.md`](workflows.md) | Dev loop (incl. the test splits and `make review`), server lifecycle, hermetic per-call semantics, diagnostics and `maude_run` execution flows (incl. search-path reconstruction), failure semantics, linter flow, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
-| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role and the Maude pin/prelude snapshot link) | you plan to add, upgrade, or reason about a dependency |
+| [`workflows.md`](workflows.md) | Dev loop (incl. the test splits and `make review`), server lifecycle, hermetic per-call semantics, diagnostics and `maude_run` execution flows (incl. search-path reconstruction), failure semantics, linter flow, bundled-skill packaging/installation, prelude-snapshot maintenance, docs, packaging, release | you need to know how to develop, test, or ship |
+| [`dependencies.md`](dependencies.md) | Runtime/dev/build dependencies and constraints (incl. basedpyright role, the Maude pin/prelude snapshot link, and the `artifacts` requirement that carries the bundled skill into the wheel/sdist) | you plan to add, upgrade, or reason about a dependency |
 | [`maude-lib.md`](maude-lib.md) | The third-party `maude` wheel internals: bundle layout, how `maude.init` locates `prelude.maude` (`MAUDE_LIB` → `libmaude.so` directory → cwd), prelude availability in workers for both tools, and the `MAUDE_LIB` version-matching caveat | you reason about the interpreter, prelude loading, or `MAUDE_LIB` |
-| [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations, including the 2026-11-14 refresh (isolated per-call workers + rich errors), the 2026-11-12 refresh (capture flush + failure surfacing; search paths), the open original search-failure investigation, and stale planning summaries | you hit an inconsistency or want to improve the docs |
+| [`review_notes.md`](review_notes.md) | Consistency/completeness findings and recommendations, including the 2026-11-14 refresh (skill installer; isolated per-call workers + rich errors), the 2026-11-12 refresh (capture flush + failure surfacing; search paths), the open original search-failure investigation, and stale planning summaries | you hit an inconsistency or want to improve the docs |
 
 ## Relationships between documents
 
@@ -42,6 +43,8 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - `data_models.md` documents the types defined across `server/tools/diagnostics.py` (wire),
   `diagnostics/` (seam), `heuristic/` (linter internals) and `maude/` (executor, runner,
   transport, worker, session, worker errors), whose behavior lives in `components.md`
+- `skill_install.py` has no wire or protocol models; its API is documented in
+  `interfaces.md`, its behavior in `components.md`, and its packaging flow in `workflows.md`
 - `review_notes.md` cross-references every file it flags as incomplete.
 
 ## Example queries
@@ -75,6 +78,10 @@ This directory contains structured documentation of the `harold-mcp` codebase, g
 - "Why doesn't Harold use Maude's `show path`?" → `architecture.md` → decision 15; `.agents/planning/maude_eval_search_path/research/maude-bindings-search-path.md` (state numbers only live inside one hermetic call).
 - "How do I add a search command or change path reconstruction?" → `components.md` → `maude/session.py` (`_collect_solutions`, `_reconstruct_path`) + `server/tools/interpreter.py` (`SearchStep`, adapters).
 - "How do I run the code reviewer?" → `workflows.md` → Review workflow (`make review PROMPT=...`, report in `.review.md`).
+- "How do I install the bundled `maude-manual` skill?" → `interfaces.md` → `setup`; `workflows.md` → Skill packaging and installation.
+- "Why is `src/harold_mcp/skills/` empty or missing in a dev checkout?" → `workflows.md` → Skill packaging and installation (run `make skills`); `review_notes.md` → completeness gaps.
+- "Why does `setup` say the skill was built without `make skills`?" → `workflows.md` → Skill packaging and installation (point 4); `components.md` → `harold_mcp.skill_install`.
+- "What changed in 0.1.0, and what is the MVP scope?" → `codebase_info.md` → Identity; `review_notes.md` → 2026-11-14 skill-installer refresh.
 
 ## Consolidated file
 

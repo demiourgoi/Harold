@@ -21,8 +21,8 @@
 ## Running the server
 
 - Development: `make run` (or `uv run harold-mcp`) — serves MCP over stdio.
-- Entry points: `uv run harold-mcp --help` lists the cyclopts CLI (default command and
-  `serve`).
+- Entry points: `uv run harold-mcp --help` lists the cyclopts CLI (default and `serve`
+  start the server; `setup` installs the bundled agent skill — see below).
 - Startup: lifespan fail-fast init check — one `init_maude` ping process per configured
   interpreter under one shared deadline (each pinged process exits immediately; no warm
   pool).
@@ -221,27 +221,64 @@ flowchart TD
 ## Planning workflow
 
 - Feature ideas start in `.agents/planning/<feature>/` (e.g. `maude-diagnostics-tool-v1/`,
-  `port-linter.py/`, `port-maude_eval.py/`, `maude_eval_search_path/` and
-  `Unexpected_failure_during_search/` with `rough-idea.md`, `idea-honing.md`, `research/`,
-  `design/`, `implementation/`, `summary.md`). Design rationale for existing code is
-  recorded there too (e.g. `sigsegv-under-load/issue.md`). `maude_run` followed its PDD
-  cycle (`port-maude_eval.py/`), its search-path feature followed
-  `maude_eval_search_path/`, and the capture-flush/failure-surfacing fixes followed
+  `port-linter.py/`, `port-maude_eval.py/`, `maude_eval_search_path/`,
+  `Unexpected_failure_during_search/` and `skill-installer/` with `rough-idea.md`,
+  `idea-honing.md`, `research/`, `design/`, `implementation/`, `summary.md`). Design
+  rationale for existing code is recorded there too (e.g. `sigsegv-under-load/issue.md`).
+  `maude_run` followed its PDD cycle (`port-maude_eval.py/`), its search-path feature
+  followed `maude_eval_search_path/`, the capture-flush/failure-surfacing fixes followed
   `Unexpected_failure_during_search/` (both fixes implemented; the original whole-call
-  failure remains open pending reproduction on its host). `port-repair.py/` is an early
-  record for a future repair tool.
+  failure remains open pending reproduction on its host), and the bundled-skill installer
+  followed `skill-installer/` (implemented). `port-repair.py/` is an early record for a
+  future repair tool.
+
+## Skill packaging and installation
+
+The `maude-manual` agent skill is built into the package artifacts, not committed to this
+repository:
+
+```mermaid
+flowchart LR
+    A[monorepo skills/maude-manual<br>single source of truth] -->|make skills| B[src/harold_mcp/skills/maude-manual<br>git-ignored copy]
+    B -->|hatchling artifacts| C[wheel + sdist]
+    C -->|harold-mcp setup| D[./.agents/skills/maude-manual]
+    C -->|setup -g| E[~/.agents/skills/maude-manual]
+    C -->|setup --directory PATH| F[PATH/maude-manual]
+```
+
+1. `make skills` removes `src/harold_mcp/skills` and re-copies the monorepo's
+   `skills/maude-manual` there; `.gitignore` excludes the copy, so the source of truth
+   stays in the monorepo. `make build` depends on `clean-build skills`, and the release
+   workflow's build step runs `make skills && uv build`.
+2. Hatchling's `artifacts` option re-includes the ignored directory in both the wheel and
+   the sdist. This is required: the sdist respects `.gitignore`, and `uv build` builds the
+   wheel from the sdist, so without `artifacts` the skill would be silently missing.
+3. `harold-mcp setup` calls `skill_install.install_skill`: it resolves the packaged copy
+   with `importlib.resources.files("harold_mcp")`, creates the destination base, removes
+   an existing `maude-manual` (directory or stray file), copies the tree and prints the
+   installed path plus the package version. Re-running it is a full refresh; siblings are
+   untouched.
+4. A plain dev checkout has no `src/harold_mcp/skills` until `make skills` runs;
+   `skill_source()` then raises a `FileNotFoundError` naming `make skills`, and the
+   packaged-source unit test skips. The wheel content is verified manually
+   (`make skills && uv build`) and kept correct by the release workflow; there is no
+   automated wheel-content test.
 
 ## Packaging and release
 
-- `make build` — build the wheel with `pyproject-build`.
-- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`).
+- `make skills` — copy the monorepo's `skills/maude-manual` into the package tree (see
+  above).
+- `make build` — `clean-build` + `skills`, then build the wheel with `pyproject-build`.
+- `make publish` — upload to PyPI with twine (requires `PYPI_TOKEN`);
+  `make build-and-publish` runs both.
 - Release process (per `DEVELOPER_GUIDE.md`): first update `CHANGELOG.md` for the release
   (the `update-changelog-for-release` skill helps; add a one-sentence release summary at
   the top of the section) and bump `pyproject.toml` to the next WIP version with a new
   `CHANGELOG.md` section. Then create a GitHub release with a `*.*.*` tag matching the
   released version (without `.dev0`); the `release-main` workflow patches the version,
-  publishes to PyPI, and deploys the docs. PyPI versions are immutable — a failed publish
-  means bumping to the next version.
+  publishes to PyPI, and deploys the docs. Its publish job builds with
+  `make skills && uv build`, so the released artifact always contains the skill. PyPI
+  versions are immutable — a failed publish means bumping to the next version.
 
 ## Cross-environment testing
 
