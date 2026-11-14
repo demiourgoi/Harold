@@ -125,6 +125,32 @@ def test_capture_streams_does_not_leak_buffered_c_output() -> None:
     assert leaked == b""
 
 
+def test_capture_streams_flushes_preexisting_c_output_outside_the_capture() -> None:
+    """Regression: an earlier phase's leftovers must not be captured by the next one.
+
+    `capture_streams` flushes C stdio before redirecting. Without that pre-flush, bytes
+    left in libmaude's buffer by a previous phase are flushed inside the new capture and
+    attributed to the wrong phase — the contamination half of the load-truncation bug.
+    """
+    libc = ctypes.CDLL(None)
+    _ = libc.fflush(None)  # start with an empty C buffer
+    _write_buffered_to_c_stdout(b"stale")  # buffered: not written to fd 1 yet
+
+    with tempfile.TemporaryFile(mode="w+b") as sink:
+        saved_stdout = os.dup(1)
+        try:
+            _ = os.dup2(sink.fileno(), 1)
+            _, captured = capture_streams(lambda: None)
+        finally:
+            _ = os.dup2(saved_stdout, 1)
+            os.close(saved_stdout)
+        _ = sink.seek(0)
+        outside = sink.read()
+
+    assert captured["stdout"] == ""
+    assert outside == b"stale"
+
+
 class _FailingStream:
     def flush(self) -> None:
         raise OSError("flush failed")  # noqa: TRY003
