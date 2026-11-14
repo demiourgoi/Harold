@@ -150,6 +150,7 @@ def test_one_failing_provider_fails_the_call_without_partial_results(tmp_path: P
     assert "Traceback (most recent call last):" in report
     assert "NoneType: None" not in report
     assert f"context: path={tmp_path / 'program.maude'}" in report
+    assert "heuristic-linter finding" not in report  # no partial results leak into the error
     assert error.failures == (ProviderFailure(provider="interpreter", error=provider_error),)
     assert error.__cause__ is provider_error
     assert isinstance(error.__cause__.__cause__, MaudeWorkerCrashedError)
@@ -170,6 +171,9 @@ def test_remaining_providers_are_still_attempted_after_a_failure(tmp_path: Path)
     assert report.splitlines()[0] == "Diagnostic collection failed: 2 provider(s) failed"
     assert "- interpreter: Maude worker crashed" in report
     assert "- heuristic-linter: boom" in report
+    assert "cause: DiagnosticProviderError: interpreter: Maude worker crashed" in report
+    assert "MaudeWorkerCrashedError: Maude worker crashed" in report
+    assert "cause: ValueError: boom" in report
 
 
 def test_unexpected_provider_bug_is_reported_with_its_type(tmp_path: Path) -> None:

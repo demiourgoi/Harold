@@ -280,26 +280,30 @@ def test_provider_failure_propagates_as_a_collection_error(tmp_path: Path) -> No
     assert isinstance(provider_error.__cause__, MaudeWorkerCrashedError)
 
 
-def test_collection_failure_logs_the_full_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_collection_failure_is_capped_and_logged_in_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     logger = _RecordingLogger()
     monkeypatch.setattr(diagnostics_module, "_log", logger)
     path = tmp_path / "hello.maude"
     content = _write(path)
     timeout = MaudeWorkerTimeoutError(remote_traceback="X" * 5000)
 
-    with pytest.raises(DiagnosticCollectionError):
+    with pytest.raises(DiagnosticCollectionError) as exc_info:
         _ = maude_program_diagnostics(
             content,
             providers=_providers(FakeMaudeExecutor(error=timeout)),
-            settings=_settings(),
+            settings=Settings(maude_workers=1, error_detail_max_chars=300),
         )
 
+    capped = str(exc_info.value)
+    assert TRUNCATION_MARKER in capped
+    assert "X" * 5000 not in capped
     assert len(logger.errors) == 1
     message, args = logger.errors[0]
     assert message == "Diagnostic collection failed for %s:\n%s"
     assert str(path) in str(args[0])
-    assert "X" * 5000 in str(args[1])
-    assert TRUNCATION_MARKER not in str(args[1])
+    full_report = str(args[1])
+    assert "X" * 5000 in full_report
+    assert TRUNCATION_MARKER not in full_report
 
 
 def test_heuristic_finding_carries_columns_and_an_applyable_fix(tmp_path: Path) -> None:

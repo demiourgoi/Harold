@@ -6,7 +6,7 @@
 - [x] Step 2 — One-shot IPC transport and process runner
 - [x] Step 3 — Replace the pool executor with per-call processes
 - [x] Step 4 — Real-process isolation, regression, and pool-remnant cleanup
-- [ ] Step 5 — Diagnostics end-to-end and error parity
+- [x] Step 5 — Diagnostics end-to-end and error parity
 - [ ] Step 6 — Documentation and final validation
 
 ## Working agreements
@@ -554,6 +554,39 @@ from Step 3; validates the diagnostics half of the design's error contract.
 **Demo.** `maude_program_diagnostics` returns its normal result on a clean file and
 a rich, provider-attributed error when the interpreter provider fails; the success
 schema and ordering are unchanged.
+
+### Implementation notes (Step 5)
+
+No production behavior change was needed: Step 1's provider wrap already catches
+the whole `MaudeWorkerError` hierarchy, preserves `__cause__` and the resolved
+path/load-phase context, and the tool already logged the uncapped report and
+returned the capped one. This step pinned that contract end to end:
+
+- `maude/provider.py`'s `diagnose` docstring now names the full taxonomy (timeout,
+  crash, spawn failure, init failure, remote exception, cancellation, protocol
+  error) instead of “crashed or timed out”.
+- Provider unit tests: a parametrized case covers init, remote, spawn, protocol and
+  cancelled errors (alongside the existing timeout/crash cases), asserting the
+  wrapped reason, path/phase context and the chained cause.
+- Aggregation unit tests: the multi-provider failure test now asserts both cause
+  chains, and the no-partial-results test asserts the succeeding provider's
+  diagnostic text never leaks into the collection error.
+- The tool test now pins the split the design requires: with a small
+  `error_detail_max_chars` the client text carries the truncation marker, while the
+  logged report still contains the full remote traceback.
+- New integration test `test_tool_reports_a_worker_timeout_with_a_rich_provider_section`
+  (sleeping runner target, 1 s diagnostics timeout) complements the existing crash
+  test; both assert a provider-attributed section with path/phase context and the
+  chained `MaudeWorker*` cause. Clean-fixture success, ordering, severities and fix
+  behavior are covered by the existing diagnostics integration suite.
+
+Validation: `make check` clean, `make test-unit` 387 passed,
+`make test-integration` 105 passed (parallel, real interpreter).
+
+Review feedback (`step-5-review.md`, verdict Ship) was attended: the crash and
+timeout integration tests now both assert the `context: path=`, `phase=load` and
+`pid=` fields the notes claim, making the Step 5 coverage record true and pinning
+ER-3's pid end to end on both failure paths.
 
 ---
 

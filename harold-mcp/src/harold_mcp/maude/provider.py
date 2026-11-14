@@ -55,11 +55,13 @@ class InterpreterDiagnosticProvider:
         self._executor = executor
 
     def diagnose(self, source: SourceFile) -> list[ProviderDiagnostic]:
-        """Load `source.path` in the worker and map its outcome to diagnostics.
+        """Load `source.path` in a fresh worker and map its outcome to diagnostics.
 
         Raises:
-            DiagnosticProviderError: the worker crashed or timed out; the original
-                `MaudeWorkerError` is the chained cause.
+            DiagnosticProviderError: any `MaudeWorkerError` (timeout, crash, spawn
+                failure, init failure, remote exception, cancellation or protocol
+                error); the original error is the chained cause and the resolved path
+                and load phase are preserved in the context.
         """
         try:
             # `maude.load` and the worker take strings; the seam speaks `Path`.

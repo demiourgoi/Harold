@@ -5,7 +5,16 @@ from pathlib import Path
 import pytest
 
 from harold_mcp.diagnostics import DiagnosticProviderError, SourceFile
-from harold_mcp.maude import MaudeWorkerCrashedError, MaudeWorkerTimeoutError
+from harold_mcp.maude import (
+    MaudeInitError,
+    MaudeWorkerCancelledError,
+    MaudeWorkerCrashedError,
+    MaudeWorkerError,
+    MaudeWorkerProtocolError,
+    MaudeWorkerRemoteError,
+    MaudeWorkerSpawnError,
+    MaudeWorkerTimeoutError,
+)
 from harold_mcp.maude.provider import _HARD_FAILURE_MESSAGE, InterpreterDiagnosticProvider
 from harold_mcp.maude.worker import LoadDiagnosticsResult
 
@@ -174,6 +183,31 @@ def test_worker_timeout_becomes_a_provider_error_with_the_cause_chained(tmp_path
     assert exc_info.value.context["path"] == str(source.path)
     assert exc_info.value.context["phase"] == "load"
     assert exc_info.value.__cause__ is timeout
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MaudeInitError(),
+        MaudeWorkerRemoteError("ValueError", "boom"),
+        MaudeWorkerSpawnError(),
+        MaudeWorkerProtocolError(),
+        MaudeWorkerCancelledError(),
+    ],
+)
+def test_every_worker_error_maps_to_a_provider_error_with_path_context(tmp_path: Path, error: MaudeWorkerError) -> None:
+    """The whole worker taxonomy stops at the provider boundary, cause and context intact."""
+    source = _source(tmp_path)
+    provider = InterpreterDiagnosticProvider(FakeMaudeExecutor(error=error))
+
+    with pytest.raises(DiagnosticProviderError) as exc_info:
+        _ = provider.diagnose(source)
+
+    wrapped = exc_info.value
+    assert wrapped.source == "interpreter"
+    assert wrapped.reason == error.reason
+    assert wrapped.context == {"path": str(source.path), "phase": "load", **error.context}
+    assert wrapped.__cause__ is error
 
 
 def test_worker_context_is_preserved_when_wrapping(tmp_path: Path) -> None:

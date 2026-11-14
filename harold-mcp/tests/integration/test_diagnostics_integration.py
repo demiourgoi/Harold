@@ -9,6 +9,7 @@ import os
 import select
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import Connection
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from harold_mcp.diagnostics import DiagnosticCollectionError, DiagnosticProviderError
-from harold_mcp.maude import MaudeExecutor, MaudeWorkerCrashedError
+from harold_mcp.maude import MaudeExecutor, MaudeWorkerCrashedError, MaudeWorkerTimeoutError
 from harold_mcp.maude.runner import PipeProcessRunner
 from harold_mcp.server.tools.diagnostics import (
     MaudeDiagnostic,
@@ -34,6 +35,15 @@ REPO_ROOT = Path(__file__).parents[2]
 def _crash_target(conn: Connection) -> None:
     """Die abruptly without replying (deterministic crash target for the runner)."""
     os._exit(7)
+
+
+def _sleep_after_read_target(conn: Connection) -> None:
+    """Read the request, then hang, so the diagnostics call times out."""
+    try:
+        _ = conn.recv_bytes()
+    except EOFError, OSError:
+        return
+    time.sleep(120)
 
 
 @pytest.fixture(scope="module")
@@ -459,6 +469,30 @@ def test_binary_file_reports_warnings_without_crashing(executor: MaudeExecutor, 
     assert not [d for d in result.diagnostics if d.code == "non-ascii-character"]
 
 
+def test_tool_reports_a_worker_timeout_with_a_rich_provider_section() -> None:
+    settings = Settings(maude_workers=1, diagnostics_timeout_secs=1)
+    executor = MaudeExecutor(
+        settings=settings,
+        runner_factory=lambda: PipeProcessRunner(settings, target=_sleep_after_read_target),
+    )
+    try:
+        with pytest.raises(DiagnosticCollectionError) as exc_info:
+            _ = _diagnose(executor, "hello.maude")
+    finally:
+        executor.shutdown()
+
+    report = str(exc_info.value)
+    assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
+    assert report.splitlines()[1].startswith("- interpreter: Maude worker timed out")
+    assert "context: path=" in report
+    assert "phase=load" in report
+    assert "pid=" in report
+    assert "MaudeWorkerTimeoutError" in report
+    provider_error = exc_info.value.__cause__
+    assert isinstance(provider_error, DiagnosticProviderError)
+    assert isinstance(provider_error.__cause__, MaudeWorkerTimeoutError)
+
+
 def test_tool_reports_crash_and_a_healthy_executor_still_works() -> None:
     settings = Settings(maude_workers=1)
     crash_executor = MaudeExecutor(
@@ -476,6 +510,9 @@ def test_tool_reports_crash_and_a_healthy_executor_still_works() -> None:
         report = str(exc_info.value)
         assert report.splitlines()[0] == "Diagnostic collection failed: 1 provider(s) failed"
         assert report.splitlines()[1].startswith("- interpreter: Maude worker crashed")
+        assert "context: path=" in report
+        assert "phase=load" in report
+        assert "pid=" in report
         provider_error = exc_info.value.__cause__
         assert isinstance(provider_error, DiagnosticProviderError)
         assert isinstance(provider_error.__cause__, MaudeWorkerCrashedError)
