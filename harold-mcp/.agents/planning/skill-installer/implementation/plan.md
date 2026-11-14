@@ -5,7 +5,7 @@
 - [x] Step 1: Package the skill (Makefile `skills` target, `.gitignore`, release
       workflow build step, hatchling `artifacts`)
 - [x] Step 2: The `setup` command (`skill_install.py`, `main.py`, unit tests)
-- [ ] Step 3: README rewrite (installation, setup/update, client-doc links,
+- [x] Step 3: README rewrite (installation, setup/update, client-doc links,
       terser whole-README)
 
 ## Working agreements
@@ -101,5 +101,17 @@ docs instead of embedding JSON.
 
 **Tests.** `make docs-test` (README is included in the docs build) plus a
 manual read-through for lost facts.
+
+### Implementation notes
+
+Implemented as planned: the installation section now runs `setup`, documents
+its destinations and the locations convention, explains update as
+"refresh + run `setup` again", and links the Zed and opencode v2 MCP docs
+instead of embedding JSON. The Zed "Write" profile, reload, and opencode
+TUI/ACP notes survive as single sentences. The tool descriptions and the
+configuration section were condensed while keeping every env var, default and
+note (Python 3.14 pin, bundled interpreter, `@latest`/`@VERSION` pinning,
+timeout semantics, `MAUDE_LIB` caveat). README went from ~17.2 KB to ~8.6 KB.
+`make docs-test` passes.
 
 ---
