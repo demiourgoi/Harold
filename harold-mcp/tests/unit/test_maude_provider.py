@@ -92,6 +92,64 @@ def test_standard_input_warning_is_attributed_to_the_diagnosed_file(tmp_path: Pa
     assert diagnostics[0].message == "skipped unexpected token: fmo"
 
 
+def test_same_name_dependency_warning_stays_whole_file(tmp_path: Path) -> None:
+    """A dependency sharing the diagnosed file's name makes the name ambiguous.
+
+    Maude prints warnings with only a file's name, so a matching name cannot be
+    pinned to the diagnosed file; the whole-file form names the real source.
+    """
+    path = tmp_path / "main.maude"
+    _ = path.write_text("in lib/main.maude\nfmod X\nendfm\n")
+    source = SourceFile.from_path(path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "main.maude", "line": 4, "message": "unexpected end of tokens."}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.line is None
+    assert diagnostic.column is None
+    assert diagnostic.message == (
+        'In "main.maude", line 4: unexpected end of tokens. '
+        'Run maude_program_diagnostics on "main.maude" (resolved relative to the diagnosed file\'s directory) for details.'
+    )
+
+
+def test_same_name_warning_keeps_its_line_without_a_same_name_dependency(tmp_path: Path) -> None:
+    """No loaded dependency shares the name, so the warning belongs here."""
+    path = tmp_path / "main.maude"
+    _ = path.write_text("load lib/dep.maude\nfmod X\nendfm\n")
+    source = SourceFile.from_path(path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "main.maude", "line": 2, "message": "missing is keyword."}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].line == 2
+
+
+def test_same_name_dependency_warning_in_comment_line_is_still_attributed(tmp_path: Path) -> None:
+    """A `load` mentioned only in a comment loads nothing, so the name is unambiguous."""
+    path = tmp_path / "main.maude"
+    _ = path.write_text("*** in lib/main.maude\nfmod X\nendfm\n")
+    source = SourceFile.from_path(path)
+    fake = FakeMaudeExecutor({
+        "ok": True,
+        "warnings": [{"file": "main.maude", "line": 2, "message": "missing is keyword."}],
+    })
+
+    diagnostics = InterpreterDiagnosticProvider(fake).diagnose(source)
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].line == 2
+
+
 def test_dependency_warning_becomes_a_whole_file_diagnostic(tmp_path: Path) -> None:
     """A warning Maude attributed to another file names that file; no fabricated position."""
     source = _source(tmp_path)

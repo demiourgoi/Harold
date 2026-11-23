@@ -43,10 +43,10 @@ async def app_lifespan(_server: FastMCP) -> AsyncGenerator[dict[str, Any] | None
 mcp = FastMCP(
     name="Harold",
     instructions="""Harold provides MCP tools for AI-assisted programming with the Maude specification and verification language, for LLM agents not sufficiently trained in Maude.
-Its tools cover three areas:
+Its tools cover two areas:
 - Diagnosing Maude programs (linters and other static checks)
 - Running Maude programs
-- Searching the Maude documentation via a vector index to support retrieval-augmented generation
+A documentation-search tool is planned but not available yet.
 Use Harold's tools whenever working with Maude code; consult each tool's description for how to call it.""",
     website_url="https://demiourgoi.github.io",
     icons=[HAROLD_ICON],

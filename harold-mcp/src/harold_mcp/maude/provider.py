@@ -6,6 +6,8 @@ diagnostics layer's `DiagnosticProviderError` here, with the original error kept
 `__cause__`.
 """
 
+import re
+
 from harold_mcp.diagnostics import (
     DiagnosticProviderError,
     DiagnosticSource,
@@ -18,6 +20,32 @@ from harold_mcp.maude.worker_errors import MaudeWorkerError
 _HARD_FAILURE_MESSAGE = "Failed to load Maude program: unrecoverable parse error."
 _CODE = "compiler"
 _STANDARD_INPUT = "<standard input>"
+_LOAD_RE = re.compile(r"^\s*(?:load|in)\s+(\S+)")
+_COMMENT_RE = re.compile(r"^\s*(?:\*\*\*|---)")
+
+
+def _dependency_names(source: SourceFile) -> set[str]:
+    """Return the file names the diagnosed file loads via ``load``/``in``.
+
+    Maude prints warnings with only a file's name, so when a loaded dependency
+    shares the diagnosed file's name, there is no way to tell whose warning a
+    matching name refers to. The names collected here (targets resolved against
+    the diagnosed file's directory, comment lines ignored) let the mapping fall
+    back to the whole-file form in that ambiguous case instead of fabricating a
+    position in the diagnosed file.
+    """
+    names: set[str] = set()
+    for line in source.text.splitlines():
+        if _COMMENT_RE.match(line):
+            continue
+        match = _LOAD_RE.match(line)
+        if match is None:
+            continue
+        target = match.group(1)
+        if target.endswith(".") and not target.endswith(".."):
+            target = target[:-1]
+        names.add(source.path.parent.joinpath(target).name)
+    return names
 
 
 def _dependency_message(file: str, line: int | None, message: str) -> str:
@@ -86,8 +114,17 @@ class InterpreterDiagnosticProvider:
         return diagnostics
 
     def _to_diagnostic(self, source: SourceFile, *, file: str, line: int | None, message: str) -> ProviderDiagnostic:
-        """Map one parsed warning; foreign files become whole-file diagnostics."""
-        if file in (source.path.name, _STANDARD_INPUT):
+        """Map one parsed warning; foreign files become whole-file diagnostics.
+
+        A name matching the diagnosed file keeps its line only when no loaded
+        dependency shares that name; Maude prints file names without paths, so
+        such a match is ambiguous and falls back to the whole-file form.
+        """
+        dependency_names = _dependency_names(source)
+        belongs_to_source = file in (_STANDARD_INPUT, source.path.name) and not (
+            file == source.path.name and file in dependency_names
+        )
+        if belongs_to_source:
             return ProviderDiagnostic(source=self.name, severity="warning", code=_CODE, message=message, line=line)
         return ProviderDiagnostic(
             source=self.name,

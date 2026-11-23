@@ -28,9 +28,9 @@ def install_skill(destination_base: Path, source: Path | None = None) -> Path:
         raise FileNotFoundError(msg)
     destination = destination_base / SKILL_NAME
     destination_base.mkdir(parents=True, exist_ok=True)
-    if destination.is_dir():
-        rmtree(destination)
-    elif destination.exists():
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
         destination.unlink()
+    elif destination.is_dir():
+        rmtree(destination)
     _ = copytree(src, destination)
     return destination
