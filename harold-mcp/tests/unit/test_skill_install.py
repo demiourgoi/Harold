@@ -81,3 +81,18 @@ def test_cli_setup_global(monkeypatch: pytest.MonkeyPatch, source: Path, tmp_pat
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     main.app(["setup", "-g"], result_action="return_value")
     assert (fake_home / ".agents" / "skills" / SKILL_NAME / "SKILL.md").is_file()
+
+
+def test_reinstall_over_a_symlink_replaces_it(source: Path, tmp_path: Path) -> None:
+    """A symlinked destination (e.g. dotfiles-managed) unlinks instead of rmtree."""
+    base = tmp_path / "base"
+    base.mkdir()
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / "SKILL.md").write_text("elsewhere")
+    (base / SKILL_NAME).symlink_to(linked)
+
+    installed = install_skill(base, source)
+
+    assert not installed.is_symlink()
+    assert (installed / "SKILL.md").read_text() == "skill v1"
