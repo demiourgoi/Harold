@@ -33,6 +33,13 @@ def _dependency_names(source: SourceFile) -> set[str]:
     the diagnosed file's directory, comment lines ignored) let the mapping fall
     back to the whole-file form in that ambiguous case instead of fabricating a
     position in the diagnosed file.
+
+    Known limit: only the direct `load`/`in` targets written in the diagnosed
+    file are covered. A transitive dependency (a dependency loading a same-named
+    file of its own) can still collide with the diagnosed file's name, in which
+    case the warning keeps a line it may not own; reading the loaded files would
+    need filesystem access the provider does not have here, and the tool's answer
+    is to diagnose dependencies on their own instead.
     """
     names: set[str] = set()
     for line in source.text.splitlines():
@@ -103,8 +110,15 @@ class InterpreterDiagnosticProvider:
                 exc.reason,
                 context={"path": str(source.path), "phase": "load", **exc.context},
             ) from exc
+        dependency_names = _dependency_names(source)
         diagnostics = [
-            self._to_diagnostic(source, file=warning["file"], line=warning["line"], message=warning["message"])
+            self._to_diagnostic(
+                source,
+                file=warning["file"],
+                line=warning["line"],
+                message=warning["message"],
+                dependency_names=dependency_names,
+            )
             for warning in result["warnings"]
         ]
         if not result["ok"]:
@@ -113,14 +127,21 @@ class InterpreterDiagnosticProvider:
             )
         return diagnostics
 
-    def _to_diagnostic(self, source: SourceFile, *, file: str, line: int | None, message: str) -> ProviderDiagnostic:
+    def _to_diagnostic(
+        self,
+        source: SourceFile,
+        *,
+        file: str,
+        line: int | None,
+        message: str,
+        dependency_names: set[str],
+    ) -> ProviderDiagnostic:
         """Map one parsed warning; foreign files become whole-file diagnostics.
 
         A name matching the diagnosed file keeps its line only when no loaded
         dependency shares that name; Maude prints file names without paths, so
         such a match is ambiguous and falls back to the whole-file form.
         """
-        dependency_names = _dependency_names(source)
         belongs_to_source = file in (_STANDARD_INPUT, source.path.name) and not (
             file == source.path.name and file in dependency_names
         )
